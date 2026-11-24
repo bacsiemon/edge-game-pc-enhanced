@@ -1269,6 +1269,62 @@ static void __cdecl HudTimerDigitsAndColor_Impl(
     *outCol = col;
 }
 
+} // namespace
+
+namespace edgemod {
+
+void __cdecl GetEdgeTimerSmoothState(
+    const uint8_t* ws, int32_t slot, float* outEffTicks, float* outEffRise, uint32_t* outRgb
+) {
+    if (ws == nullptr || slot < 0 || slot > 1) {
+        if (outEffTicks) *outEffTicks = 0.0f;
+        if (outEffRise)  *outEffRise  = 0.0f;
+        if (outRgb)      *outRgb      = 0xffffffu;
+        return;
+    }
+
+    int32_t curT = *reinterpret_cast<const int32_t*>(ws + slot * 4 + 0x78);
+    float effT = static_cast<float>(curT);
+    if (g_extWsPtr == ws && g_wsPrevEc[slot] != 0) {
+        int32_t prevT = g_wsPrevEt[slot];
+        int32_t d = curT - prevT;
+        if (d >= 0 && d <= 2) {
+            effT = static_cast<float>(prevT) + static_cast<float>(d) * g_uiAlpha;
+        }
+    }
+
+    int32_t curRise = *reinterpret_cast<const int32_t*>(ws + slot * 4 + 0x80);
+    float effRise = static_cast<float>(curRise);
+    if (g_extWsPtr == ws) {
+        int32_t prevRise = (g_wsPrevEc[slot] != 0) ? g_wsPrevEr[slot] : 0;
+        int32_t dRise = curRise - prevRise;
+        if (dRise >= -2 && dRise <= 2) {
+            effRise = static_cast<float>(prevRise) + static_cast<float>(dRise) * g_uiAlpha;
+        }
+    }
+
+    float t = effT + 0.0001f;
+    int32_t sec = static_cast<int32_t>(t / 22.0f);
+    float rem = t - static_cast<float>(sec) * 22.0f;
+    if (rem < 0.0f) rem = 0.0f;
+
+    uint32_t col = CalcSmoothRainbow(GetSmoothWsFrame(ws), 1.0f);
+    if (slot == 1 && ws[0x48] != 0) {
+        col = ((*reinterpret_cast<const uint32_t*>(ws + 0x4) & 1u) != 0) ? 0x999999u : 0xaaaaaau;
+    }
+    if (curT != 0x55da && rem < 1.0f) {
+        col = Game_ColorLerp(0xffffffu, col, ClampPct0_100(rem * 100.0f));
+    }
+
+    if (outEffTicks) *outEffTicks = effT;
+    if (outEffRise)  *outEffRise  = effRise;
+    if (outRgb)      *outRgb      = col;
+}
+
+} // namespace edgemod
+
+namespace {
+
 static void __declspec(naked) hk_hudTimerDigitsAndColor() {
     __asm {
         sub esp, 8

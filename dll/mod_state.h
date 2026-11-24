@@ -46,6 +46,7 @@ extern uint8_t g_colorTheme;     // 0=pc, 1=mobile
 extern uint8_t g_timerMode;   // 0=off, 1=level, 2=rank, 3=both
 extern float   g_timerSize;   // 0.25..2.0 (presets: 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2)
 extern uint8_t g_timerPos;    // 0=TL, 1=TR, 2=BL, 3=BR
+extern uint8_t g_edgeTimerMode; // 0=2D, 1=2D scaled, 2=3D
 
 // Shared smoothing state used across UI smooth modules & time format (mod_ui_smooth_part1/2.cpp)
 extern float   g_uiAlpha;
@@ -138,5 +139,8 @@ bool GetHudTimerMenuPreview(uint32_t state, uint8_t* outMode, float* outSize, ui
 void OnColorThemeChanged();
 void EnsureMusicPlaylistReady();
 void OnMusicPlaylistChanged();
+float __cdecl ComputeEdgeTimerZoomScale(const uint8_t* ws, int32_t slot);
+void  __cdecl RenderEdgeTimer3D();
+void  __cdecl GetEdgeTimerSmoothState(const uint8_t* ws, int32_t slot, float* outEffTicks, float* outEffRise, uint32_t* outBaseRgb);
 
 } // namespace edgemod

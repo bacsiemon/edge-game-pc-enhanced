@@ -66,6 +66,7 @@ void RegisterAllPatchesOnce() {
     RegisterColorTheme();
     RegisterUiSmoothPart1();
     RegisterUiSmoothPart2();
+    RegisterEdgeTimer();
 }
 
 } // namespace

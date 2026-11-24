@@ -45,6 +45,7 @@ DLL_SOURCES = [
     "mod_color_theme.cpp",
     "mod_ui_smooth_part1.cpp",
     "mod_ui_smooth_part2.cpp",
+    "mod_edge_timer.cpp",
 ]
 
 

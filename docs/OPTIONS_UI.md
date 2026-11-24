@@ -22,6 +22,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 | **Audio**       | `music start`          | `land`, `fall`                                                                   | toggle            | Instant 2-state switch                                                                                             |
 | **Audio**       | `music playlist`       | `pc`, `java`                                                                     | toggle            | Live toggle backed by `music/playlist.xml` (`pc` default, saved in `musicPlaylist`)                                |
 | **UI**          | `time format`          | `def`, `new`                                                                     | toggle            | Instant 2-state switch                                                                                             |
+| **UI**          | `edge timer`           | `2D`, `2D scaled`, `3D`                                                          | popup             | `2D` (default), `2D scaled` (scales to camera zoom level), or `3D` (Android world-space 3D edge timer)             |
 | **UI**          | `timer`                | *(opens **Timer** submenu)*                                                      | submenu (`>`)     | Nested 3rd-level category                                                                                          |
 | **UI -> Timer** | `type`                 | `off`, `level`, `rank`, `both`                                                   | popup             | 4 named choices; live corner timer in Pause, sample timer in Main Options (default `both`)                         |
 | **UI -> Timer** | `size`                 | `0.25`, `0.5`, `0.75`, `1`, `1.25`, `1.5`, `1.75`, `2`                           | slider            | Live corner timer resize while dragging (sample timer in Main Options; default `1`)                                |
@@ -49,7 +50,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 - **Display:** 2 dots under the value. Lighter dot indicates the selected option.
 - **Interaction:** Click / Enter / Left / Right toggles immediately and saves.
 
-### 2. Popups (6 setting popups + 1 confirm popup)
+### 2. Popups (7 setting popups + 1 confirm popup)
 
 - **Display:**
   - Setting popups show multiple horizontal dots under the value (lighter dot indicates the selected option). Action confirm popups (`reset score`) show no dots under the row.

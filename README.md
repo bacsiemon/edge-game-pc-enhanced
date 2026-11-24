@@ -17,6 +17,7 @@ A drop-in enhancement mod (`XINPUT1_3.dll`) for the Steam PC version of **EDGE**
 - **Reorganized & Widened Menus**: Categorizes **Options** into **Display**, **Graphics**, **Audio**, **UI** (with a nested **Timer** submenu), and **Gameplay** with sliders, popups, and `>` submenu arrows; moves **`instructions`** directly onto the Main Menu below **`options`**; widens menus to `368px`; auto-scrolls overflowing labels; and refines Level Select, Scores, and Pause layouts.
 - **Live Corner HUD Timer**: Under **Options → UI → Timer**, configure **`type`** (`off` / `level` / `rank` / `both`), **`size`** (`0.25`–`2`), and **`position`** (`TL` / `TR` / `BL` / `BR`) with a live preview.
 - **Customizable Time Format**: Switch between **`def`** (`0'00"00`) and **`new`** (`0:00.00`) under **Options → UI → `time format`**.
+- **Edge Timer Modes (`edge timer`)**: Under **Options → UI → `edge timer`**, choose **`2D`** (default), **`2D scaled`** (scales proportionally with camera zoom/dolly level), or **`3D`** (Android-style 3D floating edge timer anchored in world space next to the cube).
 
 ### Camera & Gameplay
 - **Camera Distance & Dolly Zoom**: Under **Options → Gameplay**, adjust **`cam distance`** (`mobile`, `0.5`–`2`) and **`dolly zoom`** (`pc`, `mobile`, `0`–`50`), including true orthographic framing (`mobile` / `0`) for isometric levels like *Curious Land* without skybox or shadow artifacts.

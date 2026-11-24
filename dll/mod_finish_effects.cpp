@@ -831,6 +831,7 @@ static void __declspec(naked) hk_renderBeforeSpark() {
     __asm {
         pushad
         call RenderCustomFinishEffect_Impl
+        call RenderEdgeTimer3D
         popad
         mov eax, 0x4d0fa0
         jmp eax

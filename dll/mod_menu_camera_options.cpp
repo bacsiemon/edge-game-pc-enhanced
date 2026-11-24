@@ -27,6 +27,7 @@ uint8_t g_finishPlatform = 0; // 0=pc, 1=mobile
 uint8_t g_timerMode   = 3;    // default: both
 float   g_timerSize   = 1.0f; // default: 1x
 uint8_t g_timerPos    = 1;    // default: TR (top right)
+uint8_t g_edgeTimerMode = 0;  // 0=2D, 1=2D scaled, 2=3D
 int32_t g_pauseSubSwipeX     = 0;
 int32_t g_pauseSubSwipePrevX = 0;
 
@@ -307,6 +308,10 @@ EDGE_STATIC_WSTR(g_wstrColorTheme,     "color theme");
 EDGE_STATIC_WSTR(g_wstrDef,          "def");
 EDGE_STATIC_WSTR(g_wstrNew,          "new");
 EDGE_STATIC_WSTR(g_wstrDot,          ".");
+EDGE_STATIC_WSTR(g_wstrEdgeTimer,         "edge timer");
+EDGE_STATIC_WSTR(g_wstrEdgeTimer2D,       "2D");
+EDGE_STATIC_WSTR(g_wstrEdgeTimer2DScaled, "2D scaled");
+EDGE_STATIC_WSTR(g_wstrEdgeTimer3D,       "3D");
 
 static int NearestTimerSizeIdx(float v) {
     int best = 3; // 1.0x
@@ -372,6 +377,7 @@ enum OptItem : int {
     OPT_UP_KEY,
     OPT_SKIP_INTRO,
     OPT_TIME_FMT,
+    OPT_EDGE_TIMER,
     OPT_TIMER,
     OPT_TIMER_SIZE,
     OPT_TIMER_POS,
@@ -739,6 +745,12 @@ static uint8_t __cdecl LoadTtsav_Impl(void* saveObj, uint8_t* userSettings, cons
         int iv = static_cast<int>(std::lrint(dv));
         if (iv >= 0 && iv <= 3) g_timerPos = static_cast<uint8_t>(iv);
     }
+
+    g_edgeTimerMode = 0;
+    if (ReadTtsavDouble(saveObj, "edgeTimer", &dv)) {
+        int iv = static_cast<int>(std::lrint(dv));
+        if (iv >= 0 && iv <= 2) g_edgeTimerMode = static_cast<uint8_t>(iv);
+    }
     g_graphicsLoaded = 1;
 
     ApplyUiScale(userSettings - 0x298);
@@ -780,6 +792,7 @@ static void __cdecl SaveTtsav_Impl(void* varTmp, void* saveObj) {
     SaveTtsavDouble(saveObj, varTmp, "timerMode", static_cast<double>(g_timerMode));
     SaveTtsavDouble(saveObj, varTmp, "timerSize", static_cast<double>(g_timerSize));
     SaveTtsavDouble(saveObj, varTmp, "timerPos", static_cast<double>(g_timerPos));
+    SaveTtsavDouble(saveObj, varTmp, "edgeTimer", static_cast<double>(g_edgeTimerMode));
 }
 
 static void __declspec(naked) hk_saveTtsav() {
@@ -1156,6 +1169,18 @@ static void FinishEffectAction_Impl(int sfxId) {
     }
 }
 
+static void EdgeTimerAction_Impl(int sfxId) {
+    uint8_t* sm = GetScreenMgr();
+    bool left = (sm != nullptr && sm[0xb3] != 0);
+    g_edgeTimerMode = left
+        ? static_cast<uint8_t>((g_edgeTimerMode + 2u) % 3u)
+        : static_cast<uint8_t>((g_edgeTimerMode + 1u) % 3u);
+    if (sm != nullptr) {
+        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
+        Game_SaveUserSettings(sm + 0x298);
+    }
+}
+
 static void FinishPlatformAction_Impl(int sfxId) {
     uint8_t* sm = GetScreenMgr();
     g_finishPlatform ^= 1u;
@@ -1271,7 +1296,7 @@ static int GetOptParentRowForCategory(int cat) {
     case OPT_CAT_AUDIO:    return 2;
     case OPT_CAT_UI:       return 3;
     case OPT_CAT_GAMEPLAY: return 4;
-    case OPT_CAT_TIMER:    return 1; // row 1 in OPT_CAT_UI (below time format)
+    case OPT_CAT_TIMER:    return 2; // row 2 in OPT_CAT_UI (below time format & edge timer)
     default:               return 0;
     }
 }
@@ -1302,9 +1327,10 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         return 5;
     case OPT_CAT_UI:
         outItems[0] = OPT_TIME_FMT;
-        outItems[1] = OPT_CAT_BTN_TIMER;
-        outItems[2] = OPT_BACK;
-        return 3;
+        outItems[1] = OPT_EDGE_TIMER;
+        outItems[2] = OPT_CAT_BTN_TIMER;
+        outItems[3] = OPT_BACK;
+        return 4;
     case OPT_CAT_TIMER:
         outItems[0] = OPT_TIMER;
         outItems[1] = OPT_TIMER_SIZE;
@@ -1364,6 +1390,7 @@ static bool IsOptItemAdjustable(OptItem item) {
     case OPT_UP_KEY:
     case OPT_SKIP_INTRO:
     case OPT_TIME_FMT:
+    case OPT_EDGE_TIMER:
     case OPT_TIMER:
     case OPT_TIMER_SIZE:
     case OPT_TIMER_POS:
@@ -1413,6 +1440,7 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_MUSIC_PLAYLIST:   return &g_wstrMusicPlaylist;
     case OPT_SKIP_INTRO:       return &g_wstrSkipIntro;
     case OPT_TIME_FMT:         return &g_wstrTimeFmt;
+    case OPT_EDGE_TIMER:       return &g_wstrEdgeTimer;
     case OPT_TIMER:            return &g_wstrTimerType;
     case OPT_TIMER_SIZE:       return &g_wstrTimerSizeLbl;
     case OPT_TIMER_POS:        return &g_wstrTimerPosLbl;
@@ -1458,6 +1486,7 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_CAM_DIST:
     case OPT_DOLLY_ZOOM:
     case OPT_FINISH_EFFECT:
+    case OPT_EDGE_TIMER:
     case OPT_TIMER:
     case OPT_TIMER_POS:
         return CTRL_POPUP;
@@ -1552,6 +1581,7 @@ static int GetPopupChoiceCount(OptItem item) {
     case OPT_CAM_DIST:     return 8;
     case OPT_DOLLY_ZOOM:   return 11;
     case OPT_FINISH_EFFECT: return 3;
+    case OPT_EDGE_TIMER:    return 3;
     case OPT_TIMER:        return 4;
     case OPT_TIMER_POS:   return 4;
     case OPT_RESET_SCORE: return 2;
@@ -1592,6 +1622,7 @@ static int GetPopupCurrentChoice(OptItem item) {
         return best;
     }
     case OPT_FINISH_EFFECT: return (g_finishEffect <= 2u) ? static_cast<int>(g_finishEffect) : 0;
+    case OPT_EDGE_TIMER:    return (g_edgeTimerMode <= 2u) ? static_cast<int>(g_edgeTimerMode) : 0;
     case OPT_TIMER:         return std::clamp<int>(g_timerMode, 0, 3);
     case OPT_TIMER_POS:   return std::clamp<int>(g_timerPos, 0, 3);
     case OPT_RESET_SCORE: return 0; // default highlight on "no"
@@ -1614,6 +1645,7 @@ static int GetPopupDefaultChoice(OptItem item) {
     case OPT_CAM_DIST:      return 4; // 1
     case OPT_DOLLY_ZOOM:    return 0; // pc (-1)
     case OPT_FINISH_EFFECT: return 0; // pc
+    case OPT_EDGE_TIMER:    return 0; // 2D
     case OPT_TIMER:         return 3; // both
     case OPT_TIMER_POS:   return 1; // TR
     case OPT_RESET_SCORE: return 0; // no
@@ -1657,6 +1689,11 @@ static const EdgeWString* GetPopupChoiceWstr(OptItem item, int idx, EdgeWString*
         if (idx == 1) return &g_wstrMobile;
         if (idx == 2) return &g_wstrJava;
         return &g_wstrPc;
+    case OPT_EDGE_TIMER:
+        idx = std::clamp(idx, 0, 2);
+        if (idx == 1) return &g_wstrEdgeTimer2DScaled;
+        if (idx == 2) return &g_wstrEdgeTimer3D;
+        return &g_wstrEdgeTimer2D;
     case OPT_TIMER:
         idx = std::clamp(idx, 0, 3);
         if (idx == 0) {
@@ -1728,6 +1765,11 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
         break;
     case OPT_FINISH_EFFECT:
         g_finishEffect = static_cast<uint8_t>(idx);
+        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
+        if (sm != nullptr) Game_SaveUserSettings(sm + 0x298);
+        break;
+    case OPT_EDGE_TIMER:
+        g_edgeTimerMode = static_cast<uint8_t>(idx);
         if (sfxId > 0) Game_PlaySfx(sm, sfxId);
         if (sm != nullptr) Game_SaveUserSettings(sm + 0x298);
         break;
@@ -2047,6 +2089,10 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
         return tmp;
     case OPT_TIME_FMT:
         return g_timeFmt ? &g_wstrNew : &g_wstrDef;
+    case OPT_EDGE_TIMER:
+        if (g_edgeTimerMode == 1) return &g_wstrEdgeTimer2DScaled;
+        if (g_edgeTimerMode == 2) return &g_wstrEdgeTimer3D;
+        return &g_wstrEdgeTimer2D;
     case OPT_TIMER:
         if (g_timerMode == 0) {
             Game_GetLocalizedWString(tmp, 0xc);
@@ -2108,6 +2154,7 @@ static void ExecuteOptSetting(OptItem item, void* menuObj, int sfxId) {
     case OPT_UP_KEY:      ToggleUpKeyWithSfx(sfxId); break;
     case OPT_SKIP_INTRO:  SkipIntroAction_Impl(sfxId); break;
     case OPT_TIME_FMT:    TimeFmtAction_Impl(sfxId); break;
+    case OPT_EDGE_TIMER:  EdgeTimerAction_Impl(sfxId); break;
     case OPT_TIMER:       TimerModeAction_Impl(sfxId); break;
     case OPT_TIMER_SIZE:  TimerSizeAction_Impl(sfxId); break;
     case OPT_TIMER_POS:   TimerPosAction_Impl(sfxId); break;

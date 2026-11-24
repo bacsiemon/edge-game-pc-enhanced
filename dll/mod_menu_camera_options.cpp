@@ -1383,29 +1383,8 @@ static void __declspec(naked) hk_loadUserSettingsLocal() {
 }
 
 // ------------------------------------------------------------------
-// 2. Options actions & 12-entry unified jump table
+// 2. Options toggle actions
 // ------------------------------------------------------------------
-static float CycleFloatPreset(const float* tbl, size_t count, float cur) {
-    uint8_t* sm = GetScreenMgr();
-    bool left = (sm != nullptr && sm[0xb3] != 0);
-    for (size_t i = 0; i < count; ++i) {
-        if (std::fabs(tbl[i] - cur) < 0.001f) {
-            size_t next = left ? (i == 0 ? count - 1 : i - 1) : ((i + 1) % count);
-            return tbl[next];
-        }
-    }
-    if (!left) {
-        for (size_t i = 0; i < count; ++i) {
-            if (tbl[i] >= 0.0f && (cur + 0.001f) < tbl[i]) return tbl[i];
-        }
-        return tbl[0];
-    }
-    for (int i = static_cast<int>(count) - 1; i >= 0; --i) {
-        if (tbl[i] >= 0.0f && (cur - 0.001f) > tbl[i]) return tbl[i];
-    }
-    return tbl[0];
-}
-
 static void ApplyOptionScaleChange(int sfxId) {
     uint8_t* sm = GetScreenMgr();
     if (sm != nullptr) {
@@ -1417,16 +1396,6 @@ static void ApplyOptionScaleChange(int sfxId) {
 
 static void AutoScaleAction_Impl(int sfxId) {
     g_autoScale ^= 1u;
-    ApplyOptionScaleChange(sfxId);
-}
-
-static void CamDistAction_Impl(int sfxId) {
-    g_camDist = CycleFloatPreset(g_distPresets, 8, g_camDist);
-    ApplyOptionScaleChange(sfxId);
-}
-
-static void CamFovAction_Impl(int sfxId) {
-    g_camFov = CycleFloatPreset(g_fovPresets, 11, g_camFov);
     ApplyOptionScaleChange(sfxId);
 }
 
@@ -1686,26 +1655,6 @@ static void __declspec(naked) hk_startupGraphics() {
     }
 }
 
-static void PrismVfxAction_Impl(int sfxId) {
-    uint8_t* sm = GetScreenMgr();
-    bool left = (sm != nullptr && sm[0xb3] != 0);
-    if (left) {
-        g_prismVfx = (g_prismVfx == 0) ? 3u : static_cast<uint8_t>(g_prismVfx - 1);
-    } else {
-        g_prismVfx = static_cast<uint8_t>((g_prismVfx + 1) % 4);
-    }
-    if (g_prismVfx <= 1) {
-        g_prismOverrideSec = 0.0f;
-    } else if (g_prismOverrideSec > 0.0f) {
-        g_prismOverrideSec = (g_prismVfx == 3) ? 2.0f : 1.0f;
-    }
-    if (sm != nullptr) {
-        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-        SyncGraphicsRuntime(sm, false);
-    }
-    SaveModSettings();
-}
-
 static void ChromaAbAction_Impl(int sfxId) {
     uint8_t* sm = GetScreenMgr();
     g_chromaAb ^= 1u;
@@ -1716,70 +1665,9 @@ static void ChromaAbAction_Impl(int sfxId) {
     SaveModSettings();
 }
 
-static void AaAction_Impl(int sfxId) {
-    uint8_t* sm = GetScreenMgr();
-    if (g_aaLevelCount <= 0) ProbeSupportedAaLevels();
-    bool left = (sm != nullptr && sm[0xb3] != 0);
-    int curIdx = 0;
-    for (int i = 0; i < g_aaLevelCount; ++i) {
-        if (g_aaLevels[i] == g_aaSamples) {
-            curIdx = i;
-            break;
-        }
-        if (g_aaLevels[i] < g_aaSamples) {
-            curIdx = i;
-        }
-    }
-    int nextIdx = left ? ((curIdx - 1 + g_aaLevelCount) % g_aaLevelCount)
-                       : ((curIdx + 1) % g_aaLevelCount);
-    g_aaSamples = g_aaLevels[nextIdx];
-    if (sm != nullptr) {
-        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-        SyncGraphicsRuntime(sm, true);
-    }
-    SaveModSettings();
-}
-
-static void FinishEffectAction_Impl(int sfxId) {
-    uint8_t* sm = GetScreenMgr();
-    bool left = (sm != nullptr && sm[0xb3] != 0);
-    g_finishEffect = left
-        ? static_cast<uint8_t>((g_finishEffect + 2u) % 3u)
-        : static_cast<uint8_t>((g_finishEffect + 1u) % 3u);
-    if (sm != nullptr && sfxId > 0) {
-        Game_PlaySfx(sm, sfxId);
-    }
-    SaveModSettings();
-}
-
-static void EdgeTimerAction_Impl(int sfxId) {
-    uint8_t* sm = GetScreenMgr();
-    bool left = (sm != nullptr && sm[0xb3] != 0);
-    g_edgeTimerMode = left
-        ? static_cast<uint8_t>((g_edgeTimerMode + 2u) % 3u)
-        : static_cast<uint8_t>((g_edgeTimerMode + 1u) % 3u);
-    if (sm != nullptr && sfxId > 0) {
-        Game_PlaySfx(sm, sfxId);
-    }
-    SaveModSettings();
-}
-
 static void FinishPlatformAction_Impl(int sfxId) {
     uint8_t* sm = GetScreenMgr();
     g_finishPlatform ^= 1u;
-    if (sm != nullptr && sfxId > 0) {
-        Game_PlaySfx(sm, sfxId);
-    }
-    SaveModSettings();
-}
-
-static void ColorThemeAction_Impl(int sfxId) {
-    uint8_t* sm = GetScreenMgr();
-    bool left = (sm != nullptr && sm[0xb3] != 0);
-    g_colorTheme = left
-        ? static_cast<uint8_t>((g_colorTheme + 2u) % 3u)
-        : static_cast<uint8_t>((g_colorTheme + 1u) % 3u);
-    OnColorThemeChanged();
     if (sm != nullptr && sfxId > 0) {
         Game_PlaySfx(sm, sfxId);
     }
@@ -1799,45 +1687,6 @@ static void MusicPlaylistAction_Impl(int sfxId) {
     }
     SaveModSettings();
     OnMusicPlaylistChanged();
-}
-
-static void TimerModeAction_Impl(int sfxId) {
-    uint8_t* sm = GetScreenMgr();
-    bool left = (sm != nullptr && sm[0xb3] != 0);
-    g_timerMode = left ? static_cast<uint8_t>((g_timerMode + 3u) & 3u)
-                       : static_cast<uint8_t>((g_timerMode + 1u) & 3u);
-    if (sm != nullptr && sfxId > 0) {
-        Game_PlaySfx(sm, sfxId);
-    }
-    SaveModSettings();
-}
-
-static void TimerSizeAction_Impl(int sfxId) {
-    uint8_t* sm = GetScreenMgr();
-    bool left = (sm != nullptr && sm[0xb3] != 0);
-    int idx = NearestTimerSizeIdx(g_timerSize);
-    int next = left ? ((idx + 7) & 7) : ((idx + 1) & 7);
-    g_timerSize = g_timerSizePresets[next];
-    if (sm != nullptr && sfxId > 0) {
-        Game_PlaySfx(sm, sfxId);
-    }
-    SaveModSettings();
-}
-
-static void TimerPosAction_Impl(int sfxId) {
-    uint8_t* sm = GetScreenMgr();
-    bool left = (sm != nullptr && sm[0xb3] != 0);
-    g_timerPos = left ? static_cast<uint8_t>((g_timerPos + 3u) & 3u)
-                      : static_cast<uint8_t>((g_timerPos + 1u) & 3u);
-    if (sm != nullptr && sfxId > 0) {
-        Game_PlaySfx(sm, sfxId);
-    }
-    SaveModSettings();
-}
-
-static void ResetScoreAction_Impl(void* optionsMenu) {
-    (void)optionsMenu;
-    Game_PlaySfx(GetScreenMgr(), 0xc);
 }
 
 // ------------------------------------------------------------------
@@ -2334,7 +2183,7 @@ static void OpenPopupForRow(OptItem item, int row, bool inPause) {
     g_optUi.popupNeedsInitialSync = !kbd;
     g_optUi.lastMouseX = -99999;
     g_optUi.lastMouseY = -99999;
-    Game_PlaySfx(GetScreenMgr(), 0xc);
+    Game_PlaySfx(GetScreenMgr(), 2);
 }
 
 static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
@@ -2349,7 +2198,7 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
     case OPT_RESET_SCORE:
         if (idx == 1) {
             ResetAllScores_Impl();
-            Game_PlaySfx(sm, 0xc);
+            Game_PlaySfx(sm, 0x1);
         } else {
             Game_PlaySfx(sm, 0xb);
         }
@@ -2753,28 +2602,17 @@ static void ToggleUpKeyWithSfx(int sfxId) {
     Game_SaveUserSettings(sm + 0x298);
 }
 
-static void ExecuteOptSetting(OptItem item, void* menuObj, int sfxId) {
+static void ExecuteOptToggle(OptItem item, int sfxId) {
     switch (item) {
-    case OPT_FULLSCREEN:  ToggleFullscreenWithSfx(sfxId); break;
-    case OPT_PRISM_VFX:   PrismVfxAction_Impl(sfxId); break;
-    case OPT_CHROMA_AB:   ChromaAbAction_Impl(sfxId); break;
-    case OPT_AA:          AaAction_Impl(sfxId); break;
-    case OPT_AUTO_SCALE:  AutoScaleAction_Impl(sfxId); break;
-    case OPT_CAM_DIST:        CamDistAction_Impl(sfxId); break;
-    case OPT_DOLLY_ZOOM:      CamFovAction_Impl(sfxId); break;
-    case OPT_FINISH_EFFECT:   FinishEffectAction_Impl(sfxId); break;
+    case OPT_FULLSCREEN:      ToggleFullscreenWithSfx(sfxId); break;
+    case OPT_CHROMA_AB:       ChromaAbAction_Impl(sfxId); break;
+    case OPT_AUTO_SCALE:      AutoScaleAction_Impl(sfxId); break;
     case OPT_FINISH_PLATFORM: FinishPlatformAction_Impl(sfxId); break;
-    case OPT_COLOR_THEME:     ColorThemeAction_Impl(sfxId); break;
     case OPT_MUSIC_START:     MusicStartAction_Impl(sfxId); break;
     case OPT_MUSIC_PLAYLIST:  MusicPlaylistAction_Impl(sfxId); break;
-    case OPT_UP_KEY:      ToggleUpKeyWithSfx(sfxId); break;
-    case OPT_SKIP_INTRO:  SkipIntroAction_Impl(sfxId); break;
-    case OPT_TIME_FMT:    TimeFmtAction_Impl(sfxId); break;
-    case OPT_EDGE_TIMER:  EdgeTimerAction_Impl(sfxId); break;
-    case OPT_TIMER:       TimerModeAction_Impl(sfxId); break;
-    case OPT_TIMER_SIZE:  TimerSizeAction_Impl(sfxId); break;
-    case OPT_TIMER_POS:   TimerPosAction_Impl(sfxId); break;
-    case OPT_RESET_SCORE: ResetScoreAction_Impl(menuObj); break;
+    case OPT_UP_KEY:          ToggleUpKeyWithSfx(sfxId); break;
+    case OPT_SKIP_INTRO:      SkipIntroAction_Impl(sfxId); break;
+    case OPT_TIME_FMT:        TimeFmtAction_Impl(sfxId); break;
     default: break;
     }
 }
@@ -3306,11 +3144,9 @@ static void __cdecl OptionsAction_Impl(uint8_t* optionsMenu) {
     if (*reinterpret_cast<int*>(optionsMenu + 8) >= 0) return;
     uint8_t* sm = GetScreenMgr();
     bool isLr = (sm != nullptr && (sm[0xb3] != 0 || sm[0xb6] != 0));
-    bool fromKey = (sm != nullptr && (sm[0xc5] != 0 || isLr));
-    int sfxId = fromKey ? 2 : 0xc;
     if (g_optUi.popupOpen && !g_optUi.popupInPause) {
         if (!isLr) {
-            ApplyPopupChoice(g_optUi.popupItem, g_optUi.popupHighlight, sfxId);
+            ApplyPopupChoice(g_optUi.popupItem, g_optUi.popupHighlight, 0xc);
         }
         return;
     }
@@ -3340,7 +3176,7 @@ static void __cdecl OptionsAction_Impl(uint8_t* optionsMenu) {
 
     OptCtrlKind kind = GetOptCtrlKind(item);
     if (kind == CTRL_TOGGLE) {
-        ExecuteOptSetting(item, optionsMenu, sfxId);
+        ExecuteOptToggle(item, 2);
     } else if (kind == CTRL_POPUP) {
         if (isLr) {
             StepPopupQuick(item, sm[0xb3] != 0, 2);
@@ -3407,7 +3243,7 @@ static void __cdecl OptionsUpdate_Impl(uint8_t* optionsMenu, float dt) {
                     g_optUi.popupSlotVisible = true;
                     Game_PlaySfx(sm, 2);
                 } else {
-                    ApplyPopupChoice(g_optUi.popupItem, g_optUi.popupHighlight, 2);
+                    ApplyPopupChoice(g_optUi.popupItem, g_optUi.popupHighlight, 0xc);
                 }
             }
         } else {
@@ -3878,8 +3714,6 @@ static void __declspec(naked) hk_pauseUpdateSwipe() {
 static void __cdecl PauseP1Action_Impl(uint8_t* pauseMenu) {
     uint8_t* sm = GetScreenMgr();
     bool isLr = (sm != nullptr && (sm[0xb3] != 0 || sm[0xb6] != 0));
-    bool fromKey = (sm != nullptr && (sm[0xc5] != 0 || isLr));
-    int sfxId = fromKey ? 2 : 0xc;
     if (g_optUi.popupOpen && g_optUi.popupInPause) {
         if (!isLr) {
             if (!g_optUi.popupSlotVisible && sm != nullptr && sm[0xc5] != 0) {
@@ -3890,7 +3724,7 @@ static void __cdecl PauseP1Action_Impl(uint8_t* pauseMenu) {
                 Game_PlaySfx(sm, 2);
                 return;
             }
-            ApplyPopupChoice(g_optUi.popupItem, g_optUi.popupHighlight, sfxId);
+            ApplyPopupChoice(g_optUi.popupItem, g_optUi.popupHighlight, 0xc);
         }
         return;
     }
@@ -3924,7 +3758,7 @@ static void __cdecl PauseP1Action_Impl(uint8_t* pauseMenu) {
 
     OptCtrlKind kind = GetOptCtrlKind(item);
     if (kind == CTRL_TOGGLE) {
-        ExecuteOptSetting(item, pauseMenu, sfxId);
+        ExecuteOptToggle(item, 2);
     } else if (kind == CTRL_POPUP) {
         if (isLr) {
             StepPopupQuick(item, sm[0xb3] != 0, 2);

@@ -48,7 +48,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 ### 1. Toggles (9 items)
 
 - **Display:** 2 dots under the value. Lighter dot indicates the selected option.
-- **Interaction:** Click / Enter / Left / Right toggles immediately and saves.
+- **Interaction:** Click / Enter / Left / Right toggles immediately and saves, playing hover SFX (`2`).
 
 ### 2. Popups (8 setting popups + 1 confirm popup)
 
@@ -57,10 +57,10 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
   - Popup anchors **below** the option row by default to preserve visual flow, flipping **above** the row if there is insufficient vertical space below.
   - Shows all valid choices, marking the active choice and **highlighting the default value with a dot** (or `no` / `yes` with `no` focused by default for `reset score`).
 - **Interaction:**
-  - **Click / Enter** on the row opens the anchored popup.
-  - **Up / Down / Mouse Hover + Enter / Click** picks a choice (or confirms/cancels for `reset score`), closes the popup, and saves. Moving the mouse off-popup in mouse mode clears the choice highlight; pressing Up/Down/Enter restores the last highlighted choice first; hovered choices use subtle (`25%`) rainbow with a 2px rainbow border and switch to strong rainbow while pressed.
-  - **Esc / Cancel / Click outside** closes without changing the value / without resetting.
-  - **Left / Right** on the row (when popup is closed) quick-cycles setting popups as a shortcut (disabled on `reset score`).
+  - **Click / Enter** on the row opens the anchored popup, playing hover SFX (`2`).
+  - **Up / Down / Mouse Hover + Enter / Click** picks a choice (or confirms/cancels for `reset score`), closes the popup, and saves: setting choices play select SFX (`0xc`), choosing `no` plays back SFX (`0xb`), and confirming `reset score` (`yes`) plays level start / final confirm SFX (`0x1`). Moving the mouse off-popup in mouse mode clears the choice highlight; pressing Up/Down/Enter restores the last highlighted choice first; hovered choices use subtle (`25%`) rainbow with a 2px rainbow border and switch to strong rainbow while pressed.
+  - **Esc / Cancel / Click outside** closes without changing the value / without resetting, playing back SFX (`0xb`).
+  - **Left / Right** on the row (when popup is closed) quick-cycles setting popups as a shortcut (disabled on `reset score`), playing hover SFX (`2`).
 
 ### 3. Sliders (5 items)
 
@@ -70,5 +70,5 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 - **Interaction:**
   - **Mouse:** Click anywhere on the track to jump, drag thumb to scrub (pointer stays captured and row stays strong rainbow even if cursor leaves the row vertically), and release to save. Value changes during scrubbing play hover SFX (`2`).
   - **Keyboard / Gamepad:** Left / Right steps by preset or fixed increment (`5` for `sounds`/`music`, preset index for `prism vfx`/`ui scale`/`timer size`), playing hover SFX (`2`).
-  - **Reset to default:** Right-click on the slider row or press `R` / `Backspace` / `Delete` (or gamepad reset button) to snap back to the default value.
+  - **Reset to default:** Press `R` / `Backspace` / `Delete` while a slider row is focused to snap back to the default value, playing hover SFX (`2`).
   - **Special case (`ui scale`):** Update the displayed slider value while dragging/stepping, and call `ApplyUiScale` + `SaveModSettings` on mouse-up / Left-Right release (or cursor/focus change) without reverting `auto scale` to `off` (all mod options save atomically to `%LocalAppData%\Two Tribes\EDGE\edgemod_settings.ini`; vanilla options `fullscreen`, `sounds`, `music`, `up key`, and `reset score` continue using `Game_SaveUserSettings`).

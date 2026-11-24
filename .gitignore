@@ -20,9 +20,8 @@ dll/build/
 *.bak
 *.mdmp
 
-# Release binaries & packaged asset mods
-releases/*.dll
-releases/mods/*.edgemod
+# Local release packaging folder (kept on disk, not tracked in Git)
+releases/
 
 # Editor & OS metadata
 .DS_Store

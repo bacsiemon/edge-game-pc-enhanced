@@ -26,18 +26,17 @@ A drop-in enhancement mod (`XINPUT1_3.dll`) for the Steam PC version of **EDGE**
 ### Audio
 - **0–100 Volume Sliders**: Adjust **`sounds`** and **`music`** smoothly from `0` to `100` under **Options → Audio** (instead of just `off` / `on`), with working sound effects attenuation.
 - **Music Start Timing**: Choose **`land`** or **`fall`** under **Options → Audio → `music start`**.
-- **Custom Music Pack Support**: Supports extended custom music tracks (such as `JavaMusic.edgemod`) placed in the game's `music` folder.
+- **Java / PC OST Toggle (`music playlist`)**: Switch live between **`pc`** and **`java`** soundtracks under **Options → Audio → `music playlist`**, driven by an editable `music/playlist.xml` file (auto-generated on first launch if missing, with per-level auto-generation for custom or newly added levels) alongside extended custom music ID lookup (`music/<id>_*.ogg`).
 
 ---
 
 ## Installation
 
 1. Make sure your game's `edge.exe` is unmodified.
-2. Copy `XINPUT1_3.dll` (from `releases/` or a release download) into your EDGE installation folder (for example, `C:\Program Files (x86)\Steam\steamapps\common\EDGE`).
-3. If using an optional `.edgemod` pack (such as `JavaMusic.edgemod`), copy it into the game's `mods` folder and enable it with EdgeTool.
-4. Launch EDGE normally through Steam.
+2. Copy everything from `releases/` (`XINPUT1_3.dll` and the `music/` folder containing `100_menus.ogg`..`111_planant.ogg`) into your EDGE installation folder (for example, `C:\Program Files (x86)\Steam\steamapps\common\EDGE`).
+3. Launch EDGE normally through Steam (`music/playlist.xml` is auto-generated automatically on launch).
 
-To uninstall, disable any `.edgemod` packs in EdgeTool if used, then delete `XINPUT1_3.dll` from the game folder.
+To uninstall, delete `XINPUT1_3.dll` (and optionally `music/100_menus.ogg`..`music/111_planant.ogg` and `music/playlist.xml`) from the game folder.
 
 ---
 

@@ -169,93 +169,6 @@ static void __declspec(naked) hk_applyVolOnLoad() {
     }
 }
 
-static bool TryFindCustomMusicStem(const char* pattern, char* outStem, size_t outCap) {
-    WIN32_FIND_DATAA fd{};
-    HANDLE hFind = FindFirstFileA(pattern, &fd);
-    if (hFind == INVALID_HANDLE_VALUE) {
-        return false;
-    }
-    bool found = false;
-    do {
-        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-            continue;
-        }
-        size_t len = std::strlen(fd.cFileName);
-        if (len > 4 && (len - 4) < outCap && _stricmp(fd.cFileName + len - 4, ".ogg") == 0) {
-            std::memcpy(outStem, fd.cFileName, len - 4);
-            outStem[len - 4] = '\0';
-            found = true;
-            break;
-        }
-    } while (FindNextFileA(hFind, &fd));
-    FindClose(hFind);
-    return found;
-}
-
-/// Maps EDGE music IDs 0..24 (vanilla) and dynamically resolves 27..255 from music/<id>_*.ogg or music/<id>.ogg.
-static const char* __cdecl GetMusicFilename_Impl(int musicId) {
-    static const char* const kVanillaMusic[25] = {
-        "00_Title",
-        "01_Eternity",
-        "02_Quiet",
-        "03_Pad",
-        "04_Jingle",
-        "05_Tec",
-        "06_Kakkoi",
-        "07_Dark",
-        "08_Squadron",
-        "09_8bits",
-        "10_Pixel",
-        "11_Jupiter",
-        "12_Shame",
-        "13_Debrief",
-        "14_Space",
-        "15_Voyage_geometrique",
-        "16_Mzone",
-        "17_R2",
-        "18_Mystery_cube",
-        "19_Duty",
-        "20_PerfectCell",
-        "21_fun",
-        "22_lol",
-        "23_lostway",
-        "24_wall_street",
-    };
-    if (musicId >= 0 && musicId < 25) {
-        return kVanillaMusic[musicId];
-    }
-    // 25 is unused; 26 (0x1a) is edge.exe's uninitialized musicId sentinel.
-    if (musicId >= 27 && musicId <= 255) {
-        static char s_customStems[256][MAX_PATH] = {};
-        char exeDir[MAX_PATH] = {};
-        DWORD dirLen = GetModuleFileNameA(nullptr, exeDir, MAX_PATH);
-        char* lastSlash = nullptr;
-        if (dirLen > 0 && dirLen < MAX_PATH) {
-            for (char* p = exeDir; *p != '\0'; ++p) {
-                if (*p == '\\' || *p == '/') {
-                    lastSlash = p;
-                }
-            }
-        }
-        char patternPrefix[MAX_PATH + 32] = {};
-        char patternExact[MAX_PATH + 32] = {};
-        if (lastSlash != nullptr) {
-            *lastSlash = '\0';
-            std::snprintf(patternPrefix, sizeof(patternPrefix), "%s\\music\\%d_*.ogg", exeDir, musicId);
-            std::snprintf(patternExact, sizeof(patternExact), "%s\\music\\%d.ogg", exeDir, musicId);
-        } else {
-            std::snprintf(patternPrefix, sizeof(patternPrefix), "music\\%d_*.ogg", musicId);
-            std::snprintf(patternExact, sizeof(patternExact), "music\\%d.ogg", musicId);
-        }
-        char* outStem = s_customStems[musicId];
-        if (TryFindCustomMusicStem(patternPrefix, outStem, MAX_PATH) ||
-            TryFindCustomMusicStem(patternExact, outStem, MAX_PATH)) {
-            return outStem;
-        }
-    }
-    return "06_Kakkoi";
-}
-
 } // namespace
 
 namespace edgemod {
@@ -371,11 +284,5 @@ void RegisterCoreFixes() {
 
         static const uint8_t expLoad[5] = {0xe8, 0x4c, 0x03, 0x01, 0x00};
         RegRelCall(0x482b7f, expLoad, 5, 5, &hk_applyVolOnLoad, 0x90);
-    }
-
-    // 4. Generic extended music IDs 27..255 -> music/<id>_*.ogg or music/<id>.ogg (skips 0x1a sentinel)
-    {
-        static const uint8_t expGetMusic[9] = {0x55, 0x8b, 0xec, 0x8b, 0x45, 0x08, 0x83, 0xf8, 0x18};
-        RegRelJmp(0x473e60, expGetMusic, 9, 5, &GetMusicFilename_Impl, 0x90, 0x473f2c);
     }
 }

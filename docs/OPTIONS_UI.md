@@ -20,6 +20,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 | **Audio**       | `sounds`               | `0`..`100`                                                                       | slider            | Live volume preview while dragging (default `100`)                                                                 |
 | **Audio**       | `music`                | `0`..`100`                                                                       | slider            | Live volume preview while dragging (default `100`)                                                                 |
 | **Audio**       | `music start`          | `land`, `fall`                                                                   | toggle            | Instant 2-state switch                                                                                             |
+| **Audio**       | `music playlist`       | `pc`, `java`                                                                     | toggle            | Live toggle backed by `music/playlist.xml` (`pc` default, saved in `musicPlaylist`)                                |
 | **UI**          | `time format`          | `def`, `new`                                                                     | toggle            | Instant 2-state switch                                                                                             |
 | **UI**          | `timer`                | *(opens **Timer** submenu)*                                                      | submenu (`>`)     | Nested 3rd-level category                                                                                          |
 | **UI -> Timer** | `type`                 | `off`, `level`, `rank`, `both`                                                   | popup             | 4 named choices; live corner timer in Pause, sample timer in Main Options (default `both`)                         |
@@ -43,7 +44,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 
 ## Control Behavior Guidelines
 
-### 1. Toggles (9 items)
+### 1. Toggles (10 items)
 
 - **Display:** 2 dots under the value. Lighter dot indicates the selected option.
 - **Interaction:** Click / Enter / Left / Right toggles immediately and saves.

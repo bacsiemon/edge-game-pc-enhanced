@@ -38,6 +38,7 @@ VCVARS_CANDIDATES = [
 DLL_SOURCES = [
     "xinput_proxy.cpp",
     "mod_core_fixes.cpp",
+    "mod_music_playlist.cpp",
     "mod_ui_scale_rt.cpp",
     "mod_menu_camera_options.cpp",
     "mod_finish_effects.cpp",

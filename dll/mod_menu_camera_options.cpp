@@ -18,6 +18,7 @@ bool    g_inRenderCamInterp = false;
 uint8_t g_timeFmt     = 0;
 uint8_t g_skipIntro   = 0;
 uint8_t g_musicStart  = 0;
+uint8_t g_musicPlaylist = 0; // 0=pc, 1=java
 uint8_t g_prismVfx    = 1;
 uint8_t g_chromaAb    = 1;
 int32_t g_aaSamples   = -1; // sentinel until loaded/migrated
@@ -275,6 +276,7 @@ EDGE_STATIC_WSTR(g_wstrCamFov,    "dolly zoom");
 EDGE_STATIC_WSTR(g_wstrTimeFmt,   "time format");
 EDGE_STATIC_WSTR(g_wstrSkipIntro, "skip intro");
 EDGE_STATIC_WSTR(g_wstrMusicStart,   "music start");
+EDGE_STATIC_WSTR(g_wstrMusicPlaylist, "music playlist");
 EDGE_STATIC_WSTR(g_wstrTimer,        "timer");
 EDGE_STATIC_WSTR(g_wstrTimerType,    "type");
 EDGE_STATIC_WSTR(g_wstrTimerSizeLbl, "size");
@@ -366,6 +368,7 @@ enum OptItem : int {
     OPT_SOUNDS,
     OPT_MUSIC,
     OPT_MUSIC_START,
+    OPT_MUSIC_PLAYLIST,
     OPT_UP_KEY,
     OPT_SKIP_INTRO,
     OPT_TIME_FMT,
@@ -672,6 +675,13 @@ static uint8_t __cdecl LoadTtsav_Impl(void* saveObj, uint8_t* userSettings, cons
         g_musicStart = (iv != 0) ? 1u : 0u;
     }
 
+    g_musicPlaylist = 0;
+    if (ReadTtsavDouble(saveObj, "musicPlaylist", &dv)) {
+        int iv = static_cast<int>(std::lrint(dv));
+        g_musicPlaylist = (iv != 0) ? 1u : 0u;
+    }
+    EnsureMusicPlaylistReady();
+
     uint8_t legacyFx = userSettings[0x1d];
     g_prismVfx = legacyFx ? 1u : 0u;
     if (ReadTtsavDouble(saveObj, "prismVfx", &dv)) {
@@ -760,6 +770,7 @@ static void __cdecl SaveTtsav_Impl(void* varTmp, void* saveObj) {
     SaveTtsavDouble(saveObj, varTmp, "timeFmt", static_cast<double>(g_timeFmt));
     SaveTtsavDouble(saveObj, varTmp, "skipIntro", static_cast<double>(g_skipIntro));
     SaveTtsavDouble(saveObj, varTmp, "musicStart", static_cast<double>(g_musicStart));
+    SaveTtsavDouble(saveObj, varTmp, "musicPlaylist", static_cast<double>(g_musicPlaylist));
     SaveTtsavDouble(saveObj, varTmp, "prismVfx", static_cast<double>(g_prismVfx));
     SaveTtsavDouble(saveObj, varTmp, "chromaAb", static_cast<double>(g_chromaAb));
     SaveTtsavDouble(saveObj, varTmp, "aaSamples", static_cast<double>(g_aaSamples >= 0 ? g_aaSamples : 0));
@@ -1169,6 +1180,16 @@ static void MusicStartAction_Impl(int sfxId) {
     ApplyOptionScaleChange(sfxId);
 }
 
+static void MusicPlaylistAction_Impl(int sfxId) {
+    uint8_t* sm = GetScreenMgr();
+    g_musicPlaylist ^= 1u;
+    if (sm != nullptr) {
+        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
+        Game_SaveUserSettings(sm + 0x298);
+    }
+    OnMusicPlaylistChanged();
+}
+
 static void TimerModeAction_Impl(int sfxId) {
     uint8_t* sm = GetScreenMgr();
     bool left = (sm != nullptr && sm[0xb3] != 0);
@@ -1276,8 +1297,9 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         outItems[0] = OPT_SOUNDS;
         outItems[1] = OPT_MUSIC;
         outItems[2] = OPT_MUSIC_START;
-        outItems[3] = OPT_BACK;
-        return 4;
+        outItems[3] = OPT_MUSIC_PLAYLIST;
+        outItems[4] = OPT_BACK;
+        return 5;
     case OPT_CAT_UI:
         outItems[0] = OPT_TIME_FMT;
         outItems[1] = OPT_CAT_BTN_TIMER;
@@ -1338,6 +1360,7 @@ static bool IsOptItemAdjustable(OptItem item) {
     case OPT_SOUNDS:
     case OPT_MUSIC:
     case OPT_MUSIC_START:
+    case OPT_MUSIC_PLAYLIST:
     case OPT_UP_KEY:
     case OPT_SKIP_INTRO:
     case OPT_TIME_FMT:
@@ -1387,6 +1410,7 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_FINISH_PLATFORM:  return &g_wstrFinishPlatform;
     case OPT_COLOR_THEME:      return &g_wstrColorTheme;
     case OPT_MUSIC_START:      return &g_wstrMusicStart;
+    case OPT_MUSIC_PLAYLIST:   return &g_wstrMusicPlaylist;
     case OPT_SKIP_INTRO:       return &g_wstrSkipIntro;
     case OPT_TIME_FMT:         return &g_wstrTimeFmt;
     case OPT_TIMER:            return &g_wstrTimerType;
@@ -1425,6 +1449,7 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_FINISH_PLATFORM:
     case OPT_COLOR_THEME:
     case OPT_MUSIC_START:
+    case OPT_MUSIC_PLAYLIST:
     case OPT_UP_KEY:
     case OPT_SKIP_INTRO:
     case OPT_TIME_FMT:
@@ -1511,6 +1536,7 @@ static int GetToggleState(OptItem item) {
     case OPT_FINISH_PLATFORM: return g_finishPlatform ? 1 : 0;
     case OPT_COLOR_THEME:     return g_colorTheme ? 1 : 0;
     case OPT_MUSIC_START:     return g_musicStart ? 1 : 0;
+    case OPT_MUSIC_PLAYLIST:  return g_musicPlaylist ? 1 : 0;
     case OPT_UP_KEY:      return (sm != nullptr && sm[0x2b4] != 0) ? 1 : 0;
     case OPT_SKIP_INTRO:  return g_skipIntro ? 1 : 0;
     case OPT_TIME_FMT:    return g_timeFmt ? 1 : 0;
@@ -2007,6 +2033,8 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
         return tmp;
     case OPT_MUSIC_START:
         return g_musicStart ? &g_wstrFall : &g_wstrLand;
+    case OPT_MUSIC_PLAYLIST:
+        return (g_musicPlaylist != 0) ? &g_wstrJava : &g_wstrPc;
     case OPT_UP_KEY: {
         uint8_t upVal = (sm != nullptr) ? sm[0x2b4] : 0;
         Game_GetLocalizedWString(tmp, (upVal != 0) ? 0x44 : 0x43);
@@ -2076,6 +2104,7 @@ static void ExecuteOptSetting(OptItem item, void* menuObj, int sfxId) {
     case OPT_FINISH_PLATFORM: FinishPlatformAction_Impl(sfxId); break;
     case OPT_COLOR_THEME:     ColorThemeAction_Impl(sfxId); break;
     case OPT_MUSIC_START:     MusicStartAction_Impl(sfxId); break;
+    case OPT_MUSIC_PLAYLIST:  MusicPlaylistAction_Impl(sfxId); break;
     case OPT_UP_KEY:      ToggleUpKeyWithSfx(sfxId); break;
     case OPT_SKIP_INTRO:  SkipIntroAction_Impl(sfxId); break;
     case OPT_TIME_FMT:    TimeFmtAction_Impl(sfxId); break;

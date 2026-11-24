@@ -59,6 +59,7 @@ void RegisterAllPatchesOnce() {
     if (registered) return;
     registered = true;
     RegisterCoreFixes();
+    RegisterMusicPlaylist();
     RegisterUiScaleAndRt();
     RegisterMenuCameraOptions();
     RegisterFinishEffects();

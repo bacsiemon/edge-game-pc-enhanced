@@ -36,6 +36,7 @@ extern bool    g_inRenderCamInterp;
 extern uint8_t g_timeFmt;
 extern uint8_t g_skipIntro;
 extern uint8_t g_musicStart;
+extern uint8_t g_musicPlaylist; // 0=pc, 1=java
 extern uint8_t g_prismVfx;    // 0=off, 1=short (vanilla), 2=medium (1s), 3=long (2s)
 extern uint8_t g_chromaAb;    // 0=off, 1=on
 extern int32_t g_aaSamples;   // 0=off, 2/4/8/16 MSAA samples
@@ -135,5 +136,7 @@ void SetSfxVolume(int newVol, int sfxId, bool save);
 void SetMusicVolume(int newVol, int sfxId, bool save);
 bool GetHudTimerMenuPreview(uint32_t state, uint8_t* outMode, float* outSize, uint8_t* outPos, bool* outForceSample);
 void OnColorThemeChanged();
+void EnsureMusicPlaylistReady();
+void OnMusicPlaylistChanged();
 
 } // namespace edgemod

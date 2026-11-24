@@ -210,6 +210,7 @@ inline bool ApplyAllRegisteredPatches() {
 } // namespace edgemod
 
 void RegisterCoreFixes();
+void RegisterMusicPlaylist();
 void RegisterUiScaleAndRt();
 void RegisterMenuCameraOptions();
 void RegisterFinishEffects();

@@ -1,7 +1,10 @@
 #include "mod_state.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 
 namespace edgemod {
 
@@ -577,45 +580,22 @@ static void __declspec(naked) hk_readIniSettings() {
 }
 
 static bool ReadTtsavDouble(void* saveObj, const char* key, double* outVal) {
+    if (saveObj == nullptr || key == nullptr || outVal == nullptr) return false;
+    if (*reinterpret_cast<const uint8_t*>(static_cast<const uint8_t*>(saveObj) + 8) != 7) return false;
     if (!reinterpret_cast<bool(__thiscall*)(void*, const char*)>(0x51c660)(saveObj, key)) return false;
     void* var = reinterpret_cast<void*(__thiscall*)(void*, const char*)>(0x51c540)(saveObj, key);
+    if (var == nullptr) return false;
     if (!reinterpret_cast<bool(__thiscall*)(void*, int)>(0x51b620)(var, 3)) return false;
-    *outVal = reinterpret_cast<double(__thiscall*)(void*)>(0x51b3f0)(var);
+    double val = reinterpret_cast<double(__thiscall*)(void*)>(0x51b3f0)(var);
+    if (!std::isfinite(val)) return false;
+    *outVal = val;
     return true;
 }
 
-static void SaveTtsavDouble(void* saveObj, void* varTmp, const char* key, double val) {
-    reinterpret_cast<void*(__thiscall*)(void*, double)>(0x51b290)(varTmp, val);
-    void* slot = reinterpret_cast<void*(__thiscall*)(void*, const char*)>(0x51db80)(saveObj, key);
-    reinterpret_cast<void*(__thiscall*)(void*, void*)>(0x51d1b0)(slot, varTmp);
-    reinterpret_cast<void(__thiscall*)(void*)>(0x51c800)(varTmp);
-}
-
-static void LoadOneCamTtsav(void* saveObj, const CamIniDesc& d) {
-    *d.gVal = d.defFlt;
-    double dv = 0.0;
-    auto isValid = [&](float x) {
-        if (std::isnan(x)) return false;
-        if (x == d.s1 || x == d.s2) return true;
-        return x >= d.minFlt && x <= d.maxFlt;
-    };
-    if (ReadTtsavDouble(saveObj, d.savKey, &dv)) {
-        float fv = static_cast<float>(dv);
-        if (isValid(fv)) *d.gVal = fv;
-    }
-    *d.gLastIni = d.unsetFlt;
-    if (ReadTtsavDouble(saveObj, d.savIniKey, &dv)) {
-        float fv = static_cast<float>(dv);
-        if (isValid(fv)) *d.gLastIni = fv;
-    }
-    if (*d.gIni != d.unsetFlt) {
-        if (std::fabs(*d.gIni - *d.gLastIni) > 0.0005f) {
-            *d.gLastIni = *d.gIni;
-            *d.gVal = *d.gIni;
-        }
-    } else {
-        *d.gLastIni = d.unsetFlt;
-    }
+static bool IsValidCamValue(const CamIniDesc& d, float x) {
+    if (!std::isfinite(x)) return false;
+    if (x == d.s1 || x == d.s2) return true;
+    return x >= d.minFlt && x <= d.maxFlt;
 }
 
 static int GetLegacyDefaultAa(uint8_t legacyFx) {
@@ -627,185 +607,777 @@ static int GetLegacyDefaultAa(uint8_t legacyFx) {
     return legacyFx ? 8 : 2;
 }
 
-static uint8_t __cdecl LoadTtsav_Impl(void* saveObj, uint8_t* userSettings, const char* nextKey) {
-    // ui_scale
-    if (g_uiScale == 0.0f) g_uiScale = 1.0f;
+// ------------------------------------------------------------------
+// Standalone %LocalAppData%\Two Tribes\EDGE\edgemod_settings.ini persistence
+// ------------------------------------------------------------------
+constexpr int32_t kModIniSchemaVersion = 1;
+
+static bool GetModSettingsPathW(wchar_t* outPath, size_t cap, bool createDirs) {
+    if (outPath == nullptr || cap == 0) return false;
+    outPath[0] = L'\0';
+
+    wchar_t base[MAX_PATH]{};
+    DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
+    if (n > 0 && n < MAX_PATH) {
+        while (n > 0 && (base[n - 1] == L'\\' || base[n - 1] == L'/')) {
+            base[--n] = L'\0';
+        }
+        wchar_t dir1[MAX_PATH]{};
+        wchar_t dir2[MAX_PATH]{};
+        int r1 = std::swprintf(dir1, MAX_PATH, L"%ls\\Two Tribes", base);
+        int r2 = std::swprintf(dir2, MAX_PATH, L"%ls\\Two Tribes\\EDGE", base);
+        int r3 = std::swprintf(outPath, cap, L"%ls\\Two Tribes\\EDGE\\edgemod_settings.ini", base);
+        if (r1 > 0 && r2 > 0 && r3 > 0 && static_cast<size_t>(r3) < cap) {
+            if (createDirs) {
+                CreateDirectoryW(dir1, nullptr);
+                CreateDirectoryW(dir2, nullptr);
+            }
+            return true;
+        }
+    }
+
+    DWORD exeLen = GetModuleFileNameW(nullptr, base, MAX_PATH);
+    if (exeLen > 0 && exeLen < MAX_PATH) {
+        wchar_t* slash = std::wcsrchr(base, L'\\');
+        wchar_t* fslash = std::wcsrchr(base, L'/');
+        if (fslash != nullptr && (slash == nullptr || fslash > slash)) slash = fslash;
+        if (slash != nullptr) {
+            *slash = L'\0';
+            int r = std::swprintf(outPath, cap, L"%ls\\edgemod_settings.ini", base);
+            if (r > 0 && static_cast<size_t>(r) < cap) return true;
+        }
+    }
+    outPath[0] = L'\0';
+    return false;
+}
+
+static bool ModSettingsFileExists() {
+    wchar_t path[MAX_PATH]{};
+    if (!GetModSettingsPathW(path, MAX_PATH, false)) return false;
+    DWORD attr = GetFileAttributesW(path);
+    return (attr != INVALID_FILE_ATTRIBUTES) && ((attr & FILE_ATTRIBUTE_DIRECTORY) == 0);
+}
+
+static bool IsAsciiSpace(char c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+static void TrimAsciiInPlace(const char*& p, const char*& end) {
+    while (p < end && IsAsciiSpace(*p)) ++p;
+    while (end > p && IsAsciiSpace(end[-1])) --end;
+}
+
+static bool AsciiEqIc(const char* p, const char* end, const char* lit) {
+    size_t i = 0;
+    while (p < end) {
+        char c = *p++;
+        if (c >= 'A' && c <= 'Z') c |= 0x20;
+        if (lit[i] == '\0' || c != lit[i]) return false;
+        ++i;
+    }
+    return lit[i] == '\0';
+}
+
+static bool ParseAsciiDouble(const char* p, const char* end, double* out) {
+    TrimAsciiInPlace(p, end);
+    if (p >= end) return false;
+
+    bool neg = false;
+    if (*p == '-') {
+        neg = true;
+        ++p;
+    } else if (*p == '+') {
+        ++p;
+    }
+    if (p >= end) return false;
+
+    double val = 0.0;
+    bool hasDigits = false;
+    while (p < end && *p >= '0' && *p <= '9') {
+        hasDigits = true;
+        val = val * 10.0 + static_cast<double>(*p - '0');
+        ++p;
+    }
+    if (p < end && *p == '.') {
+        ++p;
+        double place = 0.1;
+        while (p < end && *p >= '0' && *p <= '9') {
+            hasDigits = true;
+            val += static_cast<double>(*p - '0') * place;
+            place *= 0.1;
+            ++p;
+        }
+    }
+    if (!hasDigits) return false;
+
+    if (p < end && (*p == 'e' || *p == 'E')) {
+        ++p;
+        bool expNeg = false;
+        if (p < end && (*p == '-' || *p == '+')) {
+            expNeg = (*p == '-');
+            ++p;
+        }
+        int expVal = 0;
+        bool hasExpDigits = false;
+        while (p < end && *p >= '0' && *p <= '9') {
+            hasExpDigits = true;
+            if (expVal < 1000) expVal = expVal * 10 + (*p - '0');
+            ++p;
+        }
+        if (!hasExpDigits) return false;
+        val *= std::pow(10.0, expNeg ? -expVal : expVal);
+    }
+
+    if (p != end) return false;
+    if (neg) val = -val;
+    if (!std::isfinite(val)) return false;
+    *out = val;
+    return true;
+}
+
+static bool ParseAsciiInt(const char* p, const char* end, int32_t* out) {
     double dv = 0.0;
-    if (ReadTtsavDouble(saveObj, "uiScaleF", &dv)) {
-        float fv = static_cast<float>(dv);
+    if (!ParseAsciiDouble(p, end, &dv)) return false;
+    if (dv < -2147483648.0 || dv > 2147483647.0) return false;
+    *out = static_cast<int32_t>(std::llround(dv));
+    return true;
+}
+
+static void AppendAsciiFloat(std::string& out, double v) {
+    if (!std::isfinite(v)) {
+        out.push_back('0');
+        return;
+    }
+    if (std::fabs(v) < 0.0000005) {
+        out.push_back('0');
+        return;
+    }
+    if (std::fabs(v - std::round(v)) < 1e-6 && std::fabs(v) < 1e9) {
+        char buf[32]{};
+        std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(std::llround(v)));
+        out += buf;
+        return;
+    }
+    bool neg = (v < 0.0);
+    double av = std::fabs(v);
+    if (av < 1e9) {
+        unsigned long long scaled = static_cast<unsigned long long>(std::llround(av * 1000000.0));
+        unsigned long long whole = scaled / 1000000ull;
+        unsigned long long frac = scaled % 1000000ull;
+        if (neg && (whole > 0 || frac > 0)) out.push_back('-');
+        char buf[48]{};
+        if (frac == 0) {
+            std::snprintf(buf, sizeof(buf), "%llu", whole);
+            out += buf;
+        } else {
+            std::snprintf(buf, sizeof(buf), "%llu.%06llu", whole, frac);
+            size_t len = std::strlen(buf);
+            while (len > 0 && buf[len - 1] == '0') --len;
+            if (len > 0 && buf[len - 1] == '.') --len;
+            out.append(buf, len);
+        }
+        return;
+    }
+    char buf[64]{};
+    std::snprintf(buf, sizeof(buf), "%.6g", v);
+    for (char* q = buf; *q != '\0'; ++q) {
+        if (*q == ',') *q = '.';
+    }
+    out += buf;
+}
+
+static void SaveModSettings() {
+    wchar_t iniPath[MAX_PATH + 16]{};
+    if (!GetModSettingsPathW(iniPath, MAX_PATH, true)) return;
+
+    float uiScale = GetEffectiveUiScale();
+    float uiScaleIni = std::isfinite(g_lastIniScale) ? g_lastIniScale : 0.0f;
+    uint32_t uiAuto = g_autoScale ? 1u : 0u;
+    int32_t uiAutoIni = (g_lastIniAuto == 0 || g_lastIniAuto == 1) ? static_cast<int32_t>(g_lastIniAuto) : -1;
+
+    float camDist = IsValidCamValue(kDistDesc, g_camDist) ? g_camDist : kDistDesc.defFlt;
+    float camDistIni = IsValidCamValue(kDistDesc, g_lastIniDist) ? g_lastIniDist : kDistDesc.unsetFlt;
+    float camFov = IsValidCamValue(kFovDesc, g_camFov) ? g_camFov : kFovDesc.defFlt;
+    float camFovIni = IsValidCamValue(kFovDesc, g_lastIniFov) ? g_lastIniFov : kFovDesc.unsetFlt;
+
+    uint8_t timeFmt = (g_timeFmt != 0) ? 1u : 0u;
+    uint8_t skipIntro = (g_skipIntro != 0) ? 1u : 0u;
+    uint8_t musicStart = (g_musicStart != 0) ? 1u : 0u;
+    uint8_t musicPlaylist = (g_musicPlaylist != 0) ? 1u : 0u;
+    uint8_t prismVfx = (g_prismVfx <= 3u) ? g_prismVfx : 1u;
+    uint8_t chromaAb = (g_chromaAb != 0) ? 1u : 0u;
+    int32_t aaSamples = (g_aaSamples >= 0 && g_aaSamples <= 16) ? g_aaSamples : 0;
+    uint8_t finishEffect = (g_finishEffect <= 2u) ? g_finishEffect : 0u;
+    uint8_t finishPlatform = (g_finishPlatform != 0) ? 1u : 0u;
+    uint8_t colorTheme = (g_colorTheme <= 2u) ? g_colorTheme : 0u;
+    uint8_t timerMode = (g_timerMode <= 3u) ? g_timerMode : 3u;
+    float timerSize = std::isfinite(g_timerSize) ? g_timerSizePresets[NearestTimerSizeIdx(g_timerSize)] : 1.0f;
+    uint8_t timerPos = (g_timerPos <= 3u) ? g_timerPos : 1u;
+    uint8_t edgeTimer = (g_edgeTimerMode <= 2u) ? g_edgeTimerMode : 0u;
+
+    std::string out;
+    out.reserve(768);
+    out += "; EDGE PC Mod settings (auto-managed)\r\n";
+    out += "[edgemod]\r\n";
+    auto writeInt = [&](const char* k, int32_t v) {
+        char num[24]{};
+        std::snprintf(num, sizeof(num), "%d", v);
+        out += k;
+        out += " = ";
+        out += num;
+        out += "\r\n";
+    };
+    auto writeFloat = [&](const char* k, double v) {
+        out += k;
+        out += " = ";
+        AppendAsciiFloat(out, v);
+        out += "\r\n";
+    };
+
+    writeInt("schema_version", kModIniSchemaVersion);
+    writeFloat("ui_scale", uiScale);
+    writeFloat("ui_scale_ini", uiScaleIni);
+    writeInt("ui_auto", static_cast<int32_t>(uiAuto));
+    writeInt("ui_auto_ini", uiAutoIni);
+    writeFloat("cam_dist", camDist);
+    writeFloat("cam_dist_ini", camDistIni);
+    writeFloat("cam_fov", camFov);
+    writeFloat("cam_fov_ini", camFovIni);
+    writeInt("time_fmt", timeFmt);
+    writeInt("skip_intro", skipIntro);
+    writeInt("music_start", musicStart);
+    writeInt("music_playlist", musicPlaylist);
+    writeInt("prism_vfx", prismVfx);
+    writeInt("chroma_ab", chromaAb);
+    writeInt("aa_samples", aaSamples);
+    writeInt("finish_effect", finishEffect);
+    writeInt("finish_platform", finishPlatform);
+    writeInt("color_theme", colorTheme);
+    writeInt("timer_mode", timerMode);
+    writeFloat("timer_size", timerSize);
+    writeInt("timer_pos", timerPos);
+    writeInt("edge_timer", edgeTimer);
+
+    wchar_t tmpPath[MAX_PATH + 16]{};
+    if (std::swprintf(tmpPath, MAX_PATH + 16, L"%ls.tmp", iniPath) <= 0) return;
+
+    HANDLE hFile = CreateFileW(
+        tmpPath, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr
+    );
+    if (hFile == INVALID_HANDLE_VALUE) return;
+
+    const char* ptr = out.data();
+    size_t remaining = out.size();
+    bool writeOk = true;
+    while (remaining > 0) {
+        DWORD chunk = static_cast<DWORD>((std::min)(remaining, static_cast<size_t>(65536)));
+        DWORD written = 0;
+        if (!WriteFile(hFile, ptr, chunk, &written, nullptr) || written != chunk) {
+            writeOk = false;
+            break;
+        }
+        ptr += written;
+        remaining -= written;
+    }
+    if (writeOk) {
+        FlushFileBuffers(hFile);
+    }
+    CloseHandle(hFile);
+
+    if (!writeOk) {
+        DeleteFileW(tmpPath);
+        return;
+    }
+
+    bool moved = false;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        if (MoveFileExW(tmpPath, iniPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            moved = true;
+            break;
+        }
+        Sleep(5);
+    }
+    if (!moved) {
+        DeleteFileW(tmpPath);
+    }
+}
+
+struct LegacyTtsavSnapshot {
+    bool hasUiScale = false;      double uiScale = 1.0;
+    bool hasUiScaleIni = false;   double uiScaleIni = 0.0;
+    bool hasUiAuto = false;       double uiAuto = 1.0;
+    bool hasUiAutoIni = false;    double uiAutoIni = -1.0;
+    bool hasCamDist = false;      double camDist = 1.0;
+    bool hasCamDistIni = false;   double camDistIni = 0.0;
+    bool hasCamFov = false;       double camFov = -1.0;
+    bool hasCamFovIni = false;    double camFovIni = -99.0;
+    bool hasTimeFmt = false;      double timeFmt = 0.0;
+    bool hasSkipIntro = false;    double skipIntro = 0.0;
+    bool hasMusicStart = false;   double musicStart = 0.0;
+    bool hasMusicPlaylist = false;double musicPlaylist = 0.0;
+    bool hasPrismVfx = false;     double prismVfx = 1.0;
+    bool hasChromaAb = false;     double chromaAb = 1.0;
+    bool hasAaSamples = false;    double aaSamples = 8.0;
+    bool hasFinishEffect = false; double finishEffect = 0.0;
+    bool hasFinishPlatform = false;double finishPlatform = 0.0;
+    bool hasColorTheme = false;   double colorTheme = 0.0;
+    bool hasTimerMode = false;    double timerMode = 3.0;
+    bool hasTimerSize = false;    double timerSize = 1.0;
+    bool hasTimerPos = false;     double timerPos = 1.0;
+    bool hasEdgeTimer = false;    double edgeTimer = 0.0;
+};
+
+LegacyTtsavSnapshot g_legacySnap{};
+bool g_legacyTtsavCaptured = false;
+
+static bool LoadModSettingsFromIni(bool* outNeedsResave) {
+    if (outNeedsResave != nullptr) *outNeedsResave = true;
+
+    wchar_t iniPath[MAX_PATH]{};
+    if (!GetModSettingsPathW(iniPath, MAX_PATH, false)) return false;
+
+    HANDLE hFile = CreateFileW(
+        iniPath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr
+    );
+    if (hFile == INVALID_HANDLE_VALUE) return false;
+
+    LARGE_INTEGER fileSize{};
+    if (!GetFileSizeEx(hFile, &fileSize) || fileSize.QuadPart < 0 || fileSize.QuadPart > 1048576) {
+        CloseHandle(hFile);
+        return false;
+    }
+
+    std::string data(static_cast<size_t>(fileSize.QuadPart), '\0');
+    size_t totalRead = 0;
+    while (totalRead < data.size()) {
+        DWORD toRead = static_cast<DWORD>((std::min)(data.size() - totalRead, static_cast<size_t>(65536)));
+        DWORD got = 0;
+        if (!ReadFile(hFile, &data[totalRead], toRead, &got, nullptr) || got == 0) break;
+        totalRead += got;
+    }
+    CloseHandle(hFile);
+    data.resize(totalRead);
+
+    // Strip UTF-8 BOM if user edited the INI in Notepad
+    size_t pos = 0;
+    if (data.size() >= 3 &&
+        static_cast<uint8_t>(data[0]) == 0xEF &&
+        static_cast<uint8_t>(data[1]) == 0xBB &&
+        static_cast<uint8_t>(data[2]) == 0xBF) {
+        pos = 3;
+    }
+
+    bool inEdgeModSec = false;
+    int32_t schemaVer = 0;
+    uint32_t seenMask = 0;
+    constexpr uint32_t kAllModKeysMask = (1u << 22) - 1u;
+
+    while (pos < data.size()) {
+        size_t nl = data.find('\n', pos);
+        size_t lineEnd = (nl == std::string::npos) ? data.size() : nl;
+        const char* p = data.data() + pos;
+        const char* end = data.data() + lineEnd;
+        pos = (nl == std::string::npos) ? data.size() : (nl + 1);
+
+        TrimAsciiInPlace(p, end);
+        if (p >= end || *p == ';' || *p == '#') continue;
+
+        if (*p == '[') {
+            const char* close = static_cast<const char*>(std::memchr(p + 1, ']', static_cast<size_t>(end - (p + 1))));
+            if (close != nullptr) {
+                const char* secP = p + 1;
+                const char* secE = close;
+                TrimAsciiInPlace(secP, secE);
+                inEdgeModSec = AsciiEqIc(secP, secE, "edgemod");
+            }
+            continue;
+        }
+
+        if (!inEdgeModSec) continue;
+
+        const char* eq = static_cast<const char*>(std::memchr(p, '=', static_cast<size_t>(end - p)));
+        if (eq == nullptr) continue;
+
+        const char* kP = p;
+        const char* kE = eq;
+        TrimAsciiInPlace(kP, kE);
+        const char* vP = eq + 1;
+        const char* vE = end;
+        TrimAsciiInPlace(vP, vE);
+        if (kP >= kE) continue;
+
+        double dv = 0.0;
+        int32_t iv = 0;
+
+        if (AsciiEqIc(kP, kE, "schema_version")) {
+            if (ParseAsciiInt(vP, vE, &iv)) schemaVer = iv;
+        } else if (AsciiEqIc(kP, kE, "ui_scale")) {
+            if (ParseAsciiDouble(vP, vE, &dv)) {
+                float fv = static_cast<float>(dv);
+                if (ClampUiScale(&fv)) { g_uiScale = fv; seenMask |= (1u << 0); }
+            }
+        } else if (AsciiEqIc(kP, kE, "ui_scale_ini")) {
+            if (ParseAsciiDouble(vP, vE, &dv)) {
+                float fv = static_cast<float>(dv);
+                if (std::isfinite(fv)) { g_lastIniScale = fv; seenMask |= (1u << 1); }
+            }
+        } else if (AsciiEqIc(kP, kE, "ui_auto")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_autoScale = (iv != 0) ? 1u : 0u;
+                seenMask |= (1u << 2);
+            }
+        } else if (AsciiEqIc(kP, kE, "ui_auto_ini")) {
+            if (ParseAsciiInt(vP, vE, &iv) && (iv == -1 || iv == 0 || iv == 1)) {
+                g_lastIniAuto = static_cast<int8_t>(iv);
+                seenMask |= (1u << 3);
+            }
+        } else if (AsciiEqIc(kP, kE, "cam_dist")) {
+            if (ParseAsciiDouble(vP, vE, &dv)) {
+                float fv = static_cast<float>(dv);
+                if (IsValidCamValue(kDistDesc, fv)) { g_camDist = fv; seenMask |= (1u << 4); }
+            }
+        } else if (AsciiEqIc(kP, kE, "cam_dist_ini")) {
+            if (ParseAsciiDouble(vP, vE, &dv)) {
+                float fv = static_cast<float>(dv);
+                if (fv == kDistDesc.unsetFlt || IsValidCamValue(kDistDesc, fv)) {
+                    g_lastIniDist = fv;
+                    seenMask |= (1u << 5);
+                }
+            }
+        } else if (AsciiEqIc(kP, kE, "cam_fov")) {
+            if (ParseAsciiDouble(vP, vE, &dv)) {
+                float fv = static_cast<float>(dv);
+                if (IsValidCamValue(kFovDesc, fv)) { g_camFov = fv; seenMask |= (1u << 6); }
+            }
+        } else if (AsciiEqIc(kP, kE, "cam_fov_ini")) {
+            if (ParseAsciiDouble(vP, vE, &dv)) {
+                float fv = static_cast<float>(dv);
+                if (fv == kFovDesc.unsetFlt || IsValidCamValue(kFovDesc, fv)) {
+                    g_lastIniFov = fv;
+                    seenMask |= (1u << 7);
+                }
+            }
+        } else if (AsciiEqIc(kP, kE, "time_fmt")) {
+            if (ParseAsciiInt(vP, vE, &iv) && (iv == 0 || iv == 1)) {
+                g_timeFmt = static_cast<uint8_t>(iv);
+                seenMask |= (1u << 8);
+            }
+        } else if (AsciiEqIc(kP, kE, "skip_intro")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_skipIntro = (iv != 0) ? 1u : 0u;
+                seenMask |= (1u << 9);
+            }
+        } else if (AsciiEqIc(kP, kE, "music_start")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_musicStart = (iv != 0) ? 1u : 0u;
+                seenMask |= (1u << 10);
+            }
+        } else if (AsciiEqIc(kP, kE, "music_playlist")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_musicPlaylist = (iv != 0) ? 1u : 0u;
+                seenMask |= (1u << 11);
+            }
+        } else if (AsciiEqIc(kP, kE, "prism_vfx")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 3) {
+                g_prismVfx = static_cast<uint8_t>(iv);
+                seenMask |= (1u << 12);
+            }
+        } else if (AsciiEqIc(kP, kE, "chroma_ab")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_chromaAb = (iv != 0) ? 1u : 0u;
+                seenMask |= (1u << 13);
+            }
+        } else if (AsciiEqIc(kP, kE, "aa_samples")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 16) {
+                g_aaSamples = iv;
+                seenMask |= (1u << 14);
+            }
+        } else if (AsciiEqIc(kP, kE, "finish_effect")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) {
+                g_finishEffect = static_cast<uint8_t>(iv);
+                seenMask |= (1u << 15);
+            }
+        } else if (AsciiEqIc(kP, kE, "finish_platform")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_finishPlatform = (iv != 0) ? 1u : 0u;
+                seenMask |= (1u << 16);
+            }
+        } else if (AsciiEqIc(kP, kE, "color_theme")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) {
+                g_colorTheme = static_cast<uint8_t>(iv);
+                seenMask |= (1u << 17);
+            }
+        } else if (AsciiEqIc(kP, kE, "timer_mode")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 3) {
+                g_timerMode = static_cast<uint8_t>(iv);
+                seenMask |= (1u << 18);
+            }
+        } else if (AsciiEqIc(kP, kE, "timer_size")) {
+            if (ParseAsciiDouble(vP, vE, &dv)) {
+                float fv = static_cast<float>(dv);
+                if (fv < 0.25f) fv = 0.25f;
+                if (fv > 2.0f) fv = 2.0f;
+                g_timerSize = g_timerSizePresets[NearestTimerSizeIdx(fv)];
+                seenMask |= (1u << 19);
+            }
+        } else if (AsciiEqIc(kP, kE, "timer_pos")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 3) {
+                g_timerPos = static_cast<uint8_t>(iv);
+                seenMask |= (1u << 20);
+            }
+        } else if (AsciiEqIc(kP, kE, "edge_timer")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) {
+                g_edgeTimerMode = static_cast<uint8_t>(iv);
+                seenMask |= (1u << 21);
+            }
+        }
+    }
+
+    if (outNeedsResave != nullptr) {
+        *outNeedsResave = (schemaVer != kModIniSchemaVersion) || (seenMask != kAllModKeysMask);
+    }
+    return true;
+}
+
+static void ApplyLegacyTtsavSnapshot() {
+    if (!g_legacyTtsavCaptured) return;
+    const auto& s = g_legacySnap;
+
+    if (s.hasUiScale) {
+        float fv = static_cast<float>(s.uiScale);
         if (ClampUiScale(&fv)) g_uiScale = fv;
     }
-    g_lastIniScale = 0.0f;
-    if (ReadTtsavDouble(saveObj, "uiScaleFIni", &dv)) {
-        g_lastIniScale = static_cast<float>(dv);
+    if (s.hasUiScaleIni) {
+        float fv = static_cast<float>(s.uiScaleIni);
+        if (std::isfinite(fv)) g_lastIniScale = fv;
     }
-    if (g_iniUiScale == 0.0f) {
-        g_lastIniScale = 0.0f;
-    } else if (std::fabs(g_iniUiScale - g_lastIniScale) > 0.0005f) {
-        g_uiScale = g_iniUiScale;
-        g_lastIniScale = g_iniUiScale;
+    if (s.hasUiAuto) {
+        g_autoScale = (static_cast<int>(std::lrint(s.uiAuto)) != 0) ? 1u : 0u;
     }
-
-    // auto_scale
-    g_autoScale = 1;
-    if (ReadTtsavDouble(saveObj, "uiAuto", &dv)) {
-        g_autoScale = (static_cast<int>(std::lrint(dv)) != 0) ? 1u : 0u;
-    }
-    g_lastIniAuto = -1;
-    if (ReadTtsavDouble(saveObj, "uiAutoIni", &dv)) {
-        int iv = static_cast<int>(std::lrint(dv));
+    if (s.hasUiAutoIni) {
+        int iv = static_cast<int>(std::lrint(s.uiAutoIni));
         if (iv == 0 || iv == 1) g_lastIniAuto = static_cast<int8_t>(iv);
     }
-    if (g_iniAutoScale < 0) {
-        g_lastIniAuto = -1;
-    } else if (g_iniAutoScale != g_lastIniAuto) {
-        g_autoScale = static_cast<uint32_t>(g_iniAutoScale);
-        g_lastIniAuto = g_iniAutoScale;
+    if (s.hasCamDist) {
+        float fv = static_cast<float>(s.camDist);
+        if (IsValidCamValue(kDistDesc, fv)) g_camDist = fv;
     }
-
-    LoadOneCamTtsav(saveObj, kDistDesc);
-    LoadOneCamTtsav(saveObj, kFovDesc);
-
-    g_timeFmt = 0;
-    if (ReadTtsavDouble(saveObj, "timeFmt", &dv)) {
-        int iv = static_cast<int>(std::lrint(dv));
+    if (s.hasCamDistIni) {
+        float fv = static_cast<float>(s.camDistIni);
+        if (IsValidCamValue(kDistDesc, fv)) g_lastIniDist = fv;
+    }
+    if (s.hasCamFov) {
+        float fv = static_cast<float>(s.camFov);
+        if (IsValidCamValue(kFovDesc, fv)) g_camFov = fv;
+    }
+    if (s.hasCamFovIni) {
+        float fv = static_cast<float>(s.camFovIni);
+        if (IsValidCamValue(kFovDesc, fv)) g_lastIniFov = fv;
+    }
+    if (s.hasTimeFmt) {
+        int iv = static_cast<int>(std::lrint(s.timeFmt));
         if (iv == 0 || iv == 1) g_timeFmt = static_cast<uint8_t>(iv);
     }
-
-    g_skipIntro = 0;
-    if (ReadTtsavDouble(saveObj, "skipIntro", &dv)) {
-        int iv = static_cast<int>(std::lrint(dv));
-        g_skipIntro = (iv != 0) ? 1u : 0u;
+    if (s.hasSkipIntro) {
+        g_skipIntro = (static_cast<int>(std::lrint(s.skipIntro)) != 0) ? 1u : 0u;
     }
-
-    g_musicStart = 0;
-    if (ReadTtsavDouble(saveObj, "musicStart", &dv)) {
-        int iv = static_cast<int>(std::lrint(dv));
-        g_musicStart = (iv != 0) ? 1u : 0u;
+    if (s.hasMusicStart) {
+        g_musicStart = (static_cast<int>(std::lrint(s.musicStart)) != 0) ? 1u : 0u;
     }
-
-    g_musicPlaylist = 0;
-    if (ReadTtsavDouble(saveObj, "musicPlaylist", &dv)) {
-        int iv = static_cast<int>(std::lrint(dv));
-        g_musicPlaylist = (iv != 0) ? 1u : 0u;
+    if (s.hasMusicPlaylist) {
+        g_musicPlaylist = (static_cast<int>(std::lrint(s.musicPlaylist)) != 0) ? 1u : 0u;
     }
-    EnsureMusicPlaylistReady();
-
-    uint8_t legacyFx = userSettings[0x1d];
-    g_prismVfx = legacyFx ? 1u : 0u;
-    if (ReadTtsavDouble(saveObj, "prismVfx", &dv)) {
-        int iv = static_cast<int>(std::lrint(dv));
+    if (s.hasPrismVfx) {
+        int iv = static_cast<int>(std::lrint(s.prismVfx));
         if (iv >= 0 && iv <= 3) g_prismVfx = static_cast<uint8_t>(iv);
     }
-
-    g_chromaAb = legacyFx ? 1u : 0u;
-    if (ReadTtsavDouble(saveObj, "chromaAb", &dv)) {
-        int iv = static_cast<int>(std::lrint(dv));
-        g_chromaAb = (iv != 0) ? 1u : 0u;
+    if (s.hasChromaAb) {
+        g_chromaAb = (static_cast<int>(std::lrint(s.chromaAb)) != 0) ? 1u : 0u;
     }
-
-    g_aaSamples = GetLegacyDefaultAa(legacyFx);
-    if (ReadTtsavDouble(saveObj, "aaSamples", &dv)) {
-        int iv = static_cast<int>(std::lrint(dv));
+    if (s.hasAaSamples) {
+        int iv = static_cast<int>(std::lrint(s.aaSamples));
         if (iv >= 0 && iv <= 16) g_aaSamples = iv;
     }
-
-    g_finishEffect = 0;
-    if (ReadTtsavDouble(saveObj, "finishEffect", &dv)) {
-        int iv = static_cast<int>(std::lrint(dv));
+    if (s.hasFinishEffect) {
+        int iv = static_cast<int>(std::lrint(s.finishEffect));
         if (iv >= 0 && iv <= 2) g_finishEffect = static_cast<uint8_t>(iv);
     }
-
-    g_finishPlatform = 0;
-    if (ReadTtsavDouble(saveObj, "finishPlatform", &dv)) {
-        int iv = static_cast<int>(std::lrint(dv));
-        g_finishPlatform = (iv != 0) ? 1u : 0u;
+    if (s.hasFinishPlatform) {
+        g_finishPlatform = (static_cast<int>(std::lrint(s.finishPlatform)) != 0) ? 1u : 0u;
     }
-
-    g_colorTheme = 0;
-    if (ReadTtsavDouble(saveObj, "colorTheme", &dv)) {
-        int iv = static_cast<int>(std::lrint(dv));
+    if (s.hasColorTheme) {
+        int iv = static_cast<int>(std::lrint(s.colorTheme));
         if (iv >= 0 && iv <= 2) g_colorTheme = static_cast<uint8_t>(iv);
     }
-    OnColorThemeChanged();
-
-    g_timerMode = 3;
-    if (ReadTtsavDouble(saveObj, "timerMode", &dv)) {
-        int iv = static_cast<int>(std::lrint(dv));
+    if (s.hasTimerMode) {
+        int iv = static_cast<int>(std::lrint(s.timerMode));
         if (iv >= 0 && iv <= 3) g_timerMode = static_cast<uint8_t>(iv);
     }
-
-    g_timerSize = 1.0f;
-    if (ReadTtsavDouble(saveObj, "timerSize", &dv)) {
-        float fv = static_cast<float>(dv);
+    if (s.hasTimerSize) {
+        float fv = static_cast<float>(s.timerSize);
         if (fv < 0.25f) fv = 0.25f;
         if (fv > 2.0f) fv = 2.0f;
         g_timerSize = g_timerSizePresets[NearestTimerSizeIdx(fv)];
     }
-
-    g_timerPos = 1;
-    if (ReadTtsavDouble(saveObj, "timerPos", &dv)) {
-        int iv = static_cast<int>(std::lrint(dv));
+    if (s.hasTimerPos) {
+        int iv = static_cast<int>(std::lrint(s.timerPos));
         if (iv >= 0 && iv <= 3) g_timerPos = static_cast<uint8_t>(iv);
     }
-
-    g_edgeTimerMode = 0;
-    if (ReadTtsavDouble(saveObj, "edgeTimer", &dv)) {
-        int iv = static_cast<int>(std::lrint(dv));
+    if (s.hasEdgeTimer) {
+        int iv = static_cast<int>(std::lrint(s.edgeTimer));
         if (iv >= 0 && iv <= 2) g_edgeTimerMode = static_cast<uint8_t>(iv);
     }
-    g_graphicsLoaded = 1;
+}
 
-    ApplyUiScale(userSettings - 0x298);
+static bool ReconcileCamIniOverride(const CamIniDesc& d) {
+    bool changed = false;
+    if (*d.gIni != d.unsetFlt) {
+        if (std::fabs(*d.gIni - *d.gLastIni) > 0.0005f) {
+            *d.gLastIni = *d.gIni;
+            *d.gVal = *d.gIni;
+            changed = true;
+        }
+    } else if (*d.gLastIni != d.unsetFlt) {
+        *d.gLastIni = d.unsetFlt;
+        changed = true;
+    }
+    return changed;
+}
+
+static uint8_t __cdecl CaptureLegacyTtsav_Impl(void* saveObj, const char* nextKey) {
+    if (saveObj == nullptr) return 0;
+
+    if (!ModSettingsFileExists() &&
+        *reinterpret_cast<const uint8_t*>(static_cast<const uint8_t*>(saveObj) + 8) == 7) {
+        LegacyTtsavSnapshot snap{};
+        snap.hasUiScale       = ReadTtsavDouble(saveObj, "uiScaleF", &snap.uiScale);
+        snap.hasUiScaleIni    = ReadTtsavDouble(saveObj, "uiScaleFIni", &snap.uiScaleIni);
+        snap.hasUiAuto        = ReadTtsavDouble(saveObj, "uiAuto", &snap.uiAuto);
+        snap.hasUiAutoIni     = ReadTtsavDouble(saveObj, "uiAutoIni", &snap.uiAutoIni);
+        snap.hasCamDist       = ReadTtsavDouble(saveObj, "camDist", &snap.camDist);
+        snap.hasCamDistIni    = ReadTtsavDouble(saveObj, "camDistIni", &snap.camDistIni);
+        snap.hasCamFov        = ReadTtsavDouble(saveObj, "camFov", &snap.camFov);
+        snap.hasCamFovIni     = ReadTtsavDouble(saveObj, "camFovIni", &snap.camFovIni);
+        snap.hasTimeFmt       = ReadTtsavDouble(saveObj, "timeFmt", &snap.timeFmt);
+        snap.hasSkipIntro     = ReadTtsavDouble(saveObj, "skipIntro", &snap.skipIntro);
+        snap.hasMusicStart    = ReadTtsavDouble(saveObj, "musicStart", &snap.musicStart);
+        snap.hasMusicPlaylist = ReadTtsavDouble(saveObj, "musicPlaylist", &snap.musicPlaylist);
+        snap.hasPrismVfx      = ReadTtsavDouble(saveObj, "prismVfx", &snap.prismVfx);
+        snap.hasChromaAb      = ReadTtsavDouble(saveObj, "chromaAb", &snap.chromaAb);
+        snap.hasAaSamples     = ReadTtsavDouble(saveObj, "aaSamples", &snap.aaSamples);
+        snap.hasFinishEffect  = ReadTtsavDouble(saveObj, "finishEffect", &snap.finishEffect);
+        snap.hasFinishPlatform= ReadTtsavDouble(saveObj, "finishPlatform", &snap.finishPlatform);
+        snap.hasColorTheme    = ReadTtsavDouble(saveObj, "colorTheme", &snap.colorTheme);
+        snap.hasTimerMode     = ReadTtsavDouble(saveObj, "timerMode", &snap.timerMode);
+        snap.hasTimerSize     = ReadTtsavDouble(saveObj, "timerSize", &snap.timerSize);
+        snap.hasTimerPos      = ReadTtsavDouble(saveObj, "timerPos", &snap.timerPos);
+        snap.hasEdgeTimer     = ReadTtsavDouble(saveObj, "edgeTimer", &snap.edgeTimer);
+        g_legacySnap = snap;
+        g_legacyTtsavCaptured = true;
+    }
+
     return reinterpret_cast<uint8_t(__thiscall*)(void*, const char*)>(0x51c660)(saveObj, nextKey);
 }
 
 static void __declspec(naked) hk_loadTtsav() {
-    // At 0x492558: stack has [esp+4] = nextKey (pushed at 0x492553), esi = saveObj, edi = userSettings
+    // At 0x492558: stack has [esp+4] = nextKey ("fullScreen" pushed at 0x492553), esi = saveObj
     __asm {
         push DWORD PTR [esp + 4]
-        push edi
         push esi
-        call LoadTtsav_Impl
-        add esp, 12
+        call CaptureLegacyTtsav_Impl
+        add esp, 8
         ret 4
     }
 }
 
-static void __cdecl SaveTtsav_Impl(void* varTmp, void* saveObj) {
-    reinterpret_cast<void(__thiscall*)(void*)>(0x51c800)(varTmp);
-    SaveTtsavDouble(saveObj, varTmp, "uiScaleF", static_cast<double>(GetEffectiveUiScale()));
-    SaveTtsavDouble(saveObj, varTmp, "uiScaleFIni", static_cast<double>(g_lastIniScale));
-    SaveTtsavDouble(saveObj, varTmp, "uiAuto", static_cast<double>(g_autoScale));
-    SaveTtsavDouble(saveObj, varTmp, "uiAutoIni", static_cast<double>(g_lastIniAuto));
-    SaveTtsavDouble(saveObj, varTmp, "camDist", static_cast<double>(g_camDist));
-    SaveTtsavDouble(saveObj, varTmp, "camDistIni", static_cast<double>(g_lastIniDist));
-    SaveTtsavDouble(saveObj, varTmp, "camFov", static_cast<double>(g_camFov));
-    SaveTtsavDouble(saveObj, varTmp, "camFovIni", static_cast<double>(g_lastIniFov));
-    SaveTtsavDouble(saveObj, varTmp, "timeFmt", static_cast<double>(g_timeFmt));
-    SaveTtsavDouble(saveObj, varTmp, "skipIntro", static_cast<double>(g_skipIntro));
-    SaveTtsavDouble(saveObj, varTmp, "musicStart", static_cast<double>(g_musicStart));
-    SaveTtsavDouble(saveObj, varTmp, "musicPlaylist", static_cast<double>(g_musicPlaylist));
-    SaveTtsavDouble(saveObj, varTmp, "prismVfx", static_cast<double>(g_prismVfx));
-    SaveTtsavDouble(saveObj, varTmp, "chromaAb", static_cast<double>(g_chromaAb));
-    SaveTtsavDouble(saveObj, varTmp, "aaSamples", static_cast<double>(g_aaSamples >= 0 ? g_aaSamples : 0));
-    SaveTtsavDouble(saveObj, varTmp, "finishEffect", static_cast<double>(g_finishEffect));
-    SaveTtsavDouble(saveObj, varTmp, "finishPlatform", static_cast<double>(g_finishPlatform));
-    SaveTtsavDouble(saveObj, varTmp, "colorTheme", static_cast<double>(g_colorTheme));
-    SaveTtsavDouble(saveObj, varTmp, "timerMode", static_cast<double>(g_timerMode));
-    SaveTtsavDouble(saveObj, varTmp, "timerSize", static_cast<double>(g_timerSize));
-    SaveTtsavDouble(saveObj, varTmp, "timerPos", static_cast<double>(g_timerPos));
-    SaveTtsavDouble(saveObj, varTmp, "edgeTimer", static_cast<double>(g_edgeTimerMode));
+static void LoadModSettingsOnStartup_Impl(uint8_t* userSettings) {
+    uint8_t legacyFx = (userSettings != nullptr) ? userSettings[0x1d] : 1u;
+
+    g_uiScale       = 1.0f;
+    g_lastIniScale  = 0.0f;
+    g_autoScale     = 1;
+    g_lastIniAuto   = -1;
+    g_camDist       = kDistDesc.defFlt;
+    g_lastIniDist   = kDistDesc.unsetFlt;
+    g_camFov        = kFovDesc.defFlt;
+    g_lastIniFov    = kFovDesc.unsetFlt;
+    g_timeFmt       = 0;
+    g_skipIntro     = 0;
+    g_musicStart    = 0;
+    g_musicPlaylist = 0;
+    g_prismVfx      = legacyFx ? 1u : 0u;
+    g_chromaAb      = legacyFx ? 1u : 0u;
+    g_aaSamples     = GetLegacyDefaultAa(legacyFx);
+    g_finishEffect  = 0;
+    g_finishPlatform= 0;
+    g_colorTheme    = 0;
+    g_timerMode     = 3;
+    g_timerSize     = 1.0f;
+    g_timerPos      = 1;
+    g_edgeTimerMode = 0;
+
+    bool needsResave = true;
+    bool fileExisted = LoadModSettingsFromIni(&needsResave);
+    bool dirty = !fileExisted || needsResave;
+
+    if (!fileExisted && g_legacyTtsavCaptured) {
+        ApplyLegacyTtsavSnapshot();
+        dirty = true;
+    }
+
+    if (g_iniUiScale == 0.0f) {
+        if (g_lastIniScale != 0.0f) {
+            g_lastIniScale = 0.0f;
+            dirty = true;
+        }
+    } else if (std::fabs(g_iniUiScale - g_lastIniScale) > 0.0005f) {
+        g_uiScale = g_iniUiScale;
+        g_lastIniScale = g_iniUiScale;
+        dirty = true;
+    }
+
+    if (g_iniAutoScale < 0) {
+        if (g_lastIniAuto != -1) {
+            g_lastIniAuto = -1;
+            dirty = true;
+        }
+    } else if (g_iniAutoScale != g_lastIniAuto) {
+        g_autoScale = static_cast<uint32_t>(g_iniAutoScale);
+        g_lastIniAuto = g_iniAutoScale;
+        dirty = true;
+    }
+
+    if (ReconcileCamIniOverride(kDistDesc)) dirty = true;
+    if (ReconcileCamIniOverride(kFovDesc))  dirty = true;
+
+    g_graphicsLoaded = 1;
+
+    if (dirty) {
+        SaveModSettings();
+    }
+
+    EnsureMusicPlaylistReady();
+    OnColorThemeChanged();
+    if (userSettings != nullptr) {
+        ApplyUiScale(userSettings - 0x298);
+    }
 }
 
-static void __declspec(naked) hk_saveTtsav() {
-    // At 0x4926e7: replaces `lea ecx, [ebp-0x50]; call 0x51c800`, edi = saveObj
+static uint8_t __cdecl LoadUserSettingsLocal_Impl(uint8_t* userSettings) {
+    g_legacyTtsavCaptured = false;
+    g_legacySnap = {};
+    uint8_t ok = reinterpret_cast<uint8_t(__thiscall*)(void*)>(0x4923f0)(userSettings);
+    LoadModSettingsOnStartup_Impl(userSettings);
+    return ok;
+}
+
+static void __declspec(naked) hk_loadUserSettingsLocal() {
+    // At 0x492ef6: ecx = userSettings (replaces `call 0x4923f0`)
     __asm {
-        lea ecx, [ebp - 0x50]
-        push edi
         push ecx
-        call SaveTtsav_Impl
-        add esp, 8
+        call LoadUserSettingsLocal_Impl
+        add esp, 4
         ret
     }
 }
@@ -836,9 +1408,11 @@ static float CycleFloatPreset(const float* tbl, size_t count, float cur) {
 
 static void ApplyOptionScaleChange(int sfxId) {
     uint8_t* sm = GetScreenMgr();
-    if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-    Game_SaveUserSettings(sm + 0x298);
-    ApplyUiScale(sm);
+    if (sm != nullptr) {
+        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
+        ApplyUiScale(sm);
+    }
+    SaveModSettings();
 }
 
 static void AutoScaleAction_Impl(int sfxId) {
@@ -1125,17 +1699,21 @@ static void PrismVfxAction_Impl(int sfxId) {
     } else if (g_prismOverrideSec > 0.0f) {
         g_prismOverrideSec = (g_prismVfx == 3) ? 2.0f : 1.0f;
     }
-    if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-    SyncGraphicsRuntime(sm, false);
-    Game_SaveUserSettings(sm + 0x298);
+    if (sm != nullptr) {
+        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SyncGraphicsRuntime(sm, false);
+    }
+    SaveModSettings();
 }
 
 static void ChromaAbAction_Impl(int sfxId) {
     uint8_t* sm = GetScreenMgr();
     g_chromaAb ^= 1u;
-    if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-    SyncGraphicsRuntime(sm, false);
-    Game_SaveUserSettings(sm + 0x298);
+    if (sm != nullptr) {
+        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SyncGraphicsRuntime(sm, false);
+    }
+    SaveModSettings();
 }
 
 static void AaAction_Impl(int sfxId) {
@@ -1155,9 +1733,11 @@ static void AaAction_Impl(int sfxId) {
     int nextIdx = left ? ((curIdx - 1 + g_aaLevelCount) % g_aaLevelCount)
                        : ((curIdx + 1) % g_aaLevelCount);
     g_aaSamples = g_aaLevels[nextIdx];
-    if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-    SyncGraphicsRuntime(sm, true);
-    Game_SaveUserSettings(sm + 0x298);
+    if (sm != nullptr) {
+        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SyncGraphicsRuntime(sm, true);
+    }
+    SaveModSettings();
 }
 
 static void FinishEffectAction_Impl(int sfxId) {
@@ -1166,10 +1746,10 @@ static void FinishEffectAction_Impl(int sfxId) {
     g_finishEffect = left
         ? static_cast<uint8_t>((g_finishEffect + 2u) % 3u)
         : static_cast<uint8_t>((g_finishEffect + 1u) % 3u);
-    if (sm != nullptr) {
-        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-        Game_SaveUserSettings(sm + 0x298);
+    if (sm != nullptr && sfxId > 0) {
+        Game_PlaySfx(sm, sfxId);
     }
+    SaveModSettings();
 }
 
 static void EdgeTimerAction_Impl(int sfxId) {
@@ -1178,19 +1758,19 @@ static void EdgeTimerAction_Impl(int sfxId) {
     g_edgeTimerMode = left
         ? static_cast<uint8_t>((g_edgeTimerMode + 2u) % 3u)
         : static_cast<uint8_t>((g_edgeTimerMode + 1u) % 3u);
-    if (sm != nullptr) {
-        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-        Game_SaveUserSettings(sm + 0x298);
+    if (sm != nullptr && sfxId > 0) {
+        Game_PlaySfx(sm, sfxId);
     }
+    SaveModSettings();
 }
 
 static void FinishPlatformAction_Impl(int sfxId) {
     uint8_t* sm = GetScreenMgr();
     g_finishPlatform ^= 1u;
-    if (sm != nullptr) {
-        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-        Game_SaveUserSettings(sm + 0x298);
+    if (sm != nullptr && sfxId > 0) {
+        Game_PlaySfx(sm, sfxId);
     }
+    SaveModSettings();
 }
 
 static void ColorThemeAction_Impl(int sfxId) {
@@ -1200,10 +1780,10 @@ static void ColorThemeAction_Impl(int sfxId) {
         ? static_cast<uint8_t>((g_colorTheme + 2u) % 3u)
         : static_cast<uint8_t>((g_colorTheme + 1u) % 3u);
     OnColorThemeChanged();
-    if (sm != nullptr) {
-        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-        Game_SaveUserSettings(sm + 0x298);
+    if (sm != nullptr && sfxId > 0) {
+        Game_PlaySfx(sm, sfxId);
     }
+    SaveModSettings();
 }
 
 static void MusicStartAction_Impl(int sfxId) {
@@ -1214,10 +1794,10 @@ static void MusicStartAction_Impl(int sfxId) {
 static void MusicPlaylistAction_Impl(int sfxId) {
     uint8_t* sm = GetScreenMgr();
     g_musicPlaylist ^= 1u;
-    if (sm != nullptr) {
-        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-        Game_SaveUserSettings(sm + 0x298);
+    if (sm != nullptr && sfxId > 0) {
+        Game_PlaySfx(sm, sfxId);
     }
+    SaveModSettings();
     OnMusicPlaylistChanged();
 }
 
@@ -1226,8 +1806,10 @@ static void TimerModeAction_Impl(int sfxId) {
     bool left = (sm != nullptr && sm[0xb3] != 0);
     g_timerMode = left ? static_cast<uint8_t>((g_timerMode + 3u) & 3u)
                        : static_cast<uint8_t>((g_timerMode + 1u) & 3u);
-    if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-    Game_SaveUserSettings(sm + 0x298);
+    if (sm != nullptr && sfxId > 0) {
+        Game_PlaySfx(sm, sfxId);
+    }
+    SaveModSettings();
 }
 
 static void TimerSizeAction_Impl(int sfxId) {
@@ -1236,8 +1818,10 @@ static void TimerSizeAction_Impl(int sfxId) {
     int idx = NearestTimerSizeIdx(g_timerSize);
     int next = left ? ((idx + 7) & 7) : ((idx + 1) & 7);
     g_timerSize = g_timerSizePresets[next];
-    if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-    Game_SaveUserSettings(sm + 0x298);
+    if (sm != nullptr && sfxId > 0) {
+        Game_PlaySfx(sm, sfxId);
+    }
+    SaveModSettings();
 }
 
 static void TimerPosAction_Impl(int sfxId) {
@@ -1245,8 +1829,10 @@ static void TimerPosAction_Impl(int sfxId) {
     bool left = (sm != nullptr && sm[0xb3] != 0);
     g_timerPos = left ? static_cast<uint8_t>((g_timerPos + 3u) & 3u)
                       : static_cast<uint8_t>((g_timerPos + 1u) & 3u);
-    if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-    Game_SaveUserSettings(sm + 0x298);
+    if (sm != nullptr && sfxId > 0) {
+        Game_PlaySfx(sm, sfxId);
+    }
+    SaveModSettings();
 }
 
 static void ResetScoreAction_Impl(void* optionsMenu) {
@@ -1539,9 +2125,9 @@ static void CommitPendingUiScale() {
     if (!g_optUi.uiScalePending) return;
     g_optUi.uiScalePending = false;
     g_uiScale = g_optUi.uiScalePreview;
+    SaveModSettings();
     uint8_t* sm = GetScreenMgr();
     if (sm != nullptr) {
-        Game_SaveUserSettings(sm + 0x298);
         ApplyUiScale(sm);
     }
 }
@@ -1770,9 +2356,11 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
         break;
     case OPT_AA:
         g_aaSamples = g_aaLevels[idx];
-        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-        SyncGraphicsRuntime(sm, true);
-        if (sm != nullptr) Game_SaveUserSettings(sm + 0x298);
+        if (sm != nullptr) {
+            if (sfxId > 0) Game_PlaySfx(sm, sfxId);
+            SyncGraphicsRuntime(sm, true);
+        }
+        SaveModSettings();
         break;
     case OPT_CAM_DIST:
         g_camDist = g_distPresets[idx];
@@ -1785,28 +2373,28 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
     case OPT_COLOR_THEME:
         g_colorTheme = static_cast<uint8_t>(idx);
         OnColorThemeChanged();
-        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-        if (sm != nullptr) Game_SaveUserSettings(sm + 0x298);
+        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SaveModSettings();
         break;
     case OPT_FINISH_EFFECT:
         g_finishEffect = static_cast<uint8_t>(idx);
-        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-        if (sm != nullptr) Game_SaveUserSettings(sm + 0x298);
+        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SaveModSettings();
         break;
     case OPT_EDGE_TIMER:
         g_edgeTimerMode = static_cast<uint8_t>(idx);
-        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-        if (sm != nullptr) Game_SaveUserSettings(sm + 0x298);
+        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SaveModSettings();
         break;
     case OPT_TIMER:
         g_timerMode = static_cast<uint8_t>(idx);
-        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-        if (sm != nullptr) Game_SaveUserSettings(sm + 0x298);
+        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SaveModSettings();
         break;
     case OPT_TIMER_POS:
         g_timerPos = static_cast<uint8_t>(idx);
-        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-        if (sm != nullptr) Game_SaveUserSettings(sm + 0x298);
+        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SaveModSettings();
         break;
     default:
         break;
@@ -1869,8 +2457,7 @@ static void SetPrismVfxValue(int idx, int sfxId, bool save) {
     idx = std::clamp(idx, 0, 3);
     if (idx == static_cast<int>(g_prismVfx)) {
         if (save) {
-            uint8_t* sm = GetScreenMgr();
-            if (sm != nullptr) Game_SaveUserSettings(sm + 0x298);
+            SaveModSettings();
         }
         return;
     }
@@ -1881,12 +2468,14 @@ static void SetPrismVfxValue(int idx, int sfxId, bool save) {
         g_prismOverrideSec = (g_prismVfx == 3) ? 2.0f : 1.0f;
     }
     uint8_t* sm = GetScreenMgr();
-    if (sfxId > 0) {
-        Game_PlaySfx(sm, sfxId);
+    if (sm != nullptr) {
+        if (sfxId > 0) {
+            Game_PlaySfx(sm, sfxId);
+        }
+        SyncGraphicsRuntime(sm, false);
     }
-    SyncGraphicsRuntime(sm, false);
-    if (save && sm != nullptr) {
-        Game_SaveUserSettings(sm + 0x298);
+    if (save) {
+        SaveModSettings();
     }
 }
 
@@ -1942,8 +2531,8 @@ static void StepSlider(OptItem item, int dir, int sfxId) {
         int nextIdx = std::clamp(curIdx + dir, 0, 7);
         if (nextIdx != curIdx) {
             g_timerSize = g_timerSizePresets[nextIdx];
-            if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-            if (sm != nullptr) Game_SaveUserSettings(sm + 0x298);
+            if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+            SaveModSettings();
         }
         break;
     }
@@ -1987,10 +2576,10 @@ static void SetSliderFromNormalized(OptItem item, float norm, bool isDrag) {
         float newVal = g_timerSizePresets[idx];
         if (std::fabs(newVal - g_timerSize) > 0.001f) {
             g_timerSize = newVal;
-            Game_PlaySfx(sm, 2);
+            if (sm != nullptr) Game_PlaySfx(sm, 2);
         }
-        if (!isDrag && sm != nullptr) {
-            Game_SaveUserSettings(sm + 0x298);
+        if (!isDrag) {
+            SaveModSettings();
         }
         break;
     }
@@ -2021,8 +2610,8 @@ static void ResetSliderToDefault(OptItem item, int sfxId) {
     case OPT_TIMER_SIZE:
         if (std::fabs(g_timerSize - 1.0f) > 0.001f) {
             g_timerSize = 1.0f;
-            if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-            if (sm != nullptr) Game_SaveUserSettings(sm + 0x298);
+            if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+            SaveModSettings();
         }
         break;
     default:
@@ -2386,8 +2975,10 @@ static void UpdateOptControlsPerFrame(bool inPause, int cat, int selRow, int val
             g_optUi.dragActive = false;
             if (g_optUi.uiScalePending) {
                 CommitPendingUiScale();
-            } else {
+            } else if (g_optUi.dragItem == OPT_SOUNDS || g_optUi.dragItem == OPT_MUSIC) {
                 Game_SaveUserSettings(sm + 0x298);
+            } else {
+                SaveModSettings();
             }
         }
     }
@@ -2501,8 +3092,10 @@ static int HandleOptMouseHitTest(
             g_optUi.dragActive = false;
             if (g_optUi.uiScalePending) {
                 CommitPendingUiScale();
-            } else {
+            } else if (g_optUi.dragItem == OPT_SOUNDS || g_optUi.dragItem == OPT_MUSIC) {
                 Game_SaveUserSettings(sm + 0x298);
+            } else {
+                SaveModSettings();
             }
             g_optUi.suppressNextClickAction = true;
             return -1;
@@ -2547,8 +3140,10 @@ static int HandleOptMouseHitTest(
                 g_optUi.dragActive = false;
                 if (g_optUi.uiScalePending) {
                     CommitPendingUiScale();
-                } else {
+                } else if (item == OPT_SOUNDS || item == OPT_MUSIC) {
                     Game_SaveUserSettings(sm + 0x298);
+                } else {
+                    SaveModSettings();
                 }
                 g_optUi.suppressNextClickAction = true;
                 return -1;
@@ -4959,8 +5554,8 @@ void RegisterMenuCameraOptions() {
         const uint8_t exLoad[7] = {0x8b, 0xce, 0xe8, 0x01, 0xa1, 0x08, 0x00};
         RegRelCall(0x492558, exLoad, 7, 7, &hk_loadTtsav);
 
-        const uint8_t exSave[8] = {0x8d, 0x4d, 0xb0, 0xe8, 0x11, 0xa1, 0x08, 0x00};
-        RegRelCall(0x4926e7, exSave, 8, 8, &hk_saveTtsav);
+        const uint8_t exLoadLocal[5] = {0xe8, 0xf5, 0xf4, 0xff, 0xff};
+        RegRelCall(0x492ef6, exLoadLocal, 5, 5, &hk_loadUserSettingsLocal);
     }
 
     // 4. Camera Angle, Near/Far & Skybox

@@ -2,6 +2,8 @@
 
 A drop-in enhancement mod (`XINPUT1_3.dll`) for the Steam PC version of **EDGE**. It applies all fixes and new options at runtime without permanently modifying `edge.exe`.
 
+Mod settings are stored separately in `%LocalAppData%\Two Tribes\EDGE\edgemod_settings.ini` (automatically migrated from `local_savedata.ttsav` on first launch), keeping your vanilla save files untouched.
+
 ## Features
 
 ### Graphics & Visuals

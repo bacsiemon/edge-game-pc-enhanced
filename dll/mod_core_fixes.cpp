@@ -104,6 +104,7 @@ static void ApplyMusicVolume(int newVol, int oldVol, uint8_t* sm) {
 
 static void __cdecl SfxVolAction_Impl() {
     uint8_t* sm = GetScreenMgr();
+    if (sm == nullptr) return;
     int* pSfx = reinterpret_cast<int*>(sm + 0x2b0);
     int newVol = StepVol10(*pSfx);
     *pSfx = newVol;
@@ -116,6 +117,7 @@ static void __cdecl SfxVolAction_Impl() {
 
 static void __cdecl MusicVolAction_Impl() {
     uint8_t* sm = GetScreenMgr();
+    if (sm == nullptr) return;
     int* pMus = reinterpret_cast<int*>(sm + 0x2ac);
     int oldVol = *pMus;
     int newVol = StepVol10(oldVol);

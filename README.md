@@ -37,7 +37,7 @@ Mod settings are stored separately in `%LocalAppData%\Two Tribes\EDGE\edgemod_se
 ## Installation
 
 1. Make sure your game's `edge.exe` is unmodified.
-2. Download the latest release `.zip` from the [Releases](https://github.com/bacsiemon/edge-game-pc-enhanced/releases/latest) page and extract its contents (`XINPUT1_3.dll` and the `music/` folder containing `100_menus.ogg`..`111_planant.ogg`) into your EDGE installation folder (for example, `C:\Program Files (x86)\Steam\steamapps\common\EDGE`), merging folders when prompted.
+2. Download the latest release `.zip` from the [Releases](https://github.com/bacsiemon/edge-game-pc-enhanced/releases) page and extract its contents (`XINPUT1_3.dll` and the `music/` folder containing `100_menus.ogg`..`111_planant.ogg`) into your EDGE installation folder (for example, `C:\Program Files (x86)\Steam\steamapps\common\EDGE`), merging folders when prompted.
 3. Launch EDGE normally through Steam (`music/playlist.xml` is auto-generated automatically on launch).
 
 To uninstall, delete `XINPUT1_3.dll` (and optionally `music/100_menus.ogg`..`music/111_planant.ogg` and `music/playlist.xml`) from the game folder.

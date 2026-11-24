@@ -53,6 +53,7 @@ extern float   g_uiAlpha;
 extern uint8_t g_justTicked;
 extern int32_t g_pauseSubSwipeX;
 extern int32_t g_pauseSubSwipePrevX;
+constexpr int32_t kPauseOpenReadyTick = 9;
 
 void __cdecl FmtInt0to100Wstr(int val, EdgeWString* out);
 

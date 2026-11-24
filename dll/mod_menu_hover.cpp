@@ -88,7 +88,7 @@ static bool IsStandardSlotMenuReady(const uint8_t* menu, uint32_t vtbl, int paus
         return IsOptionsMenuReadyForHover(menu, false);
     }
     if (vtbl == kVtblPause) {
-        if (enterFrames < 5) return false;
+        if (enterFrames < kPauseOpenReadyTick) return false;
         int scrollX = *reinterpret_cast<const int32_t*>(menu + 0x4c);
         if (pausePage == 0) return scrollX == 0;
         if (pausePage == 1) return IsOptionsMenuReadyForHover(menu, true);

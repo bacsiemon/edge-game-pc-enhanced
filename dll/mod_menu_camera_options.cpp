@@ -3165,7 +3165,7 @@ static void __declspec(naked) hk_pauseP1Down() {
 }
 
 static int __cdecl PauseP1HitTest_Impl(uint8_t* pauseMenu, const int* pt) {
-    if (*reinterpret_cast<int*>(pauseMenu + 4) < 5 || *reinterpret_cast<int*>(pauseMenu + 8) >= 0) {
+    if (*reinterpret_cast<int*>(pauseMenu + 4) < kPauseOpenReadyTick || *reinterpret_cast<int*>(pauseMenu + 8) >= 0) {
         return -1;
     }
     if (*reinterpret_cast<int*>(pauseMenu + 0x44) != 1 || *reinterpret_cast<int*>(pauseMenu + 0x4c) < kMenuWideW) {
@@ -3256,7 +3256,7 @@ static void __cdecl PauseUpdateSwipe_Impl(uint8_t* pm) {
         if (g_pauseSubSwipeX < targetSub) g_pauseSubSwipeX = targetSub;
     }
 
-    if (page == 1 && *reinterpret_cast<int*>(pm + 4) >= 5 && *reinterpret_cast<int*>(pm + 8) < 0 &&
+    if (page == 1 && *reinterpret_cast<int*>(pm + 4) >= kPauseOpenReadyTick && *reinterpret_cast<int*>(pm + 8) < 0 &&
         scrollX >= kMenuWideW && g_pauseSubSwipeX == targetSub) {
         int selRow = *reinterpret_cast<int*>(pm + 0x50);
         UpdateOptControlsPerFrame(
@@ -4751,7 +4751,7 @@ bool __cdecl IsOptionsMenuReadyForHover(const uint8_t* menuObj, bool inPause) {
     if (!inPause) {
         return enterFrames >= 8;
     }
-    if (enterFrames < 5) return false;
+    if (enterFrames < kPauseOpenReadyTick) return false;
     int page    = *reinterpret_cast<const int*>(menuObj + 0x44);
     int scrollX = *reinterpret_cast<const int*>(menuObj + 0x4c);
     if (page != 1 || scrollX < kMenuWideW) return false;

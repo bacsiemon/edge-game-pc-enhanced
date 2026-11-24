@@ -1,4 +1,5 @@
 #include "mod_smooth_shared.h"
+#include <algorithm>
 #include <cmath>
 
 namespace edgemod {
@@ -435,23 +436,146 @@ static void __declspec(naked) hk_onInterpolate() {
 // ------------------------------------------------------------------
 // PauseMenu, EndLevel, PauseConfirm, ModelNode, Scroll & Submenu helpers
 // ------------------------------------------------------------------
-static int32_t __cdecl PauseSmoothSlideY_Impl(const uint8_t* pm) {
+constexpr int32_t kPauseOpenTicks    = 8;
+constexpr int32_t kPauseCloseTicks   = 7;
+constexpr float   kPauseMenuVisibleH = 280.0f;
+
+static float   g_pauseLastProgress       = 1.0f;
+static float   g_pauseCloseStartProgress = 1.0f;
+static int32_t g_pauseCloseTotalTicks    = kPauseCloseTicks;
+static float   g_pauseRenderBgOffsetY    = 0.0f;
+static float   g_pauseRenderMenuOffsetY  = 0.0f;
+
+static int32_t GetPauseVirtH() {
+    uint8_t* sm = GetScreenMgr();
+    int32_t h = (sm != nullptr) ? *reinterpret_cast<const int32_t*>(sm + 0x28) : 720;
+    return (h > 0) ? h : 720;
+}
+
+static float ComputePauseSlideProgress(const uint8_t* pm) {
     int32_t cur8 = *reinterpret_cast<const int32_t*>(pm + 0x8);
-    float pct = 100.0f;
     if (cur8 >= 0) {
-        int32_t prev8 = (g_subPtr == pm) ? g_subPrev8 : cur8;
+        int32_t total = (g_pauseCloseTotalTicks > 0) ? g_pauseCloseTotalTicks : kPauseCloseTicks;
+        int32_t startVal = total + 1;
+        int32_t prev8 = (g_subPtr == pm && g_subPrev8 >= 0) ? g_subPrev8 : startVal;
         float sm = SmoothCounterPair(cur8, prev8, true);
-        pct = (4.0f - sm) * 25.0f;
-    } else {
-        int32_t cur4 = *reinterpret_cast<const int32_t*>(pm + 0x4);
-        if (cur4 >= 5) return 0;
-        int32_t prev4 = (g_subPtr == pm) ? g_subPrev4 : cur4;
-        float sm = SmoothCounterPair(cur4, prev4, false);
-        pct = (5.0f - sm) * 20.0f;
+        float t = std::clamp((static_cast<float>(startVal) - sm) / static_cast<float>(total), 0.0f, 1.0f);
+        float e = g_pauseCloseStartProgress * (1.0f - t * t);
+        g_pauseLastProgress = e;
+        return e;
     }
-    if (pct < 0.0f) pct = 0.0f;
-    if (pct > 100.0f) pct = 100.0f;
-    return static_cast<int32_t>(std::lrint((pct * -223.0f) / 100.0f));
+
+    int32_t cur4 = *reinterpret_cast<const int32_t*>(pm + 0x4);
+    if (cur4 >= kPauseOpenReadyTick) {
+        g_pauseLastProgress = 1.0f;
+        return 1.0f;
+    }
+    int32_t prev4 = (g_subPtr == pm) ? g_subPrev4 : ((cur4 > 0) ? (cur4 - 1) : 0);
+    float sm = SmoothCounterPair(cur4, prev4, false);
+    float t = std::clamp(sm / static_cast<float>(kPauseOpenTicks), 0.0f, 1.0f);
+    float inv = 1.0f - t;
+    float e = 1.0f - inv * inv * inv;
+    g_pauseLastProgress = e;
+    return e;
+}
+
+static void __fastcall PauseOnEnter_Impl(uint8_t* pm, void*) {
+    reinterpret_cast<void(__thiscall*)(void*)>(0x495ed0)(pm);
+    *reinterpret_cast<int32_t*>(pm + 0x4) = 1;
+    g_pauseLastProgress = 0.0f;
+    g_pauseCloseStartProgress = 1.0f;
+    g_pauseCloseTotalTicks = kPauseCloseTicks;
+}
+
+static void __cdecl PauseStartClose_Impl(uint8_t* pm) {
+    float startProg = std::clamp(g_pauseLastProgress, 0.0f, 1.0f);
+    g_pauseCloseStartProgress = startProg;
+    int32_t ticks = std::clamp(
+        static_cast<int32_t>(std::lround(startProg * static_cast<float>(kPauseCloseTicks))),
+        2, kPauseCloseTicks
+    );
+    g_pauseCloseTotalTicks = ticks;
+    *reinterpret_cast<int32_t*>(pm + 0x8) = ticks + 1;
+}
+
+static void __declspec(naked) hk_pauseStartClose() {
+    __asm {
+        push eax
+        push ecx
+        push edx
+        push esi
+        call PauseStartClose_Impl
+        add esp, 4
+        pop edx
+        pop ecx
+        pop eax
+        ret
+    }
+}
+
+static void PushMatrixTranslateY(uint8_t* mstack, float matTransY, uint32_t* outSavedMode) {
+    uint32_t& stackMode = *reinterpret_cast<uint32_t*>(mstack + 0x4);
+    *outSavedMode = stackMode;
+    stackMode = 1;
+    float mat[16] = {
+        1.0f, 0.0f,      0.0f, 0.0f,
+        0.0f, 1.0f,      0.0f, 0.0f,
+        0.0f, 0.0f,      1.0f, 0.0f,
+        0.0f, matTransY, 0.0f, 1.0f
+    };
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f750)(mstack);
+    reinterpret_cast<void(__thiscall*)(void*, const float*)>(0x41f520)(mstack, mat);
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f660)(mstack);
+}
+
+static void PopMatrixTranslateY(uint8_t* mstack, uint32_t savedMode) {
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f610)(mstack);
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f660)(mstack);
+    *reinterpret_cast<uint32_t*>(mstack + 0x4) = savedMode;
+}
+
+static void __fastcall PauseDrawStrip_Impl(void* pm, void*, int32_t frame) {
+    float extraOffsetY = g_pauseRenderBgOffsetY - g_pauseRenderMenuOffsetY;
+    uint8_t* mstack = (extraOffsetY != 0.0f) ? GetMatrixStack() : nullptr;
+    if (mstack != nullptr) {
+        uint32_t savedMode = 0;
+        // Negate screen-space offset: 2D MatrixStack +Y moves UP, -Y moves DOWN.
+        PushMatrixTranslateY(mstack, -extraOffsetY, &savedMode);
+        reinterpret_cast<void(__thiscall*)(void*, int32_t)>(0x496070)(pm, frame);
+        PopMatrixTranslateY(mstack, savedMode);
+        return;
+    }
+    reinterpret_cast<void(__thiscall*)(void*, int32_t)>(0x496070)(pm, frame);
+}
+
+static void __fastcall PauseSetScissor_Impl(void* renderer, void*, int32_t* rect) {
+    int32_t virtH = GetPauseVirtH();
+    int32_t bgBottom = static_cast<int32_t>(std::ceil(static_cast<float>(virtH) + g_pauseRenderBgOffsetY));
+    rect[1] = 0;
+    rect[3] = std::clamp(bgBottom, 1, virtH);
+    reinterpret_cast<void(__thiscall*)(void*, int32_t*)>(0x4060d0)(renderer, rect);
+}
+
+static void __fastcall PauseRenderWrap_Impl(uint8_t* pm, void*, int32_t frame) {
+    int32_t virtH = GetPauseVirtH();
+    float e = ComputePauseSlideProgress(pm);
+    float bgDist = static_cast<float>(virtH);
+    float menuDist = (std::min)(bgDist, kPauseMenuVisibleH);
+    g_pauseRenderBgOffsetY = -(1.0f - e) * bgDist;
+    g_pauseRenderMenuOffsetY = -(1.0f - e) * menuDist;
+
+    uint8_t* mstack = (g_pauseRenderMenuOffsetY != 0.0f) ? GetMatrixStack() : nullptr;
+    if (mstack != nullptr) {
+        uint32_t savedMode = 0;
+        // Negate screen-space offset: 2D MatrixStack +Y moves UP, -Y moves DOWN.
+        PushMatrixTranslateY(mstack, -g_pauseRenderMenuOffsetY, &savedMode);
+        reinterpret_cast<void(__thiscall*)(void*, int32_t)>(0x4ad100)(pm, frame);
+        PopMatrixTranslateY(mstack, savedMode);
+    } else {
+        reinterpret_cast<void(__thiscall*)(void*, int32_t)>(0x4ad100)(pm, frame);
+    }
+    g_pauseRenderBgOffsetY = 0.0f;
+    g_pauseRenderMenuOffsetY = 0.0f;
 }
 
 static float __cdecl PauseSmoothX_Impl(const uint8_t* pm) {
@@ -581,11 +705,8 @@ static void __declspec(naked) hk_pauseP2Skip() {
 
 static void __declspec(naked) hk_pauseSmoothSlideY() {
     __asm {
-        push edi
-        call PauseSmoothSlideY_Impl
-        add esp, 4
         xor ebx, ebx
-        mov esi, eax
+        xor esi, esi
         mov eax, 0x4ad1a0
         jmp eax
     }
@@ -1483,6 +1604,34 @@ void RegisterUiSmoothPart1() {
 
     // Pause slide, Pause X, PauseConfirm, EndLevel flash/fade, Pause skips
     {
+        RegU32(0x58cf4c, 0x4ad100, reinterpret_cast<uint32_t>(&PauseRenderWrap_Impl));
+
+        const uint8_t exOnEnter[5] = {0xe8, 0x63, 0x7a, 0xfe, 0xff};
+        RegRelCall(0x4ae468, exOnEnter, 5, 5, reinterpret_cast<void*>(&PauseOnEnter_Impl));
+
+        const uint8_t exClose[7] = {0xc7, 0x46, 0x08, 0x04, 0x00, 0x00, 0x00};
+        RegRelCall(0x4aca3d, exClose, 7, 7, &hk_pauseStartClose);
+        RegRelCall(0x4acb9f, exClose, 7, 7, &hk_pauseStartClose);
+
+        const uint8_t exScissor[5] = {0xe8, 0xf8, 0x8e, 0xf5, 0xff};
+        RegRelCall(0x4ad1d3, exScissor, 5, 5, reinterpret_cast<void*>(&PauseSetScissor_Impl));
+
+        const uint8_t exStrip[5] = {0xe8, 0x32, 0x8f, 0xfe, 0xff};
+        RegRelCall(0x4ad139, exStrip, 5, 5, reinterpret_cast<void*>(&PauseDrawStrip_Impl));
+
+        const uint8_t readyTick = static_cast<uint8_t>(kPauseOpenReadyTick);
+        const uint8_t exReadyEnter[4] = {0x83, 0x7e, 0x04, 0x05};
+        const uint8_t rpReadyEnter[4] = {0x83, 0x7e, 0x04, readyTick};
+        RegBytes(0x4acd74, exReadyEnter, rpReadyEnter, 4);
+
+        const uint8_t exReadyInc[3] = {0x83, 0xf8, 0x05};
+        const uint8_t rpReadyInc[3] = {0x83, 0xf8, readyTick};
+        RegBytes(0x4acd99, exReadyInc, rpReadyInc, 3);
+
+        const uint8_t exReadyHit[4] = {0x83, 0x79, 0x04, 0x05};
+        const uint8_t rpReadyHit[4] = {0x83, 0x79, 0x04, readyTick};
+        RegBytes(0x4ace36, exReadyHit, rpReadyHit, 4);
+
         const uint8_t exPs[8] = {0x8b, 0x57, 0x04, 0x33, 0xdb, 0x33, 0xc0, 0x83};
         RegRelJmp(0x4ad147, exPs, 8, 5, &hk_pauseSmoothSlideY, 0x90, 0x4ad1a0);
 

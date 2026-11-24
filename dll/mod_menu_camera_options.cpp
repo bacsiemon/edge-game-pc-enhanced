@@ -32,6 +32,13 @@ uint8_t g_timerMode   = 3;    // default: both
 float   g_timerSize   = 1.0f; // default: 1x
 uint8_t g_timerPos    = 1;    // default: TR (top right)
 uint8_t g_edgeTimerMode = 0;  // 0=2D, 1=2D scaled, 2=3D
+uint8_t g_prismCounterType = 2; // 0=off, 1=short, 2=full
+float   g_prismCounterSize = 1.0f; // default: 1x
+uint8_t g_prismCounterPos  = 1; // 0=TL, 1=TR, 2=BL, 3=BR
+int32_t g_timerBgOpacity   = 70; // 0..100, step 10
+int32_t g_prismBgOpacity   = 70; // 0..100, step 10
+int32_t g_timerShadowOpacity = 0;  // 0..100, step 10
+int32_t g_prismShadowOpacity = 0;  // 0..100, step 10
 int32_t g_pauseSubSwipeX     = 0;
 int32_t g_pauseSubSwipePrevX = 0;
 
@@ -73,12 +80,9 @@ static double GetMarqueeElapsedSec(uint64_t key) {
     return 0.0;
 }
 
-int __cdecl DrawTextAutoFit(
-    const EdgeWString* ws, int x, int y, int scaleX, int scaleY,
-    int extraX, int extraY, int alignFlags, int maxWidth
-) {
-    if (ws == nullptr || ws->size == 0 || maxWidth <= 0 || scaleX <= 0 || scaleY <= 0) {
-        return Game_DrawText(ws, x, y, scaleX, scaleY, extraX, extraY, alignFlags);
+int __cdecl MeasureTextWidth(const EdgeWString* ws, int scaleX, int extraX) {
+    if (ws == nullptr || ws->size == 0 || scaleX <= 0) {
+        return 0;
     }
 
     const uint8_t* mapHead     = *reinterpret_cast<const uint8_t* const*>(0x5f9214);
@@ -88,7 +92,7 @@ int __cdecl DrawTextAutoFit(
     uint8_t glyphH             = *reinterpret_cast<const uint8_t*>(0x5f91e9);
     const wchar_t* s           = (ws->cap >= 8) ? ws->ptr : ws->buf;
     if (mapHead == nullptr || glyphWidths == nullptr || numGlyphs <= 0 || glyphH == 0 || s == nullptr) {
-        return Game_DrawText(ws, x, y, scaleX, scaleY, extraX, extraY, alignFlags);
+        return 0;
     }
 
     int origW = 0;
@@ -126,8 +130,24 @@ int __cdecl DrawTextAutoFit(
         }
     }
     if (curW > origW) origW = curW;
+    return origW;
+}
 
-    if (origW <= maxWidth) {
+int __cdecl DrawTextAutoFit(
+    const EdgeWString* ws, int x, int y, int scaleX, int scaleY,
+    int extraX, int extraY, int alignFlags, int maxWidth
+) {
+    if (ws == nullptr || ws->size == 0 || maxWidth <= 0 || scaleX <= 0 || scaleY <= 0) {
+        return Game_DrawText(ws, x, y, scaleX, scaleY, extraX, extraY, alignFlags);
+    }
+
+    const wchar_t* s = (ws->cap >= 8) ? ws->ptr : ws->buf;
+    if (s == nullptr) {
+        return Game_DrawText(ws, x, y, scaleX, scaleY, extraX, extraY, alignFlags);
+    }
+    uint32_t len = ws->size;
+    int origW = MeasureTextWidth(ws, scaleX, extraX);
+    if (origW <= 0 || origW <= maxWidth) {
         return Game_DrawText(ws, x, y, scaleX, scaleY, extraX, extraY, alignFlags);
     }
 
@@ -317,6 +337,10 @@ EDGE_STATIC_WSTR(g_wstrEdgeTimer,         "edge timer");
 EDGE_STATIC_WSTR(g_wstrEdgeTimer2D,       "2D");
 EDGE_STATIC_WSTR(g_wstrEdgeTimer2DScaled, "2D scaled");
 EDGE_STATIC_WSTR(g_wstrEdgeTimer3D,       "3D");
+EDGE_STATIC_WSTR(g_wstrPrismCounter,      "prism counter");
+EDGE_STATIC_WSTR(g_wstrFull,              "full");
+EDGE_STATIC_WSTR(g_wstrBgOpacity,         "background");
+EDGE_STATIC_WSTR(g_wstrShadowOpacity,     "drop shadow");
 
 static int NearestTimerSizeIdx(float v) {
     int best = 3; // 1.0x
@@ -353,6 +377,7 @@ enum OptCategory : int {
     OPT_CAT_AUDIO,
     OPT_CAT_UI,
     OPT_CAT_TIMER,
+    OPT_CAT_PRISM_COUNTER,
     OPT_CAT_GAMEPLAY
 };
 
@@ -363,6 +388,7 @@ enum OptItem : int {
     OPT_CAT_BTN_AUDIO,
     OPT_CAT_BTN_UI,
     OPT_CAT_BTN_TIMER,
+    OPT_CAT_BTN_PRISM_COUNTER,
     OPT_CAT_BTN_GAMEPLAY,
     OPT_FULLSCREEN,
     OPT_PRISM_VFX,
@@ -387,6 +413,13 @@ enum OptItem : int {
     OPT_TIMER,
     OPT_TIMER_SIZE,
     OPT_TIMER_POS,
+    OPT_TIMER_BG_OPACITY,
+    OPT_TIMER_SHADOW_OPACITY,
+    OPT_PRISM_COUNTER_TYPE,
+    OPT_PRISM_COUNTER_SIZE,
+    OPT_PRISM_COUNTER_POS,
+    OPT_PRISM_BG_OPACITY,
+    OPT_PRISM_SHADOW_OPACITY,
     OPT_RESET_SCORE,
     OPT_BACK
 };
@@ -438,7 +471,6 @@ struct OptUiState {
     bool    uiScalePending;
     float   uiScalePreview;
 
-    int     mainSelRow;
     int     lastMouseX;
     int     lastMouseY;
     bool    prevResetKeyDown;
@@ -818,6 +850,13 @@ static void SaveModSettings() {
     float timerSize = std::isfinite(g_timerSize) ? g_timerSizePresets[NearestTimerSizeIdx(g_timerSize)] : 1.0f;
     uint8_t timerPos = (g_timerPos <= 3u) ? g_timerPos : 1u;
     uint8_t edgeTimer = (g_edgeTimerMode <= 2u) ? g_edgeTimerMode : 0u;
+    uint8_t prismCounterType = (g_prismCounterType <= 2u) ? g_prismCounterType : 2u;
+    float prismCounterSize = std::isfinite(g_prismCounterSize) ? g_timerSizePresets[NearestTimerSizeIdx(g_prismCounterSize)] : 1.0f;
+    uint8_t prismCounterPos = (g_prismCounterPos <= 3u) ? g_prismCounterPos : 1u;
+    int32_t timerBgOpacity = std::clamp(g_timerBgOpacity, 0, 100);
+    int32_t prismBgOpacity = std::clamp(g_prismBgOpacity, 0, 100);
+    int32_t timerShadowOpacity = std::clamp(g_timerShadowOpacity, 0, 100);
+    int32_t prismShadowOpacity = std::clamp(g_prismShadowOpacity, 0, 100);
 
     std::string out;
     out.reserve(768);
@@ -862,6 +901,13 @@ static void SaveModSettings() {
     writeFloat("timer_size", timerSize);
     writeInt("timer_pos", timerPos);
     writeInt("edge_timer", edgeTimer);
+    writeInt("prism_counter_type", prismCounterType);
+    writeFloat("prism_counter_size", prismCounterSize);
+    writeInt("prism_counter_pos", prismCounterPos);
+    writeInt("timer_bg_opacity", timerBgOpacity);
+    writeInt("prism_bg_opacity", prismBgOpacity);
+    writeInt("timer_shadow_opacity", timerShadowOpacity);
+    writeInt("prism_shadow_opacity", prismShadowOpacity);
 
     wchar_t tmpPath[MAX_PATH + 16]{};
     if (std::swprintf(tmpPath, MAX_PATH + 16, L"%ls.tmp", iniPath) <= 0) return;
@@ -976,7 +1022,7 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
     bool inEdgeModSec = false;
     int32_t schemaVer = 0;
     uint32_t seenMask = 0;
-    constexpr uint32_t kAllModKeysMask = (1u << 23) - 1u;
+    constexpr uint32_t kAllModKeysMask = (1u << 30) - 1u;
 
     while (pos < data.size()) {
         size_t nl = data.find('\n', pos);
@@ -1140,6 +1186,44 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
             if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) {
                 g_edgeTimerMode = static_cast<uint8_t>(iv);
                 seenMask |= (1u << 21);
+            }
+        } else if (AsciiEqIc(kP, kE, "prism_counter_type")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) {
+                g_prismCounterType = static_cast<uint8_t>(iv);
+                seenMask |= (1u << 23);
+            }
+        } else if (AsciiEqIc(kP, kE, "prism_counter_size")) {
+            if (ParseAsciiDouble(vP, vE, &dv)) {
+                float fv = static_cast<float>(dv);
+                if (fv < 0.25f) fv = 0.25f;
+                if (fv > 2.0f) fv = 2.0f;
+                g_prismCounterSize = g_timerSizePresets[NearestTimerSizeIdx(fv)];
+                seenMask |= (1u << 29);
+            }
+        } else if (AsciiEqIc(kP, kE, "prism_counter_pos")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 3) {
+                g_prismCounterPos = static_cast<uint8_t>(iv);
+                seenMask |= (1u << 24);
+            }
+        } else if (AsciiEqIc(kP, kE, "timer_bg_opacity")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 100) {
+                g_timerBgOpacity = std::clamp(((iv + 5) / 10) * 10, 0, 100);
+                seenMask |= (1u << 25);
+            }
+        } else if (AsciiEqIc(kP, kE, "prism_bg_opacity")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 100) {
+                g_prismBgOpacity = std::clamp(((iv + 5) / 10) * 10, 0, 100);
+                seenMask |= (1u << 26);
+            }
+        } else if (AsciiEqIc(kP, kE, "timer_shadow_opacity")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 100) {
+                g_timerShadowOpacity = std::clamp(((iv + 5) / 10) * 10, 0, 100);
+                seenMask |= (1u << 27);
+            }
+        } else if (AsciiEqIc(kP, kE, "prism_shadow_opacity")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 100) {
+                g_prismShadowOpacity = std::clamp(((iv + 5) / 10) * 10, 0, 100);
+                seenMask |= (1u << 28);
             }
         }
     }
@@ -1327,6 +1411,13 @@ static void LoadModSettingsOnStartup_Impl(uint8_t* userSettings) {
     g_timerSize     = 1.0f;
     g_timerPos      = 1;
     g_edgeTimerMode = 0;
+    g_prismCounterType   = 2;
+    g_prismCounterSize   = 1.0f;
+    g_prismCounterPos    = 1;
+    g_timerBgOpacity     = 70;
+    g_prismBgOpacity     = 70;
+    g_timerShadowOpacity = 0;
+    g_prismShadowOpacity = 0;
 
     bool needsResave = true;
     bool fileExisted = LoadModSettingsFromIni(&needsResave);
@@ -1715,13 +1806,14 @@ static void MuteUnfocusedAction_Impl(int sfxId) {
 // ------------------------------------------------------------------
 static int GetOptTargetCategory(OptItem item) {
     switch (item) {
-    case OPT_CAT_BTN_DISPLAY:  return OPT_CAT_DISPLAY;
-    case OPT_CAT_BTN_GRAPHICS: return OPT_CAT_GRAPHICS;
-    case OPT_CAT_BTN_AUDIO:    return OPT_CAT_AUDIO;
-    case OPT_CAT_BTN_UI:       return OPT_CAT_UI;
-    case OPT_CAT_BTN_TIMER:    return OPT_CAT_TIMER;
-    case OPT_CAT_BTN_GAMEPLAY: return OPT_CAT_GAMEPLAY;
-    default:                   return -1;
+    case OPT_CAT_BTN_DISPLAY:       return OPT_CAT_DISPLAY;
+    case OPT_CAT_BTN_GRAPHICS:      return OPT_CAT_GRAPHICS;
+    case OPT_CAT_BTN_AUDIO:         return OPT_CAT_AUDIO;
+    case OPT_CAT_BTN_UI:            return OPT_CAT_UI;
+    case OPT_CAT_BTN_TIMER:         return OPT_CAT_TIMER;
+    case OPT_CAT_BTN_PRISM_COUNTER: return OPT_CAT_PRISM_COUNTER;
+    case OPT_CAT_BTN_GAMEPLAY:      return OPT_CAT_GAMEPLAY;
+    default:                        return -1;
     }
 }
 
@@ -1732,6 +1824,7 @@ static bool IsOptSubmenuItem(OptItem item) {
 static int GetOptParentCategory(int cat) {
     switch (cat) {
     case OPT_CAT_TIMER:
+    case OPT_CAT_PRISM_COUNTER:
         return OPT_CAT_UI;
     case OPT_CAT_DISPLAY:
     case OPT_CAT_GRAPHICS:
@@ -1747,19 +1840,20 @@ static int GetOptParentCategory(int cat) {
 
 static int GetOptCategoryDepth(int cat) {
     if (cat == OPT_CAT_ROOT)  return 0;
-    if (cat == OPT_CAT_TIMER) return 2;
+    if (cat == OPT_CAT_TIMER || cat == OPT_CAT_PRISM_COUNTER) return 2;
     return 1;
 }
 
 static int GetOptParentRowForCategory(int cat) {
     switch (cat) {
-    case OPT_CAT_DISPLAY:  return 0;
-    case OPT_CAT_GRAPHICS: return 1;
-    case OPT_CAT_AUDIO:    return 2;
-    case OPT_CAT_UI:       return 3;
-    case OPT_CAT_GAMEPLAY: return 4;
-    case OPT_CAT_TIMER:    return 2; // row 2 in OPT_CAT_UI (below time format & edge timer)
-    default:               return 0;
+    case OPT_CAT_DISPLAY:       return 0;
+    case OPT_CAT_GRAPHICS:      return 1;
+    case OPT_CAT_AUDIO:         return 2;
+    case OPT_CAT_UI:            return 3;
+    case OPT_CAT_GAMEPLAY:      return 4;
+    case OPT_CAT_TIMER:         return 2; // row 2 in OPT_CAT_UI (below time format & edge timer)
+    case OPT_CAT_PRISM_COUNTER: return 3; // row 3 in OPT_CAT_UI (below timer)
+    default:                    return 0;
     }
 }
 
@@ -1792,14 +1886,25 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         outItems[0] = OPT_TIME_FMT;
         outItems[1] = OPT_EDGE_TIMER;
         outItems[2] = OPT_CAT_BTN_TIMER;
-        outItems[3] = OPT_BACK;
-        return 4;
+        outItems[3] = OPT_CAT_BTN_PRISM_COUNTER;
+        outItems[4] = OPT_BACK;
+        return 5;
     case OPT_CAT_TIMER:
         outItems[0] = OPT_TIMER;
         outItems[1] = OPT_TIMER_SIZE;
-        outItems[2] = OPT_TIMER_POS;
-        outItems[3] = OPT_BACK;
-        return 4;
+        outItems[2] = OPT_TIMER_BG_OPACITY;
+        outItems[3] = OPT_TIMER_SHADOW_OPACITY;
+        outItems[4] = OPT_TIMER_POS;
+        outItems[5] = OPT_BACK;
+        return 6;
+    case OPT_CAT_PRISM_COUNTER:
+        outItems[0] = OPT_PRISM_COUNTER_TYPE;
+        outItems[1] = OPT_PRISM_COUNTER_SIZE;
+        outItems[2] = OPT_PRISM_BG_OPACITY;
+        outItems[3] = OPT_PRISM_SHADOW_OPACITY;
+        outItems[4] = OPT_PRISM_COUNTER_POS;
+        outItems[5] = OPT_BACK;
+        return 6;
     case OPT_CAT_GAMEPLAY: {
         int n = 0;
         outItems[n++] = OPT_UP_KEY;
@@ -1858,6 +1963,13 @@ static bool IsOptItemAdjustable(OptItem item) {
     case OPT_TIMER:
     case OPT_TIMER_SIZE:
     case OPT_TIMER_POS:
+    case OPT_TIMER_BG_OPACITY:
+    case OPT_TIMER_SHADOW_OPACITY:
+    case OPT_PRISM_COUNTER_TYPE:
+    case OPT_PRISM_COUNTER_SIZE:
+    case OPT_PRISM_COUNTER_POS:
+    case OPT_PRISM_BG_OPACITY:
+    case OPT_PRISM_SHADOW_OPACITY:
         return true;
     default:
         return false;
@@ -1867,12 +1979,13 @@ static bool IsOptItemAdjustable(OptItem item) {
 static const EdgeWString* GetOptHeaderWstr(int cat, EdgeWString* tmp, bool* outFreeHeap) {
     *outFreeHeap = false;
     switch (cat) {
-    case OPT_CAT_DISPLAY:  return &g_wstrCatDisplay;
-    case OPT_CAT_GRAPHICS: return &g_wstrCatGraphics;
-    case OPT_CAT_AUDIO:    return &g_wstrCatAudio;
-    case OPT_CAT_UI:       return &g_wstrCatUi;
-    case OPT_CAT_TIMER:    return &g_wstrTimer;
-    case OPT_CAT_GAMEPLAY: return &g_wstrCatGameplay;
+    case OPT_CAT_DISPLAY:       return &g_wstrCatDisplay;
+    case OPT_CAT_GRAPHICS:      return &g_wstrCatGraphics;
+    case OPT_CAT_AUDIO:         return &g_wstrCatAudio;
+    case OPT_CAT_UI:            return &g_wstrCatUi;
+    case OPT_CAT_TIMER:         return &g_wstrTimer;
+    case OPT_CAT_PRISM_COUNTER: return &g_wstrPrismCounter;
+    case OPT_CAT_GAMEPLAY:      return &g_wstrCatGameplay;
     case OPT_CAT_ROOT:
     default:
         Game_GetLocalizedWString(tmp, 8);
@@ -1884,12 +1997,13 @@ static const EdgeWString* GetOptHeaderWstr(int cat, EdgeWString* tmp, bool* outF
 static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* outFreeHeap) {
     *outFreeHeap = false;
     switch (item) {
-    case OPT_CAT_BTN_DISPLAY:  return &g_wstrCatDisplay;
-    case OPT_CAT_BTN_GRAPHICS: return &g_wstrCatGraphics;
-    case OPT_CAT_BTN_AUDIO:    return &g_wstrCatAudio;
-    case OPT_CAT_BTN_UI:       return &g_wstrCatUi;
-    case OPT_CAT_BTN_TIMER:    return &g_wstrTimer;
-    case OPT_CAT_BTN_GAMEPLAY: return &g_wstrCatGameplay;
+    case OPT_CAT_BTN_DISPLAY:       return &g_wstrCatDisplay;
+    case OPT_CAT_BTN_GRAPHICS:      return &g_wstrCatGraphics;
+    case OPT_CAT_BTN_AUDIO:         return &g_wstrCatAudio;
+    case OPT_CAT_BTN_UI:            return &g_wstrCatUi;
+    case OPT_CAT_BTN_TIMER:         return &g_wstrTimer;
+    case OPT_CAT_BTN_PRISM_COUNTER: return &g_wstrPrismCounter;
+    case OPT_CAT_BTN_GAMEPLAY:      return &g_wstrCatGameplay;
     case OPT_PRISM_VFX:        return &g_wstrPrismVfx;
     case OPT_CHROMA_AB:        return &g_wstrChromaAb;
     case OPT_AA:               return &g_wstrAntiAlias;
@@ -1909,6 +2023,13 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_TIMER:            return &g_wstrTimerType;
     case OPT_TIMER_SIZE:       return &g_wstrTimerSizeLbl;
     case OPT_TIMER_POS:        return &g_wstrTimerPosLbl;
+    case OPT_PRISM_COUNTER_TYPE: return &g_wstrTimerType;
+    case OPT_PRISM_COUNTER_SIZE: return &g_wstrTimerSizeLbl;
+    case OPT_PRISM_COUNTER_POS:  return &g_wstrTimerPosLbl;
+    case OPT_TIMER_BG_OPACITY:
+    case OPT_PRISM_BG_OPACITY:     return &g_wstrBgOpacity;
+    case OPT_TIMER_SHADOW_OPACITY:
+    case OPT_PRISM_SHADOW_OPACITY: return &g_wstrShadowOpacity;
     case OPT_RESET_SCORE:      return &g_wstrResetScore;
     case OPT_FULLSCREEN:
         Game_GetLocalizedWString(tmp, 0x34);
@@ -1955,6 +2076,8 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_EDGE_TIMER:
     case OPT_TIMER:
     case OPT_TIMER_POS:
+    case OPT_PRISM_COUNTER_TYPE:
+    case OPT_PRISM_COUNTER_POS:
         return CTRL_POPUP;
     case OPT_RESET_SCORE:
         return CTRL_CONFIRM_POPUP;
@@ -1963,6 +2086,11 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_SOUNDS:
     case OPT_MUSIC:
     case OPT_TIMER_SIZE:
+    case OPT_PRISM_COUNTER_SIZE:
+    case OPT_TIMER_BG_OPACITY:
+    case OPT_PRISM_BG_OPACITY:
+    case OPT_TIMER_SHADOW_OPACITY:
+    case OPT_PRISM_SHADOW_OPACITY:
         return CTRL_SLIDER;
     default:
         return CTRL_NAV;
@@ -2051,11 +2179,13 @@ static int GetPopupChoiceCount(OptItem item) {
     case OPT_DOLLY_ZOOM:   return 11;
     case OPT_COLOR_THEME:  return 3;
     case OPT_FINISH_EFFECT: return 3;
-    case OPT_EDGE_TIMER:    return 3;
-    case OPT_TIMER:        return 4;
-    case OPT_TIMER_POS:   return 4;
-    case OPT_RESET_SCORE: return 2;
-    default:              return 0;
+    case OPT_EDGE_TIMER:         return 3;
+    case OPT_TIMER:              return 4;
+    case OPT_TIMER_POS:          return 4;
+    case OPT_PRISM_COUNTER_TYPE: return 3;
+    case OPT_PRISM_COUNTER_POS:  return 4;
+    case OPT_RESET_SCORE:        return 2;
+    default:                     return 0;
     }
 }
 
@@ -2091,13 +2221,15 @@ static int GetPopupCurrentChoice(OptItem item) {
         }
         return best;
     }
-    case OPT_COLOR_THEME:   return (g_colorTheme <= 2u) ? static_cast<int>(g_colorTheme) : 0;
-    case OPT_FINISH_EFFECT: return (g_finishEffect <= 2u) ? static_cast<int>(g_finishEffect) : 0;
-    case OPT_EDGE_TIMER:    return (g_edgeTimerMode <= 2u) ? static_cast<int>(g_edgeTimerMode) : 0;
-    case OPT_TIMER:         return std::clamp<int>(g_timerMode, 0, 3);
-    case OPT_TIMER_POS:   return std::clamp<int>(g_timerPos, 0, 3);
-    case OPT_RESET_SCORE: return 0; // default highlight on "no"
-    default:              return 0;
+    case OPT_COLOR_THEME:        return (g_colorTheme <= 2u) ? static_cast<int>(g_colorTheme) : 0;
+    case OPT_FINISH_EFFECT:      return (g_finishEffect <= 2u) ? static_cast<int>(g_finishEffect) : 0;
+    case OPT_EDGE_TIMER:         return (g_edgeTimerMode <= 2u) ? static_cast<int>(g_edgeTimerMode) : 0;
+    case OPT_TIMER:              return std::clamp<int>(g_timerMode, 0, 3);
+    case OPT_TIMER_POS:          return std::clamp<int>(g_timerPos, 0, 3);
+    case OPT_PRISM_COUNTER_TYPE: return std::clamp<int>(g_prismCounterType, 0, 2);
+    case OPT_PRISM_COUNTER_POS:  return std::clamp<int>(g_prismCounterPos, 0, 3);
+    case OPT_RESET_SCORE:        return 0; // default highlight on "no"
+    default:                     return 0;
     }
 }
 
@@ -2113,15 +2245,17 @@ static int GetPopupDefaultChoice(OptItem item) {
         }
         return best;
     }
-    case OPT_CAM_DIST:      return 4; // 1
-    case OPT_DOLLY_ZOOM:    return 0; // pc (-1)
-    case OPT_COLOR_THEME:   return 0; // pc
-    case OPT_FINISH_EFFECT: return 0; // pc
-    case OPT_EDGE_TIMER:    return 0; // 2D
-    case OPT_TIMER:         return 3; // both
-    case OPT_TIMER_POS:   return 1; // TR
-    case OPT_RESET_SCORE: return 0; // no
-    default:              return 0;
+    case OPT_CAM_DIST:           return 4; // 1
+    case OPT_DOLLY_ZOOM:         return 0; // pc (-1)
+    case OPT_COLOR_THEME:        return 0; // pc
+    case OPT_FINISH_EFFECT:      return 0; // pc
+    case OPT_EDGE_TIMER:         return 0; // 2D
+    case OPT_TIMER:              return 3; // both
+    case OPT_TIMER_POS:          return 1; // TR
+    case OPT_PRISM_COUNTER_TYPE: return 2; // full
+    case OPT_PRISM_COUNTER_POS:  return 1; // TR
+    case OPT_RESET_SCORE:        return 0; // no
+    default:                     return 0;
     }
 }
 
@@ -2177,7 +2311,17 @@ static const EdgeWString* GetPopupChoiceWstr(OptItem item, int idx, EdgeWString*
         if (idx == 1) return &g_wstrTimerLevel;
         if (idx == 2) return &g_wstrTimerRank;
         return &g_wstrTimerBoth;
+    case OPT_PRISM_COUNTER_TYPE:
+        idx = std::clamp(idx, 0, 2);
+        if (idx == 0) {
+            Game_GetLocalizedWString(tmp, 0xc);
+            *outFreeHeap = true;
+            return tmp;
+        }
+        if (idx == 1) return &g_wstrShort;
+        return &g_wstrFull;
     case OPT_TIMER_POS:
+    case OPT_PRISM_COUNTER_POS:
         idx = std::clamp(idx, 0, 3);
         if (idx == 0) return &g_wstrTimerPosTL;
         if (idx == 1) return &g_wstrTimerPosTR;
@@ -2271,6 +2415,16 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
         if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
         SaveModSettings();
         break;
+    case OPT_PRISM_COUNTER_TYPE:
+        g_prismCounterType = static_cast<uint8_t>(idx);
+        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SaveModSettings();
+        break;
+    case OPT_PRISM_COUNTER_POS:
+        g_prismCounterPos = static_cast<uint8_t>(idx);
+        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SaveModSettings();
+        break;
     default:
         break;
     }
@@ -2312,6 +2466,16 @@ static float GetSliderNormalized(OptItem item) {
     }
     case OPT_TIMER_SIZE:
         return static_cast<float>(NearestTimerSizeIdx(g_timerSize)) / 7.0f;
+    case OPT_PRISM_COUNTER_SIZE:
+        return static_cast<float>(NearestTimerSizeIdx(g_prismCounterSize)) / 7.0f;
+    case OPT_TIMER_BG_OPACITY:
+        return static_cast<float>(std::clamp(g_timerBgOpacity, 0, 100)) / 100.0f;
+    case OPT_PRISM_BG_OPACITY:
+        return static_cast<float>(std::clamp(g_prismBgOpacity, 0, 100)) / 100.0f;
+    case OPT_TIMER_SHADOW_OPACITY:
+        return static_cast<float>(std::clamp(g_timerShadowOpacity, 0, 100)) / 100.0f;
+    case OPT_PRISM_SHADOW_OPACITY:
+        return static_cast<float>(std::clamp(g_prismShadowOpacity, 0, 100)) / 100.0f;
     default:
         return 0.0f;
     }
@@ -2319,12 +2483,17 @@ static float GetSliderNormalized(OptItem item) {
 
 static float GetSliderDefaultNormalized(OptItem item) {
     switch (item) {
-    case OPT_PRISM_VFX:  return 1.0f / 3.0f; // short
-    case OPT_UI_SCALE:   return 2.0f / 8.0f; // 1.0
-    case OPT_SOUNDS:     return 1.0f;        // 100
-    case OPT_MUSIC:      return 1.0f;        // 100
-    case OPT_TIMER_SIZE: return 3.0f / 7.0f; // 1.0
-    default:             return 0.0f;
+    case OPT_PRISM_VFX:            return 1.0f / 3.0f; // short
+    case OPT_UI_SCALE:             return 2.0f / 8.0f; // 1.0
+    case OPT_SOUNDS:               return 1.0f;        // 100
+    case OPT_MUSIC:                return 1.0f;        // 100
+    case OPT_TIMER_SIZE:           return 3.0f / 7.0f; // 1.0
+    case OPT_PRISM_COUNTER_SIZE:   return 3.0f / 7.0f; // 1.0
+    case OPT_TIMER_BG_OPACITY:     return 0.7f;        // 70
+    case OPT_PRISM_BG_OPACITY:     return 0.7f;        // 70
+    case OPT_TIMER_SHADOW_OPACITY: return 0.0f;        // 0
+    case OPT_PRISM_SHADOW_OPACITY: return 0.0f;        // 0
+    default:                       return 0.0f;
     }
 }
 
@@ -2401,11 +2570,32 @@ static void StepSlider(OptItem item, int dir, int sfxId) {
         }
         break;
     }
-    case OPT_TIMER_SIZE: {
-        int curIdx = NearestTimerSizeIdx(g_timerSize);
+    case OPT_TIMER_SIZE:
+    case OPT_PRISM_COUNTER_SIZE: {
+        float& valRef = (item == OPT_TIMER_SIZE) ? g_timerSize : g_prismCounterSize;
+        int curIdx = NearestTimerSizeIdx(valRef);
         int nextIdx = std::clamp(curIdx + dir, 0, 7);
         if (nextIdx != curIdx) {
-            g_timerSize = g_timerSizePresets[nextIdx];
+            valRef = g_timerSizePresets[nextIdx];
+            if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+            SaveModSettings();
+        }
+        break;
+    }
+    case OPT_TIMER_BG_OPACITY:
+    case OPT_PRISM_BG_OPACITY:
+    case OPT_TIMER_SHADOW_OPACITY:
+    case OPT_PRISM_SHADOW_OPACITY: {
+        int32_t& valRef = (item == OPT_TIMER_BG_OPACITY)     ? g_timerBgOpacity
+                        : (item == OPT_PRISM_BG_OPACITY)     ? g_prismBgOpacity
+                        : (item == OPT_TIMER_SHADOW_OPACITY) ? g_timerShadowOpacity
+                                                             : g_prismShadowOpacity;
+        int cur = std::clamp<int>(valRef, 0, 100);
+        int next = (dir > 0)
+            ? std::clamp((cur / 10) * 10 + 10, 0, 100)
+            : ((cur <= 0) ? 0 : std::clamp(((cur - 1) / 10) * 10, 0, 100));
+        if (next != cur) {
+            valRef = next;
             if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
             SaveModSettings();
         }
@@ -2446,11 +2636,31 @@ static void SetSliderFromNormalized(OptItem item, float norm, bool isDrag) {
         SetMusicVolume(v, 2, !isDrag);
         break;
     }
-    case OPT_TIMER_SIZE: {
+    case OPT_TIMER_SIZE:
+    case OPT_PRISM_COUNTER_SIZE: {
+        float& valRef = (item == OPT_TIMER_SIZE) ? g_timerSize : g_prismCounterSize;
         int idx = std::clamp(static_cast<int>(std::lround(norm * 7.0f)), 0, 7);
         float newVal = g_timerSizePresets[idx];
-        if (std::fabs(newVal - g_timerSize) > 0.001f) {
-            g_timerSize = newVal;
+        if (std::fabs(newVal - valRef) > 0.001f) {
+            valRef = newVal;
+            if (sm != nullptr) Game_PlaySfx(sm, 2);
+        }
+        if (!isDrag) {
+            SaveModSettings();
+        }
+        break;
+    }
+    case OPT_TIMER_BG_OPACITY:
+    case OPT_PRISM_BG_OPACITY:
+    case OPT_TIMER_SHADOW_OPACITY:
+    case OPT_PRISM_SHADOW_OPACITY: {
+        int32_t& valRef = (item == OPT_TIMER_BG_OPACITY)     ? g_timerBgOpacity
+                        : (item == OPT_PRISM_BG_OPACITY)     ? g_prismBgOpacity
+                        : (item == OPT_TIMER_SHADOW_OPACITY) ? g_timerShadowOpacity
+                                                             : g_prismShadowOpacity;
+        int v = std::clamp(static_cast<int>(std::lround((norm * 100.0f) / 10.0f)) * 10, 0, 100);
+        if (v != valRef) {
+            valRef = v;
             if (sm != nullptr) Game_PlaySfx(sm, 2);
         }
         if (!isDrag) {
@@ -2483,12 +2693,31 @@ static void ResetSliderToDefault(OptItem item, int sfxId) {
         SetMusicVolume(100, sfxId, true);
         break;
     case OPT_TIMER_SIZE:
-        if (std::fabs(g_timerSize - 1.0f) > 0.001f) {
-            g_timerSize = 1.0f;
+    case OPT_PRISM_COUNTER_SIZE: {
+        float& valRef = (item == OPT_TIMER_SIZE) ? g_timerSize : g_prismCounterSize;
+        if (std::fabs(valRef - 1.0f) > 0.001f) {
+            valRef = 1.0f;
             if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
             SaveModSettings();
         }
         break;
+    }
+    case OPT_TIMER_BG_OPACITY:
+    case OPT_PRISM_BG_OPACITY:
+    case OPT_TIMER_SHADOW_OPACITY:
+    case OPT_PRISM_SHADOW_OPACITY: {
+        int defVal = (item == OPT_TIMER_BG_OPACITY || item == OPT_PRISM_BG_OPACITY) ? 70 : 0;
+        int32_t& valRef = (item == OPT_TIMER_BG_OPACITY)     ? g_timerBgOpacity
+                        : (item == OPT_PRISM_BG_OPACITY)     ? g_prismBgOpacity
+                        : (item == OPT_TIMER_SHADOW_OPACITY) ? g_timerShadowOpacity
+                                                             : g_prismShadowOpacity;
+        if (valRef != defVal) {
+            valRef = defVal;
+            if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+            SaveModSettings();
+        }
+        break;
+    }
     default:
         break;
     }
@@ -2604,6 +2833,33 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
         if (g_timerPos == 1) return &g_wstrTimerPosTR;
         if (g_timerPos == 2) return &g_wstrTimerPosBL;
         return &g_wstrTimerPosBR;
+    case OPT_PRISM_COUNTER_TYPE:
+        if (g_prismCounterType == 0) {
+            Game_GetLocalizedWString(tmp, 0xc);
+            *outFreeHeap = true;
+            return tmp;
+        }
+        if (g_prismCounterType == 1) return &g_wstrShort;
+        return &g_wstrFull;
+    case OPT_PRISM_COUNTER_SIZE:
+        return GetTimerSizeValWstr(g_prismCounterSize);
+    case OPT_PRISM_COUNTER_POS:
+        if (g_prismCounterPos == 0) return &g_wstrTimerPosTL;
+        if (g_prismCounterPos == 1) return &g_wstrTimerPosTR;
+        if (g_prismCounterPos == 2) return &g_wstrTimerPosBL;
+        return &g_wstrTimerPosBR;
+    case OPT_TIMER_BG_OPACITY:
+        FmtInt0to100Wstr(std::clamp(g_timerBgOpacity, 0, 100), tmp);
+        return tmp;
+    case OPT_PRISM_BG_OPACITY:
+        FmtInt0to100Wstr(std::clamp(g_prismBgOpacity, 0, 100), tmp);
+        return tmp;
+    case OPT_TIMER_SHADOW_OPACITY:
+        FmtInt0to100Wstr(std::clamp(g_timerShadowOpacity, 0, 100), tmp);
+        return tmp;
+    case OPT_PRISM_SHADOW_OPACITY:
+        FmtInt0to100Wstr(std::clamp(g_prismShadowOpacity, 0, 100), tmp);
+        return tmp;
     default:
         return nullptr;
     }
@@ -3064,7 +3320,6 @@ static void __cdecl OptionsOnEnter_Impl(uint8_t* optionsMenu) {
     g_mainOptPendingReturnCat = -1;
     g_mainOptCat = OPT_CAT_ROOT;
     *reinterpret_cast<int*>(optionsMenu + 0x10) = 0;
-    g_optUi.mainSelRow = 0;
 }
 
 static void __declspec(naked) hk_optOnEnter() {
@@ -3104,13 +3359,11 @@ static int __cdecl OptionsHitTest_Impl(uint8_t* optionsMenu, const int* pt) {
     int valXScreen = basePt[0] + kMainOptValRelX;
     int rightBoundScreen = basePt[0] + menuW - 8;
     int& sel = *reinterpret_cast<int*>(optionsMenu + 0x10);
-    int res = HandleOptMouseHitTest(
+    return HandleOptMouseHitTest(
         false, g_mainOptCat, sel, pt,
         nRows, items, rowTops, rowH + 2 * slotPad,
         minX, maxX, valXScreen, rightBoundScreen
     );
-    g_optUi.mainSelRow = sel;
-    return res;
 }
 
 static void __declspec(naked) hk_optHitTest() {
@@ -3237,7 +3490,6 @@ static void __cdecl OptionsUpdate_Impl(uint8_t* optionsMenu, float dt) {
     int& enterFrames = *reinterpret_cast<int*>(optionsMenu + 4);
     int& exitTimer = *reinterpret_cast<int*>(optionsMenu + 8);
     int& selRow = *reinterpret_cast<int*>(optionsMenu + 0x10);
-    g_optUi.mainSelRow = selRow;
 
     if (enterFrames >= 8 && exitTimer < 0) {
         uint8_t* sm = GetScreenMgr();
@@ -3302,7 +3554,6 @@ static void __cdecl OptionsUpdate_Impl(uint8_t* optionsMenu, float dt) {
         reinterpret_cast<void(__cdecl*)(int*)>(0x496030)(basePt);
         int menuW = *reinterpret_cast<const int*>(0x589ddc);
         UpdateOptControlsPerFrame(false, g_mainOptCat, selRow, basePt[0] + kMainOptValRelX, basePt[0] + menuW - 8);
-        g_optUi.mainSelRow = selRow;
     }
 
     if (enterFrames < 8) {
@@ -3314,7 +3565,6 @@ static void __cdecl OptionsUpdate_Impl(uint8_t* optionsMenu, float dt) {
             ResetOptUiState(false);
             g_mainOptCat = exitDest - kOptCatEnterBase;
             selRow = 0;
-            g_optUi.mainSelRow = 0;
             enterFrames = 0;
             exitTimer = -1;
             exitDest = 0;
@@ -3333,7 +3583,6 @@ static void __cdecl OptionsUpdate_Impl(uint8_t* optionsMenu, float dt) {
             g_mainOptPendingReturnCat = -1;
             g_mainOptCat = targetCat;
             selRow = GetOptParentRowForCategory(prevCat);
-            g_optUi.mainSelRow = selRow;
             enterFrames = 0;
             exitTimer = -1;
             exitDest = 0;
@@ -3362,9 +3611,6 @@ static void __declspec(naked) hk_optUpdate() {
 static void __cdecl RenderMainOptionsBody_Impl(uint8_t* ebpFrame, uint32_t barOuterRgb) {
     uint8_t* menuObj = *reinterpret_cast<uint8_t**>(ebpFrame - 0x5c);
     int selRow = *reinterpret_cast<int*>(menuObj + 0x10);
-    if (selRow >= 0) {
-        g_optUi.mainSelRow = selRow;
-    }
     bool drawUnselected = (ebpFrame[-0x41] != 0);
     int xBase = *reinterpret_cast<int*>(ebpFrame - 0x4c);
     int yBase = *reinterpret_cast<int*>(ebpFrame - 0x48);
@@ -3626,6 +3872,16 @@ static void __declspec(naked) hk_pauseP1Down() {
     }
 }
 
+static int ComputePauseOptRowH(int yBase, int nRows) {
+    uint8_t* sm = GetScreenMgr();
+    int virtH = (sm != nullptr) ? *reinterpret_cast<int*>(sm + 0x28) : 720;
+    int topY = yBase + 0x75 + GetPauseContentShiftY();
+    if (nRows > 0 && (topY + nRows * kPauseOptRowH) > (virtH - 8)) {
+        return std::clamp((virtH - 8 - topY) / nRows, 24, kPauseOptRowH);
+    }
+    return kPauseOptRowH;
+}
+
 static int __cdecl PauseP1HitTest_Impl(uint8_t* pauseMenu, const int* pt) {
     if (*reinterpret_cast<int*>(pauseMenu + 4) < kPauseOpenReadyTick || *reinterpret_cast<int*>(pauseMenu + 8) >= 0) {
         return -1;
@@ -3643,14 +3899,11 @@ static int __cdecl PauseP1HitTest_Impl(uint8_t* pauseMenu, const int* pt) {
 
     OptItem items[kMaxOptRows];
     int nRows = GetOptItems(g_pauseOptCat, true, items);
-    int virtH = reinterpret_cast<int(__cdecl*)()>(0x496060)() + 0x11;
-    int rowH = kPauseOptRowH;
-    if (nRows > 0 && (basePt[1] + 0x75 + nRows * rowH) > (virtH - 8)) {
-        rowH = std::clamp((virtH - 8 - (basePt[1] + 0x75)) / nRows, 28, kPauseOptRowH);
-    }
+    int rowH = ComputePauseOptRowH(basePt[1], nRows);
+    const int pauseShiftY = GetPauseContentShiftY();
     int rowTops[kMaxOptRows];
     for (int row = 0; row < nRows; ++row) {
-        rowTops[row] = basePt[1] + 0x75 + row * rowH;
+        rowTops[row] = basePt[1] + 0x75 + pauseShiftY + row * rowH;
     }
 
     int minX = basePt[0] + 2;
@@ -3811,15 +4064,6 @@ static void __declspec(naked) hk_pausePage1Dispatch() {
         pop ebx
         ret
     }
-}
-
-static int ComputePauseOptRowH(int yBase, int nRows) {
-    uint8_t* sm = GetScreenMgr();
-    int virtH = (sm != nullptr) ? *reinterpret_cast<int*>(sm + 0x28) : 720;
-    if (nRows > 0 && (yBase + 0x75 + nRows * kPauseOptRowH) > (virtH - 8)) {
-        return std::clamp((virtH - 8 - (yBase + 0x75)) / nRows, 24, kPauseOptRowH);
-    }
-    return kPauseOptRowH;
 }
 
 static void DrawPauseOptionsPane(int cat, int selRow, int xBase, int yBase, int slideY, int frame, int xOffset, bool isActivePane) {
@@ -5030,16 +5274,6 @@ static void __declspec(naked) hk_lsTileInnerQuad() {
     }
 }
 
-static void __declspec(naked) hk_pausePrismGridX() {
-    __asm {
-        lea edx, [ecx + eax * 2 + 0x30]
-        push edx
-        mov BYTE PTR [ebp - 0x3d], 0xff
-        mov eax, 0x4ae3fa
-        jmp eax
-    }
-}
-
 static void __declspec(naked) hk_lsScrollTotalH() {
     __asm {
         add ecx, 5
@@ -5133,62 +5367,474 @@ static void __declspec(naked) hk_lsPrismDotY() {
     }
 }
 
+static int32_t __cdecl GetPauseHeaderCoverH() {
+    return 0x53 + GetPauseContentShiftY();
+}
+
+static void __declspec(naked) hk_pauseHdrResetSlideY() {
+    __asm {
+        call GetPauseHeaderCoverH
+        lea edx, [ebp - 0x40]
+        push edx
+        push eax
+        xor esi, esi
+        mov ecx, DWORD PTR [ebp - 0x44]
+        mov edx, DWORD PTR [ebp - 0x48]
+        mov eax, 0x4ae267
+        jmp eax
+    }
+}
+
+static void __declspec(naked) hk_pauseP0HitY() {
+    __asm {
+        push 0x4ace62
+        push eax
+        push ecx
+        push edx
+        call GetPauseContentShiftY
+        lea esi, [eax + 0x55]
+        pop edx
+        pop ecx
+        pop eax
+        ret
+    }
+}
+
+static void __declspec(naked) hk_pauseP2HitY() {
+    __asm {
+        push 0x4ac88a
+        push eax
+        push ecx
+        push edx
+        call GetPauseContentShiftY
+        pop edx
+        lea edx, [edx + eax + 0x81]
+        pop ecx
+        pop eax
+        ret
+    }
+}
+
+static void __cdecl RenderPauseHeaderTimerAndPrisms_Impl(uint8_t* ebpFrame) {
+    if (ebpFrame == nullptr) return;
+    const uint8_t* ws        = *reinterpret_cast<const uint8_t* const*>(ebpFrame - 0x64);
+    const uint8_t* level     = *reinterpret_cast<const uint8_t* const*>(ebpFrame - 0x5c);
+    const uint8_t* pauseMenu = *reinterpret_cast<const uint8_t* const*>(ebpFrame - 0x58);
+    int32_t xBase = *reinterpret_cast<const int32_t*>(ebpFrame - 0x48);
+    int32_t yBase = *reinterpret_cast<const int32_t*>(ebpFrame - 0x44);
+    int32_t frame = *reinterpret_cast<const int32_t*>(ebpFrame - 0x54);
+
+    EdgeWString pauseWs;
+    Game_GetLocalizedWString(&pauseWs, 0x15);
+    int pauseW = MeasureTextWidth(&pauseWs, 0x3000, 0);
+    pauseWs.free_if_heap();
+
+    int lvlW = 0;
+    if (pauseMenu != nullptr) {
+        const auto* lvlWs = reinterpret_cast<const EdgeWString*>(pauseMenu + 0x24);
+        lvlW = MeasureTextWidth(lvlWs, 0x8000, 0);
+    }
+
+    constexpr int kMaxPrismGridW = 10 * 12 + 9 * 6; // 174
+    int leftRight = xBase + 2 + (std::max)(pauseW, lvlW);
+    int rightEdge = xBase + 362;
+    int rightLeft = std::clamp(leftRight + 14, rightEdge - kMaxPrismGridW, rightEdge - 140);
+    int timerW = rightEdge - rightLeft;
+
+    if (ws == nullptr || level == nullptr) {
+        RenderPauseHeaderTimer(rightLeft, yBase + 18, timerW);
+        return;
+    }
+
+    int32_t collected = *reinterpret_cast<const int32_t*>(ws + 0x11c);
+    int32_t total = *reinterpret_cast<const int16_t*>(level + 0x7c);
+    if (total <= 0) {
+        RenderPauseHeaderTimer(rightLeft, yBase + 18, timerW);
+        return;
+    }
+
+    if (total <= 20) {
+        const bool twoRows = (total > 10);
+        RenderPauseHeaderTimer(rightLeft, yBase + (twoRows ? 6 : 8), timerW);
+
+        int cols = twoRows ? 10 : total;
+        int gridW = cols * 12 + (cols - 1) * 6;
+        int gridLeft = rightEdge - gridW;
+        int yTop = twoRows ? (yBase + 56) : (yBase + 60);
+        for (int i = 0; i < total; ++i) {
+            int r = i / 10;
+            int c = i % 10;
+            uint32_t rgb = (i < collected) ? GetSmoothMenuRainbow(frame - i) : 0x7d7d7du;
+            uint32_t rgba = RgbToRgbaOpaque(rgb);
+            Game_DrawQuad(gridLeft + c * 18, yTop + r * 16, 12, 12, &rgba);
+        }
+        return;
+    }
+
+    RenderPauseHeaderTimer(rightLeft, yBase + 8, timerW);
+
+    wchar_t wbuf[32];
+    EdgeWString wsTxt;
+    edgemod::FormatPrismRatioWstr(collected, total, wbuf, 32, &wsTxt);
+    int tw = MeasureTextWidth(&wsTxt, 0x2000, 1);
+
+    int centerY = yBase + 65;
+
+    uint32_t* pFontCol = reinterpret_cast<uint32_t*>(0x5f4268);
+    uint32_t savedCol = *pFontCol;
+
+    uint32_t rainbowRgb = GetSmoothMenuRainbow(frame);
+    uint32_t iconRgba = RgbToRgbaOpaque((collected > 0) ? rainbowRgb : 0x7d7d7du);
+    Game_DrawQuad(rightEdge - tw - 18, centerY - 6, 12, 12, &iconRgba);
+
+    *pFontCol = RgbToRgbaOpaque((collected >= total) ? rainbowRgb : 0xffffffu);
+    Game_DrawText(&wsTxt, rightEdge, centerY, 0x2000, 0x2000, 1, 0, 0x0a);
+
+    *pFontCol = savedCol;
+}
+
+static void __declspec(naked) hk_pausePrismGridOrCount() {
+    __asm {
+        mov DWORD PTR [ebp - 0x5c], eax
+        pushad
+        push ebp
+        call RenderPauseHeaderTimerAndPrisms_Impl
+        add esp, 4
+        popad
+        mov eax, 0x4ae412
+        jmp eax
+    }
+}
+
+static void __cdecl RenderLevelSelectPrismCount_Impl(uint8_t* ls, uint8_t* ebpFrame, int32_t fadePct) {
+    if (ls == nullptr || ebpFrame == nullptr) return;
+    const uint8_t* lvlInfo = *reinterpret_cast<const uint8_t* const*>(ls + 0x3c);
+    const uint8_t* saveInfo = *reinterpret_cast<const uint8_t* const*>(ls + 0x40);
+    if (lvlInfo == nullptr) return;
+    int32_t total = *reinterpret_cast<const int16_t*>(lvlInfo + 0x70);
+    int32_t collected = (saveInfo != nullptr) ? *reinterpret_cast<const int32_t*>(saveInfo + 0x8) : 0;
+
+    int32_t xBase = *reinterpret_cast<const int32_t*>(ebpFrame - 0x4c);
+    int32_t yBase = *reinterpret_cast<const int32_t*>(ebpFrame - 0x48);
+    int32_t frame = *reinterpret_cast<const int32_t*>(ebpFrame - 0x54);
+    int32_t cardSlideX = *reinterpret_cast<const int32_t*>(ebpFrame - 0x58);
+    if (cardSlideX < 253) return;
+
+    wchar_t wbuf[32];
+    EdgeWString wsTxt;
+    edgemod::FormatPrismRatioWstr(collected, total, wbuf, 32, &wsTxt);
+    int tw = MeasureTextWidth(&wsTxt, 0x2000, 1);
+
+    int rightX = xBase + 253;
+    int centerY = yBase + 0x79;
+
+    uint32_t* pFontCol = reinterpret_cast<uint32_t*>(0x5f4268);
+    uint32_t savedCol = *pFontCol;
+
+    uint32_t rainbowRgb = GetSmoothMenuRainbow(frame);
+    uint32_t rawIconRgb = (collected > 0) ? rainbowRgb : 0x7d7d7du;
+    uint32_t iconRgba = RgbToRgbaOpaque(Game_ColorLerp(0xffffffu, rawIconRgb, fadePct));
+    Game_DrawQuad(rightX - tw - 16, centerY - 5, 10, 10, &iconRgba);
+
+    uint32_t rawTextRgb = (collected >= total) ? rainbowRgb : 0x3b3b3bu;
+    *pFontCol = RgbToRgbaOpaque(Game_ColorLerp(0xffffffu, rawTextRgb, fadePct));
+    Game_DrawText(&wsTxt, rightX, centerY, 0x2000, 0x2000, 1, 0, 0x0a);
+
+    *pFontCol = savedCol;
+}
+
+static void __declspec(naked) hk_lsPrismGridOrCount() {
+    __asm {
+        mov eax, DWORD PTR [edi + 0x3c]
+        xor ecx, ecx
+        mov DWORD PTR [ebp - 0x50], ecx
+        movsx edx, WORD PTR [eax + 0x70]
+        test edx, edx
+        jle skip_ls_prisms
+        cmp edx, 20
+        jle vanilla_ls_prisms
+        pushad
+        push ebx
+        push ebp
+        push edi
+        call RenderLevelSelectPrismCount_Impl
+        add esp, 12
+        popad
+    skip_ls_prisms:
+        mov eax, 0x4b877a
+        jmp eax
+    vanilla_ls_prisms:
+        xor edx, edx
+        mov eax, 0x4b86b0
+        jmp eax
+    }
+}
+
+static void __cdecl RenderScoresPrismCount_Impl(
+    uint8_t* ebpFrame, int32_t flipScale, int32_t cardCenterRelX, int32_t cardTopRelY
+) {
+    if (ebpFrame == nullptr) return;
+    const uint8_t* entry = *reinterpret_cast<const uint8_t* const*>(ebpFrame - 0x54);
+    const uint8_t* scoresMenu = *reinterpret_cast<const uint8_t* const*>(ebpFrame - 0x5c);
+    if (entry == nullptr || scoresMenu == nullptr) return;
+
+    int32_t total = *reinterpret_cast<const int32_t*>(entry + 0x78);
+    int32_t collected = *reinterpret_cast<const int32_t*>(entry + 0x7c);
+    int32_t textFlipScale = *reinterpret_cast<const int32_t*>(ebpFrame - 0x70);
+    int32_t xBase = *reinterpret_cast<const int32_t*>(ebpFrame - 0x4c);
+    int32_t yBase = *reinterpret_cast<const int32_t*>(ebpFrame - 0x48);
+    int32_t cardIdx = *reinterpret_cast<const int32_t*>(ebpFrame - 0x50);
+    int32_t frame = *reinterpret_cast<const int32_t*>(ebpFrame - 0xa4);
+    int32_t exitTimer = *reinterpret_cast<const int32_t*>(scoresMenu + 0x8);
+
+    int centerX = cardCenterRelX + xBase;
+    int centerY = cardTopRelY + yBase + 0x3b;
+
+    uint32_t accentRgb = (exitTimer < 0)
+        ? GetSmoothMenuRainbow(frame - cardIdx)
+        : *reinterpret_cast<const uint32_t*>(ebpFrame - 0x84);
+    uint32_t neutralRgb = (exitTimer < 0)
+        ? *reinterpret_cast<const uint32_t*>(ebpFrame - 0xa8)
+        : ((static_cast<uint32_t>(ebpFrame[-0xa0]) << 16)
+           | (static_cast<uint32_t>(ebpFrame[-0x98]) << 8)
+           | static_cast<uint32_t>(ebpFrame[-0x78]));
+
+    int iconW = (12 * flipScale) >> 12;
+    if (iconW > 0) {
+        uint32_t iconRgba = RgbToRgbaOpaque((collected > 0) ? accentRgb : neutralRgb);
+        Game_DrawQuad(centerX - iconW / 2, centerY - 19, iconW, 12, &iconRgba);
+    }
+
+    if (textFlipScale > 0) {
+        wchar_t wbuf[32];
+        EdgeWString wsTxt;
+        edgemod::FormatPrismRatioWstr(collected, total, wbuf, 32, &wsTxt);
+        int baseScaleX = 0x2000;
+        int fullW = MeasureTextWidth(&wsTxt, 0x2000, 0);
+        if (fullW > 74) {
+            baseScaleX = (0x2000 * 74) / fullW;
+        }
+        int drawScaleX = (textFlipScale * baseScaleX) >> 12;
+        if (drawScaleX > 0) {
+            uint32_t* pFontCol = reinterpret_cast<uint32_t*>(0x5f4268);
+            uint32_t savedCol = *pFontCol;
+            uint32_t textRgb = (collected >= total)
+                ? 0xffffffu
+                : *reinterpret_cast<const uint32_t*>(ebpFrame - 0x110);
+            *pFontCol = RgbToRgbaOpaque(textRgb);
+            Game_DrawText(&wsTxt, centerX, centerY + 10, drawScaleX, 0x2000, 0, 0, 0x03);
+            *pFontCol = savedCol;
+        }
+    }
+}
+
+static void __declspec(naked) hk_scoresPrismGridOrCount() {
+    __asm {
+        mov DWORD PTR [ebp - 0x64], 0
+        mov DWORD PTR [ebp - 0x54], eax
+        mov ecx, DWORD PTR [eax + 0x78]
+        test ecx, ecx
+        jle skip_scores_prisms
+        cmp ecx, 20
+        jle vanilla_scores_prisms
+        pushad
+        push edi
+        push esi
+        push ebx
+        push ebp
+        call RenderScoresPrismCount_Impl
+        add esp, 16
+        popad
+    skip_scores_prisms:
+        mov eax, 0x4b0cc7
+        jmp eax
+    vanilla_scores_prisms:
+        mov eax, 0x4b09a5
+        jmp eax
+    }
+}
+
 } // namespace
 
 namespace edgemod {
 
-bool GetHudTimerMenuPreview(uint32_t state, uint8_t* outMode, float* outSize, uint8_t* outPos, bool* outForceSample) {
-    if (outMode == nullptr || outSize == nullptr || outPos == nullptr || outForceSample == nullptr) {
+int32_t __cdecl GetPauseContentShiftY() {
+    const uint8_t* level = GetLevel();
+    if (level == nullptr) return 0;
+    int16_t total = *reinterpret_cast<const int16_t*>(level + 0x7c);
+    return (total > 10 && total <= 20) ? 12 : 0;
+}
+
+void __cdecl FormatPrismRatioWstr(int32_t collected, int32_t total, wchar_t* wbuf, size_t cap, EdgeWString* out) {
+    if (collected < 0) collected = 0;
+    if (total < 0) total = 0;
+    int n = std::swprintf(wbuf, cap, L"%d/%d", collected, total);
+    if (n < 0) {
+        wbuf[0] = L'\0';
+        n = 0;
+    }
+    std::memset(out, 0, sizeof(*out));
+    out->ptr = wbuf;
+    out->size = static_cast<uint32_t>(n);
+    out->cap = static_cast<uint32_t>(cap - 1);
+}
+
+static uint8_t* GetMenuSubForState(uint32_t expectedState, uint32_t expectedVtbl) {
+    if (expectedState > 0x17u) return nullptr;
+    uint8_t* sm = GetScreenMgr();
+    if (sm == nullptr || *reinterpret_cast<const uint32_t*>(sm + 0x50) != expectedState) {
+        return nullptr;
+    }
+    uint8_t* ms = GetMenuScreen();
+    if (ms == nullptr) return nullptr;
+    uint8_t* sub = *reinterpret_cast<uint8_t**>(ms + expectedState * 8u + 0x44u);
+    if (sub == nullptr || *reinterpret_cast<const uint32_t*>(sub) != expectedVtbl) {
+        return nullptr;
+    }
+    return sub;
+}
+
+static OptItem GetActiveOptItemInCat(int cat, bool inPause, int selRow) {
+    if (g_optUi.popupOpen && g_optUi.popupInPause == inPause) {
+        return g_optUi.popupItem;
+    }
+    if (g_optUi.dragActive && g_optUi.dragInPause == inPause) {
+        return g_optUi.dragItem;
+    }
+    OptItem items[kMaxOptRows];
+    int nRows = GetOptItems(cat, inPause, items);
+    if (selRow >= 0 && selRow < nRows) {
+        return items[selRow];
+    }
+    return OPT_NONE;
+}
+
+bool GetHudTimerMenuPreview(
+    uint32_t state, uint8_t* outMode, float* outSize, uint8_t* outPos,
+    bool* outForceSample, bool* outDockBesideMenu
+) {
+    if (outMode == nullptr || outSize == nullptr || outPos == nullptr ||
+        outForceSample == nullptr || outDockBesideMenu == nullptr) {
         return false;
     }
     *outMode = g_timerMode;
     *outSize = g_timerSize;
     *outPos  = g_timerPos;
     *outForceSample = false;
+    *outDockBesideMenu = false;
 
-    if (state == 9u) {
-        uint8_t* sm = GetScreenMgr();
-        if (sm == nullptr) return false;
-        uint8_t* menuObj = *reinterpret_cast<uint8_t**>(sm + 0x4c);
-        if (menuObj == nullptr) return false;
-        int exitTimer = *reinterpret_cast<const int*>(menuObj + 8);
-        if (exitTimer >= 0) return false;
-        if (g_mainOptCat != OPT_CAT_TIMER) return false;
-
-        OptItem items[kMaxOptRows];
-        int nRows = GetOptItems(OPT_CAT_TIMER, false, items);
-        OptItem activeItem = OPT_NONE;
-        if (g_optUi.popupOpen && !g_optUi.popupInPause) {
-            activeItem = g_optUi.popupItem;
-        } else {
-            int selRow = g_optUi.mainSelRow;
-            if (selRow >= 0 && selRow < nRows) activeItem = items[selRow];
+    if (state == 9u || state == 0x12u) {
+        const bool inPause = (state == 0x12u);
+        uint8_t* sub = inPause
+            ? GetMenuSubForState(0x12u, 0x58cf44u)
+            : GetMenuSubForState(9u, 0x58d24cu);
+        if (sub == nullptr || *reinterpret_cast<const int*>(sub + 8) >= 0) {
+            return false;
         }
-        if (activeItem == OPT_TIMER || activeItem == OPT_TIMER_SIZE || activeItem == OPT_TIMER_POS) {
-            *outForceSample = true;
-            if (g_optUi.popupOpen && !g_optUi.popupInPause && g_optUi.popupItem == OPT_TIMER) {
+        if (inPause && *reinterpret_cast<const int*>(sub + 0x44) != 1) {
+            return false;
+        }
+
+        const int cat = inPause ? g_pauseOptCat : g_mainOptCat;
+        const int selRow = inPause
+            ? *reinterpret_cast<const int*>(sub + 0x50)
+            : *reinterpret_cast<const int*>(sub + 0x10);
+        OptItem activeItem = GetActiveOptItemInCat(cat, inPause, selRow);
+
+        if (cat == OPT_CAT_TIMER) {
+            *outForceSample = !inPause;
+            const bool isPos = (activeItem == OPT_TIMER_POS);
+            *outDockBesideMenu = !isPos;
+            if (g_optUi.popupOpen && g_optUi.popupInPause == inPause && g_optUi.popupItem == OPT_TIMER) {
                 *outMode = static_cast<uint8_t>(std::clamp(g_optUi.popupHighlight, 0, 3));
-            } else if (g_optUi.popupOpen && !g_optUi.popupInPause && g_optUi.popupItem == OPT_TIMER_POS) {
-                *outPos = static_cast<uint8_t>(std::clamp(g_optUi.popupHighlight, 0, 3));
+            } else if (g_optUi.popupOpen && g_optUi.popupInPause == inPause && g_optUi.popupItem == OPT_TIMER_POS) {
+                *outPos  = static_cast<uint8_t>(std::clamp(g_optUi.popupHighlight, 0, 3));
                 *outMode = (g_timerMode == 0) ? 3u : g_timerMode;
-            } else if (activeItem == OPT_TIMER_SIZE || activeItem == OPT_TIMER_POS) {
+            } else if (activeItem == OPT_TIMER_SIZE || activeItem == OPT_TIMER_POS ||
+                       activeItem == OPT_TIMER_BG_OPACITY || activeItem == OPT_TIMER_SHADOW_OPACITY) {
                 *outMode = (g_timerMode == 0) ? 3u : g_timerMode;
             } else {
                 *outMode = g_timerMode;
             }
             return (*outMode != 0);
         }
+
+        // Companion corner preview when positioning Prism Counter
+        if (cat == OPT_CAT_PRISM_COUNTER && activeItem == OPT_PRISM_COUNTER_POS) {
+            *outForceSample = !inPause;
+            *outDockBesideMenu = false;
+            *outMode = g_timerMode;
+            return (*outMode != 0);
+        }
+
         return false;
     }
 
-    if (state == 0x12u && g_optUi.popupOpen && g_optUi.popupInPause) {
-        if (g_optUi.popupItem == OPT_TIMER) {
-            *outMode = static_cast<uint8_t>(std::clamp(g_optUi.popupHighlight, 0, 3));
-        } else if (g_optUi.popupItem == OPT_TIMER_POS) {
-            *outPos = static_cast<uint8_t>(std::clamp(g_optUi.popupHighlight, 0, 3));
-        }
-    }
     return (*outMode != 0);
+}
+
+bool GetHudPrismCounterMenuPreview(
+    uint32_t state, uint8_t* outType, float* outSize, uint8_t* outPos,
+    bool* outForceSample, bool* outDockBesideMenu
+) {
+    if (outType == nullptr || outSize == nullptr || outPos == nullptr ||
+        outForceSample == nullptr || outDockBesideMenu == nullptr) {
+        return false;
+    }
+    *outType = g_prismCounterType;
+    *outSize = g_prismCounterSize;
+    *outPos  = g_prismCounterPos;
+    *outForceSample = false;
+    *outDockBesideMenu = false;
+
+    if (state == 9u || state == 0x12u) {
+        const bool inPause = (state == 0x12u);
+        uint8_t* sub = inPause
+            ? GetMenuSubForState(0x12u, 0x58cf44u)
+            : GetMenuSubForState(9u, 0x58d24cu);
+        if (sub == nullptr || *reinterpret_cast<const int*>(sub + 8) >= 0) {
+            return false;
+        }
+        if (inPause && *reinterpret_cast<const int*>(sub + 0x44) != 1) {
+            return false;
+        }
+
+        const int cat = inPause ? g_pauseOptCat : g_mainOptCat;
+        const int selRow = inPause
+            ? *reinterpret_cast<const int*>(sub + 0x50)
+            : *reinterpret_cast<const int*>(sub + 0x10);
+        OptItem activeItem = GetActiveOptItemInCat(cat, inPause, selRow);
+
+        if (cat == OPT_CAT_PRISM_COUNTER) {
+            *outForceSample = !inPause;
+            const bool isPos = (activeItem == OPT_PRISM_COUNTER_POS);
+            *outDockBesideMenu = !isPos;
+            if (g_optUi.popupOpen && g_optUi.popupInPause == inPause && g_optUi.popupItem == OPT_PRISM_COUNTER_TYPE) {
+                *outType = static_cast<uint8_t>(std::clamp(g_optUi.popupHighlight, 0, 2));
+            } else if (g_optUi.popupOpen && g_optUi.popupInPause == inPause && g_optUi.popupItem == OPT_PRISM_COUNTER_POS) {
+                *outPos  = static_cast<uint8_t>(std::clamp(g_optUi.popupHighlight, 0, 3));
+                *outType = (g_prismCounterType == 0) ? 2u : g_prismCounterType;
+            } else if (activeItem == OPT_PRISM_COUNTER_SIZE || activeItem == OPT_PRISM_COUNTER_POS ||
+                       activeItem == OPT_PRISM_BG_OPACITY || activeItem == OPT_PRISM_SHADOW_OPACITY) {
+                *outType = (g_prismCounterType == 0) ? 2u : g_prismCounterType;
+            } else {
+                *outType = g_prismCounterType;
+            }
+            return (*outType != 0);
+        }
+
+        // Companion corner preview when positioning Timer
+        if (cat == OPT_CAT_TIMER && activeItem == OPT_TIMER_POS) {
+            *outForceSample = !inPause;
+            *outDockBesideMenu = false;
+            *outType = g_prismCounterType;
+            return (*outType != 0);
+        }
+
+        return false;
+    }
+
+    return (*outType != 0);
 }
 
 int __cdecl GetActiveOptionsCategory(bool inPause) {
@@ -5248,8 +5894,9 @@ int __cdecl HitTestOptionsSlot(bool inPause, int mx, int my) {
     int maxX = basePt[0] + kMenuWideW - 2;
     if (mx < minX || mx >= maxX) return -1;
     int rowH = ComputePauseOptRowH(basePt[1], nRows);
+    const int pauseShiftY = GetPauseContentShiftY();
     for (int row = 0; row < nRows; ++row) {
-        int top = basePt[1] + 0x75 + row * rowH;
+        int top = basePt[1] + 0x75 + pauseShiftY + row * rowH;
         if (my >= top && my < top + rowH) return row;
     }
     return -1;
@@ -5709,8 +6356,33 @@ void RegisterMenuCameraOptions() {
             RegBytes(0x4ac87e, exHitY, rpHitY, 3);
             patchAddReg(0x4ac8cc, 0xc1, 0xb8, 0x00, 0xd0, 0x00);
 
-            static const uint8_t exPgx[8] = {0x8d, 0x14, 0x41, 0x52, 0xc6, 0x45, 0xc3, 0xff};
-            RegRelJmp(0x4ae3f2, exPgx, 8, 5, &hk_pausePrismGridX, 0x90, 0x4ae3fa);
+            static const uint8_t exPausePrism[13] = {
+                0x89, 0x45, 0xa4, 0x66, 0x3b, 0x48, 0x7c, 0x0f, 0x8d, 0x9e, 0x00, 0x00, 0x00
+            };
+            RegRelJmp(0x4ae367, exPausePrism, 13, 5, &hk_pausePrismGridOrCount, 0x90, 0x4ae374);
+
+            static const uint8_t exPauseHdrStart[12] = {
+                0x8b, 0x4d, 0xbc, 0x8b, 0x55, 0xb8, 0x8d, 0x45, 0xc0, 0x50, 0x6a, 0x37
+            };
+            RegRelJmp(0x4ae25b, exPauseHdrStart, 12, 5, &hk_pauseHdrResetSlideY, 0x90, 0x4ae267);
+
+            static const uint8_t exP0HitY[5] = {0xbe, 0x55, 0x00, 0x00, 0x00};
+            RegRelJmp(0x4ace5d, exP0HitY, 5, 5, &hk_pauseP0HitY, 0x90, 0x4ace62);
+
+            static const uint8_t exP2HitY[6] = {0x81, 0xc2, 0x81, 0x00, 0x00, 0x00};
+            RegRelJmp(0x4ac884, exP2HitY, 6, 5, &hk_pauseP2HitY, 0x90, 0x4ac88a);
+
+            static const uint8_t exLsPrism[20] = {
+                0x8b, 0x47, 0x3c, 0x33, 0xc9, 0x33, 0xd2, 0x89, 0x4d, 0xb0,
+                0x66, 0x3b, 0x50, 0x70, 0x0f, 0x8d, 0xca, 0x00, 0x00, 0x00
+            };
+            RegRelJmp(0x4b869c, exLsPrism, 20, 5, &hk_lsPrismGridOrCount, 0x90, 0x4b86b0);
+
+            static const uint8_t exScoresPrism[20] = {
+                0x83, 0x78, 0x78, 0x00, 0xc7, 0x45, 0x9c, 0x00, 0x00, 0x00,
+                0x00, 0x89, 0x45, 0xac, 0x0f, 0x8e, 0x22, 0x03, 0x00, 0x00
+            };
+            RegRelJmp(0x4b0991, exScoresPrism, 20, 5, &hk_scoresPrismGridOrCount, 0x90, 0x4b09a5);
 
             // Pause P0 parent slots match Options tab slot size (0x26 stride, 0x25 fill, +0x6e text Y)
             {

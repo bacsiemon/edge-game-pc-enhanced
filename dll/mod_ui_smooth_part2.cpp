@@ -1501,13 +1501,215 @@ static void FormatTicksWstr(double ticks, wchar_t* wbuf, size_t cap, EdgeWString
     out->cap = static_cast<uint32_t>(cap - 1);
 }
 
-static void __cdecl RenderHudTimerOverlay(uint8_t* renderer, uint8_t* ws, uint32_t expectedState) {
+struct HudCornerRect {
+    bool    drawn;
+    uint8_t pos;
+    float   leftX;
+    float   rightX;
+    float   topY;
+    float   bottomY;
+};
+
+struct MinimapHudBox {
+    bool  active;
+    float vis;
+    float x;
+    float y;
+    float w;
+    float h;
+};
+
+static MinimapHudBox ComputeMinimapHudBox(uint8_t* sm, uint8_t* ws, int32_t virtW, int32_t virtH) {
+    MinimapHudBox box{false, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    if (sm == nullptr || ws == nullptr || ws[0x2120] == 0) return box;
+
+    int32_t curAlpha = *reinterpret_cast<const int32_t*>(ws + 0x2108);
+    float effAlpha = static_cast<float>(curAlpha);
+    if (g_wsPtr == ws && g_wsTgt2108 == curAlpha && g_wsTgt2108 != g_wsPrev2108) {
+        effAlpha = static_cast<float>(g_wsPrev2108)
+                 + static_cast<float>(g_wsTgt2108 - g_wsPrev2108) * g_uiAlpha;
+    }
+    if (effAlpha <= 0.5f) return box;
+
+    int32_t mmMaxAlpha = *reinterpret_cast<const int32_t*>(ws + 0x210c);
+    if (mmMaxAlpha <= 0 || mmMaxAlpha > 255) mmMaxAlpha = 255;
+    float vis = std::clamp(effAlpha / static_cast<float>(mmMaxAlpha), 0.0f, 1.0f);
+    if (vis <= 0.0f) return box;
+
+    int32_t mmW = static_cast<int32_t>(*reinterpret_cast<const float*>(ws + 0x2114));
+    int32_t mmH = static_cast<int32_t>(*reinterpret_cast<const float*>(ws + 0x2118));
+    if (mmW <= 0 || mmH <= 0) return box;
+
+    double camAngle = reinterpret_cast<double(__cdecl*)()>(0x478950)();
+    double diffDeg = *reinterpret_cast<const double*>(0x586ae0) - camAngle;
+    int rot = static_cast<int>(diffDeg) / 90;
+    rot &= 0x80000003;
+    if (rot < 0) rot = ((rot - 1) | ~3) + 1;
+    if (rot == 1 || rot == 3) {
+        std::swap(mmW, mmH);
+    }
+
+    int32_t alignX = *reinterpret_cast<const int32_t*>(ws + 0x1a8);
+    int32_t mmX = 0;
+    if (alignX == 1) mmX = (virtW - mmW) / 2;
+    else if (alignX == 2) mmX = virtW - mmW;
+    mmX += *reinterpret_cast<const int32_t*>(ws + 0x1a0);
+    mmX = std::clamp(mmX, 0, (std::max)(0, virtW - mmW));
+
+    int32_t alignY = *reinterpret_cast<const int32_t*>(ws + 0x1ac);
+    int32_t mmY = 0;
+    if (alignY == 1) mmY = (virtH - mmH) / 2;
+    else if (alignY == 2) mmY = virtH - mmH;
+    mmY += *reinterpret_cast<const int32_t*>(ws + 0x1a4);
+    mmY = std::clamp(mmY, 0, (std::max)(0, virtH - mmH));
+
+    box.active = true;
+    box.vis = vis;
+    box.x = static_cast<float>(mmX);
+    box.y = static_cast<float>(mmY);
+    box.w = static_cast<float>(mmW);
+    box.h = static_cast<float>(mmH);
+    return box;
+}
+
+static void AvoidMinimapOverlap(
+    const MinimapHudBox& mm, uint8_t pos, float w, float h,
+    int32_t virtW, int32_t virtH, float* ioX, float* ioY
+) {
+    if (!mm.active || mm.vis <= 0.0f || ioX == nullptr || ioY == nullptr) return;
+    constexpr float kGap = 4.0f;
+    constexpr float kMargin = 0.0f;
+
+    float x = *ioX;
+    float y = *ioY;
+    bool overlap = (x < mm.x + mm.w + kGap) && (x + w > mm.x - kGap)
+                && (y < mm.y + mm.h + kGap) && (y + h > mm.y - kGap);
+    if (!overlap) return;
+
+    float targetX = x;
+    float targetY = y;
+    float candY = (pos == 0 || pos == 1) ? (mm.y + mm.h + kGap) : (mm.y - kGap - h);
+    float candX = (pos == 0 || pos == 2) ? (mm.x + mm.w + kGap) : (mm.x - kGap - w);
+
+    if (candY >= kMargin && candY + h <= static_cast<float>(virtH) - kMargin) {
+        targetY = candY;
+    } else if (candX >= kMargin && candX + w <= static_cast<float>(virtW) - kMargin) {
+        targetX = candX;
+    } else {
+        targetY = std::clamp(candY, 0.0f, (std::max)(0.0f, static_cast<float>(virtH) - h));
+    }
+
+    float ease = 1.0f - (1.0f - mm.vis) * (1.0f - mm.vis);
+    *ioX = x + (targetX - x) * ease;
+    *ioY = y + (targetY - y) * ease;
+}
+
+static void DrawHudPanelBgAndBorder(
+    int panelW, int panelH, int32_t opacityPct, uint8_t fgAlpha,
+    bool drawTop, bool drawBottom, bool drawLeft, bool drawRight
+) {
+    double bgScale = static_cast<double>(std::clamp(opacityPct, 0, 100)) / 100.0;
+    double fgScale = static_cast<double>(fgAlpha) / 255.0;
+    uint8_t bgAlpha  = static_cast<uint8_t>(std::lround(255.0 * bgScale * fgScale));
+    uint8_t brdAlpha = static_cast<uint8_t>(std::lround(64.0 * bgScale * fgScale));
+    if (bgAlpha > 0) {
+        uint32_t bgRgba = MakeRgba(0x21, 0x21, 0x21, bgAlpha);
+        Game_DrawQuad(0, 0, panelW, panelH, &bgRgba);
+    }
+    if (brdAlpha > 0) {
+        uint32_t borderRgba = MakeRgba(255, 255, 255, brdAlpha);
+        if (drawTop)    Game_DrawQuad(0, 0, panelW, 1, &borderRgba);
+        if (drawBottom) Game_DrawQuad(0, panelH - 1, panelW, 1, &borderRgba);
+        int sideY = drawTop ? 1 : 0;
+        int sideH = panelH - (drawTop ? 1 : 0) - (drawBottom ? 1 : 0);
+        if (sideH > 0) {
+            if (drawLeft)  Game_DrawQuad(0, sideY, 1, sideH, &borderRgba);
+            if (drawRight) Game_DrawQuad(panelW - 1, sideY, 1, sideH, &borderRgba);
+        }
+    }
+}
+
+static uint8_t CalcHudShadowAlpha(int32_t shadowOpacityPct, uint8_t fgAlpha) {
+    double shScale = static_cast<double>(std::clamp(shadowOpacityPct, 0, 100)) / 100.0;
+    double fgScale = static_cast<double>(fgAlpha) / 255.0;
+    return static_cast<uint8_t>(std::lround(255.0 * shScale * fgScale));
+}
+
+static void ComputeTimerStats(
+    const uint8_t* level, double effEl, double effEd,
+    int* outRank, double* outRemTicks, double* outBarFrac, uint32_t* outRankRgb
+) {
+    double effNet = effEl - effEd;
+    if (effNet < 0.0) effNet = 0.0;
+
+    uint32_t th[5];
+    for (int i = 0; i < 5; ++i) {
+        th[i] = *reinterpret_cast<const uint32_t*>(level + 0x80 + i * 4);
+    }
+
+    int rank = 0;
+    double remTicks = 0.0;
+    double barFrac = 0.0;
+    for (int i = 0; i < 5; ++i) {
+        double hi = static_cast<double>(th[i]);
+        if (effNet <= hi) {
+            rank = 5 - i;
+            remTicks = hi - effNet;
+            double lo = (i == 0) ? 0.0 : static_cast<double>(th[i - 1]);
+            double span = hi - lo;
+            if (span <= 0.0) span = hi;
+            barFrac = (span > 0.0) ? std::clamp(remTicks / span, 0.0, 1.0) : 0.0;
+            break;
+        }
+    }
+
+    uint32_t rankRgb = 0xff5555u;
+    if (rank >= 4) {
+        rankRgb = CalcSmoothRainbow(static_cast<float>(GetHudTimerClockSec() * 22.0), 1.0f);
+    } else if (rank == 3) {
+        rankRgb = 0x55ff77u;
+    } else if (rank == 2) {
+        rankRgb = 0x55ccffu;
+    } else if (rank == 1) {
+        rankRgb = 0xffaa33u;
+    }
+
+    *outRank = rank;
+    *outRemTicks = remTicks;
+    *outBarFrac = barFrac;
+    *outRankRgb = rankRgb;
+}
+
+static void ComputeMenuPreviewBesidePos(
+    uint32_t expectedState, float panelW, float panelH, int32_t virtW, int32_t virtH,
+    float* outX, float* outY
+) {
+    int basePt[2] = {0, 0};
+    reinterpret_cast<void(__cdecl*)(int*)>(0x496030)(basePt);
+    int menuW = *reinterpret_cast<const int*>(0x589ddc);
+    float menuRight = static_cast<float>(basePt[0] + menuW + 6);
+    float maxX = (std::max)(0.0f, static_cast<float>(virtW) - panelW);
+    float maxY = (std::max)(0.0f, static_cast<float>(virtH) - panelH);
+    *outX = std::clamp(menuRight + 20.0f, 0.0f, maxX);
+    float targetY = (expectedState == 0x12u)
+        ? static_cast<float>(4 + 0x75 + GetPauseContentShiftY())
+        : 90.0f;
+    *outY = std::clamp(targetY, 0.0f, maxY);
+}
+
+static void __cdecl RenderHudTimerOverlay(
+    uint8_t* renderer, uint8_t* ws, uint32_t expectedState, HudCornerRect* outRect = nullptr
+) {
+    if (outRect != nullptr) {
+        *outRect = {false, 0, 0.0f, 0.0f, 0.0f, 0.0f};
+    }
     uint8_t mode = g_timerMode;
     float size = g_timerSize;
     uint8_t pos = g_timerPos;
     bool forceSample = false;
-    bool hasMenuPreview = GetHudTimerMenuPreview(expectedState, &mode, &size, &pos, &forceSample);
-    if (expectedState == 9u && !hasMenuPreview) return;
+    bool dockBesideMenu = false;
+    bool hasMenuPreview = GetHudTimerMenuPreview(expectedState, &mode, &size, &pos, &forceSample, &dockBesideMenu);
+    if ((expectedState == 9u || expectedState == 0x12u) && !hasMenuPreview) return;
     if (mode == 0 || renderer == nullptr) return;
 
     uint8_t* sm = GetScreenMgr();
@@ -1524,7 +1726,7 @@ static void __cdecl RenderHudTimerOverlay(uint8_t* renderer, uint8_t* ws, uint32
     double remTicks = 185.0;
     double barFrac = 0.62;
     int rank = 5;
-    int32_t mmMaxAlpha = 255;
+    uint32_t rankRgb = CalcSmoothRainbow(static_cast<float>(GetHudTimerClockSec() * 22.0), 1.0f);
 
     if (!forceSample) {
         uint8_t* level = GetLevel();
@@ -1546,45 +1748,10 @@ static void __cdecl RenderHudTimerOverlay(uint8_t* renderer, uint8_t* ws, uint32
                 effEd = static_cast<double>(g_wsPrevTotalEdge) + static_cast<double>(dEd) * static_cast<double>(g_uiAlpha);
             }
         }
-        double effNet = effEl - effEd;
-        if (effNet < 0.0) effNet = 0.0;
-
-        uint32_t th[5];
-        for (int i = 0; i < 5; ++i) {
-            th[i] = *reinterpret_cast<const uint32_t*>(level + 0x80 + i * 4);
-        }
-
-        rank = 0;
-        remTicks = 0.0;
-        barFrac = 0.0;
-        for (int i = 0; i < 5; ++i) {
-            double hi = static_cast<double>(th[i]);
-            if (effNet <= hi) {
-                rank = 5 - i;
-                remTicks = hi - effNet;
-                double lo = (i == 0) ? 0.0 : static_cast<double>(th[i - 1]);
-                double span = hi - lo;
-                if (span <= 0.0) span = hi;
-                barFrac = (span > 0.0) ? std::clamp(remTicks / span, 0.0, 1.0) : 0.0;
-                break;
-            }
-        }
-
-        mmMaxAlpha = *reinterpret_cast<const int32_t*>(ws + 0x210c);
-        if (mmMaxAlpha <= 0 || mmMaxAlpha > 255) mmMaxAlpha = 255;
+        ComputeTimerStats(level, effEl, effEd, &rank, &remTicks, &barFrac, &rankRgb);
     }
 
-    uint32_t rankRgb = 0xff5555u;
-    if (rank >= 4) {
-        rankRgb = CalcSmoothRainbow(static_cast<float>(GetHudTimerClockSec() * 22.0), 1.0f);
-    } else if (rank == 3) {
-        rankRgb = 0x55ff77u;
-    } else if (rank == 2) {
-        rankRgb = 0x55ccffu;
-    } else if (rank == 1) {
-        rankRgb = 0xffaa33u;
-    }
-    uint8_t fgAlpha = (forceSample && g_timerMode == 0 && expectedState == 9u) ? 140u : 255u;
+    uint8_t fgAlpha = ((expectedState == 9u || expectedState == 0x12u) && !dockBesideMenu) ? 140u : 255u;
     uint32_t rankRgba = RgbToRgba(rankRgb, fgAlpha);
 
     constexpr int kPanelW = 200;
@@ -1605,22 +1772,38 @@ static void __cdecl RenderHudTimerOverlay(uint8_t* renderer, uint8_t* ws, uint32
     int panelH = curY;
 
     float s = std::clamp(size, 0.25f, 2.0f);
-    constexpr float kMargin = 14.0f;
+    constexpr float kMargin = 0.0f;
     float scaledW = static_cast<float>(kPanelW) * s;
     float scaledH = static_cast<float>(panelH) * s;
 
     float ox = kMargin;
     float oy = kMargin;
-    if (pos == 1 || pos == 3) {
-        ox = static_cast<float>(virtW) - kMargin - scaledW;
-    }
-    if (pos == 2 || pos == 3) {
-        oy = static_cast<float>(virtH) - kMargin - scaledH;
+    if (dockBesideMenu) {
+        ComputeMenuPreviewBesidePos(expectedState, scaledW, scaledH, virtW, virtH, &ox, &oy);
+    } else {
+        if (pos == 1 || pos == 3) {
+            ox = static_cast<float>(virtW) - kMargin - scaledW;
+        }
+        if (pos == 2 || pos == 3) {
+            oy = static_cast<float>(virtH) - kMargin - scaledH;
+        }
+        if (!forceSample) {
+            MinimapHudBox mm = ComputeMinimapHudBox(sm, ws, virtW, virtH);
+            AvoidMinimapOverlap(mm, pos, scaledW, scaledH, virtW, virtH, &ox, &oy);
+        }
     }
     float maxX = (std::max)(0.0f, static_cast<float>(virtW) - scaledW);
     float maxY = (std::max)(0.0f, static_cast<float>(virtH) - scaledH);
     ox = std::clamp(ox, 0.0f, maxX);
     oy = std::clamp(oy, 0.0f, maxY);
+    if (outRect != nullptr && !dockBesideMenu) {
+        *outRect = {true, pos, ox, ox + scaledW, oy, oy + scaledH};
+    }
+
+    bool drawLeft   = (ox > 0.5f);
+    bool drawRight  = (ox + scaledW < static_cast<float>(virtW) - 0.5f);
+    bool drawTop    = (oy > 0.5f);
+    bool drawBottom = (oy + scaledH < static_cast<float>(virtH) - 0.5f);
 
     uint8_t* mstack = GetMatrixStack();
     if (mstack == nullptr) return;
@@ -1642,22 +1825,20 @@ static void __cdecl RenderHudTimerOverlay(uint8_t* renderer, uint8_t* ws, uint32
     uint32_t* pTextCol = reinterpret_cast<uint32_t*>(0x5f4268);
     uint32_t savedTextCol = *pTextCol;
 
-    uint8_t bgAlpha = static_cast<uint8_t>(std::lround((static_cast<double>(mmMaxAlpha) / 255.0) * 191.0 * (static_cast<double>(fgAlpha) / 255.0)));
-    uint8_t brdAlpha = static_cast<uint8_t>((48u * fgAlpha) / 255u);
+    DrawHudPanelBgAndBorder(kPanelW, panelH, g_timerBgOpacity, fgAlpha, drawTop, drawBottom, drawLeft, drawRight);
     uint8_t trkAlpha = static_cast<uint8_t>((42u * fgAlpha) / 255u);
-    uint32_t bgRgba     = MakeRgba(0x21, 0x21, 0x21, bgAlpha);
-    uint32_t borderRgba = MakeRgba(255, 255, 255, brdAlpha);
-    uint32_t trackRgba  = MakeRgba(255, 255, 255, trkAlpha);
-    Game_DrawQuad(0, 0, kPanelW, panelH, &bgRgba);
-    Game_DrawQuad(0, 0, kPanelW, 1, &borderRgba);
-    Game_DrawQuad(0, panelH - 1, kPanelW, 1, &borderRgba);
-    Game_DrawQuad(0, 1, 1, panelH - 2, &borderRgba);
-    Game_DrawQuad(kPanelW - 1, 1, 1, panelH - 2, &borderRgba);
+    uint32_t trackRgba = MakeRgba(255, 255, 255, trkAlpha);
+    uint8_t shAlpha = CalcHudShadowAlpha(g_timerShadowOpacity, fgAlpha);
+    uint32_t shadowRgba = MakeRgba(0, 0, 0, shAlpha);
 
     if (showElapsed) {
         wchar_t elBuf[32];
         EdgeWString elWs;
         FormatTicksWstr(effEl, elBuf, 32, &elWs);
+        if (shAlpha > 0) {
+            *pTextCol = shadowRgba;
+            Game_DrawText(&elWs, kPadX + 2, elY + 2, 0x2000, 0x2000, 1, 0, 0x14);
+        }
         *pTextCol = MakeRgba(255, 255, 255, fgAlpha);
         Game_DrawText(&elWs, kPadX, elY, 0x2000, 0x2000, 1, 0, 0x14);
     }
@@ -1666,6 +1847,10 @@ static void __cdecl RenderHudTimerOverlay(uint8_t* renderer, uint8_t* ws, uint32
         wchar_t remBuf[32];
         EdgeWString remWs;
         FormatTicksWstr(remTicks, remBuf, 32, &remWs);
+        if (shAlpha > 0) {
+            *pTextCol = shadowRgba;
+            Game_DrawText(&remWs, kPadX + 2, rkY + 2, 0x2000, 0x2000, 1, 0, 0x14);
+        }
         *pTextCol = rankRgba;
         Game_DrawText(&remWs, kPadX, rkY, 0x2000, 0x2000, 1, 0, 0x14);
     }
@@ -1674,11 +1859,18 @@ static void __cdecl RenderHudTimerOverlay(uint8_t* renderer, uint8_t* ws, uint32
         static const wchar_t* const kRankTexts[6] = {L"D", L"C", L"B", L"A", L"S", L"S+"};
         EdgeWString rankWs;
         rankWs.set_literal(kRankTexts[rank], (rank == 5) ? 2u : 1u);
-        *pTextCol = rankRgba;
         int rankTextY = showRank ? rkY : elY;
+        if (shAlpha > 0) {
+            *pTextCol = shadowRgba;
+            Game_DrawText(&rankWs, kPanelW - kPadX + 2, rankTextY + 2, 0x2000, 0x2000, 1, 0, 0x18);
+        }
+        *pTextCol = rankRgba;
         Game_DrawText(&rankWs, kPanelW - kPadX, rankTextY, 0x2000, 0x2000, 1, 0, 0x18);
     }
 
+    if (shAlpha > 0) {
+        Game_DrawQuad(kPadX + 2, barY + 2, kBarW, kBarH, &shadowRgba);
+    }
     Game_DrawQuad(kPadX, barY, kBarW, kBarH, &trackRgba);
     int fillW = static_cast<int>(std::lround(barFrac * static_cast<double>(kBarW)));
     if (fillW < 0) fillW = 0;
@@ -1694,15 +1886,181 @@ static void __cdecl RenderHudTimerOverlay(uint8_t* renderer, uint8_t* ws, uint32
     stackMode = savedMode;
 }
 
+static void __cdecl RenderHudPrismCounterOverlay(
+    uint8_t* renderer, uint8_t* ws, uint32_t expectedState, const HudCornerRect* timerRect
+) {
+    uint8_t type = g_prismCounterType;
+    float size = g_prismCounterSize;
+    uint8_t pos = g_prismCounterPos;
+    bool forceSample = false;
+    bool dockBesideMenu = false;
+    bool hasMenuPreview = GetHudPrismCounterMenuPreview(expectedState, &type, &size, &pos, &forceSample, &dockBesideMenu);
+    if ((expectedState == 9u || expectedState == 0x12u) && !hasMenuPreview) return;
+    if (type == 0 || renderer == nullptr) return;
+
+    uint8_t* sm = GetScreenMgr();
+    if (sm == nullptr) return;
+
+    uint32_t state = *reinterpret_cast<const uint32_t*>(sm + 0x50);
+    if (state != expectedState) return;
+
+    int32_t virtW = *reinterpret_cast<const int32_t*>(sm + 0x24);
+    int32_t virtH = *reinterpret_cast<const int32_t*>(sm + 0x28);
+    if (virtW <= 0 || virtH <= 0) return;
+
+    int32_t collected = 7;
+    int32_t total = 10;
+
+    if (!forceSample) {
+        uint8_t* level = GetLevel();
+        if (ws == nullptr || ws[0x2120] == 0 || level == nullptr) return;
+        total = *reinterpret_cast<const int16_t*>(level + 0x7c);
+        collected = *reinterpret_cast<const int32_t*>(ws + 0x11c);
+        if (total <= 0) {
+            if (expectedState == 0x12u && hasMenuPreview) {
+                collected = 7;
+                total = 10;
+            } else {
+                return;
+            }
+        }
+        if (collected < 0) collected = 0;
+    }
+
+    uint8_t fgAlpha = ((expectedState == 9u || expectedState == 0x12u) && !dockBesideMenu) ? 140u : 255u;
+
+    bool showGrid = (type == 2 && total <= 20);
+    constexpr int kPadX = 10;
+    constexpr int kPadY = 8;
+    constexpr int kDot = 10;
+    constexpr int kDotGap = 4;
+    constexpr int kRowH = 18;
+    constexpr int kIconGap = 8;
+
+    wchar_t cntBuf[32];
+    EdgeWString cntWs;
+    int panelW = 0;
+    int panelH = 0;
+    if (showGrid) {
+        int cols = (total <= 10) ? total : 10;
+        int rows = (total <= 10) ? 1 : 2;
+        panelW = 2 * kPadX + cols * kDot + (cols - 1) * kDotGap;
+        panelH = 2 * kPadY + rows * kDot + (rows - 1) * kDotGap;
+    } else {
+        FormatPrismRatioWstr(collected, total, cntBuf, 32, &cntWs);
+        int textW = MeasureTextWidth(&cntWs, 0x2000, 1);
+        if (textW <= 0) textW = static_cast<int>(cntWs.size) * 12;
+        panelW = 2 * kPadX + kDot + kIconGap + textW;
+        panelH = 2 * kPadY + kRowH;
+    }
+
+    float s = std::clamp(size, 0.25f, 2.0f);
+    constexpr float kMargin = 0.0f;
+    float scaledW = static_cast<float>(panelW) * s;
+    float scaledH = static_cast<float>(panelH) * s;
+    float ox = kMargin;
+    float oy = kMargin;
+    if (dockBesideMenu) {
+        ComputeMenuPreviewBesidePos(expectedState, scaledW, scaledH, virtW, virtH, &ox, &oy);
+    } else {
+        ox = (pos == 1 || pos == 3) ? (static_cast<float>(virtW) - kMargin - scaledW) : kMargin;
+        oy = (pos == 2 || pos == 3) ? (static_cast<float>(virtH) - kMargin - scaledH) : kMargin;
+        if (timerRect != nullptr && timerRect->drawn && timerRect->pos == pos) {
+            ox = (pos == 1 || pos == 3) ? (timerRect->rightX - scaledW) : timerRect->leftX;
+            oy = (pos == 0 || pos == 1) ? (timerRect->bottomY + 4.0f) : (timerRect->topY - 4.0f - scaledH);
+        }
+        if (!forceSample) {
+            MinimapHudBox mm = ComputeMinimapHudBox(sm, ws, virtW, virtH);
+            AvoidMinimapOverlap(mm, pos, scaledW, scaledH, virtW, virtH, &ox, &oy);
+        }
+    }
+    float maxX = (std::max)(0.0f, static_cast<float>(virtW) - scaledW);
+    float maxY = (std::max)(0.0f, static_cast<float>(virtH) - scaledH);
+    ox = std::clamp(ox, 0.0f, maxX);
+    oy = std::clamp(oy, 0.0f, maxY);
+
+    bool drawLeft   = (ox > 0.5f);
+    bool drawRight  = (ox + scaledW < static_cast<float>(virtW) - 0.5f);
+    bool drawTop    = (oy > 0.5f);
+    bool drawBottom = (oy + scaledH < static_cast<float>(virtH) - 0.5f);
+
+    uint8_t* mstack = GetMatrixStack();
+    if (mstack == nullptr) return;
+    uint32_t& stackMode = *reinterpret_cast<uint32_t*>(mstack + 0x4);
+    uint32_t savedMode = stackMode;
+    stackMode = 1;
+
+    float mat[16] = {
+        s,    0.0f, 0.0f, 0.0f,
+        0.0f, s,    0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        ox,   -oy,  0.0f, 1.0f
+    };
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f750)(mstack);
+    reinterpret_cast<void(__thiscall*)(void*, const float*)>(0x41f520)(mstack, mat);
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f660)(mstack);
+
+    Game_SetBlend(renderer, 0);
+    uint32_t* pTextCol = reinterpret_cast<uint32_t*>(0x5f4268);
+    uint32_t savedTextCol = *pTextCol;
+
+    DrawHudPanelBgAndBorder(panelW, panelH, g_prismBgOpacity, fgAlpha, drawTop, drawBottom, drawLeft, drawRight);
+    uint8_t shAlpha = CalcHudShadowAlpha(g_prismShadowOpacity, fgAlpha);
+    uint32_t shadowRgba = MakeRgba(0, 0, 0, shAlpha);
+
+    float clockTicks = static_cast<float>(GetHudTimerClockSec() * 15.0);
+    if (showGrid) {
+        uint32_t uncollectedRgba = MakeRgba(0x7d, 0x7d, 0x7d, fgAlpha);
+        for (int i = 0; i < total; ++i) {
+            int r = i / 10;
+            int c = i % 10;
+            int dx = kPadX + c * (kDot + kDotGap);
+            int dy = kPadY + r * (kDot + kDotGap);
+            if (shAlpha > 0) {
+                Game_DrawQuad(dx + 2, dy + 2, kDot, kDot, &shadowRgba);
+            }
+            uint32_t dotRgba = (i < collected)
+                ? RgbToRgba(CalcSmoothRainbow(clockTicks - static_cast<float>(i), 1.0f), fgAlpha)
+                : uncollectedRgba;
+            Game_DrawQuad(dx, dy, kDot, kDot, &dotRgba);
+        }
+    } else {
+        uint32_t rainbowRgba = RgbToRgba(CalcSmoothRainbow(clockTicks, 1.0f), fgAlpha);
+        uint32_t iconRgba = (collected > 0) ? rainbowRgba : MakeRgba(0x7d, 0x7d, 0x7d, fgAlpha);
+        int iconY = kPadY + (kRowH - kDot) / 2;
+        if (shAlpha > 0) {
+            Game_DrawQuad(kPadX + 2, iconY + 2, kDot, kDot, &shadowRgba);
+        }
+        Game_DrawQuad(kPadX, iconY, kDot, kDot, &iconRgba);
+        if (shAlpha > 0) {
+            *pTextCol = shadowRgba;
+            Game_DrawText(&cntWs, kPadX + kDot + kIconGap + 2, kPadY + 2, 0x2000, 0x2000, 1, 0, 0x14);
+        }
+        *pTextCol = (collected >= total) ? rainbowRgba : MakeRgba(255, 255, 255, fgAlpha);
+        Game_DrawText(&cntWs, kPadX + kDot + kIconGap, kPadY, 0x2000, 0x2000, 1, 0, 0x14);
+    }
+
+    *pTextCol = savedTextCol;
+    Game_SetBlend(renderer, 0);
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f610)(mstack);
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f660)(mstack);
+    stackMode = savedMode;
+}
+
+static void __cdecl RenderHudOverlaysWorld_Impl(uint8_t* renderer, uint8_t* ws) {
+    HudCornerRect timerRect{};
+    RenderHudTimerOverlay(renderer, ws, 0x11u, &timerRect);
+    RenderHudPrismCounterOverlay(renderer, ws, 0x11u, &timerRect);
+}
+
 static void __declspec(naked) hk_worldEnd2DHudTimer() {
     __asm {
         pushfd
         pushad
-        push 0x11
         push edi
         push ecx
-        call RenderHudTimerOverlay
-        add esp, 12
+        call RenderHudOverlaysWorld_Impl
+        add esp, 8
         popad
         popfd
         mov eax, 0x406690
@@ -1711,8 +2069,13 @@ static void __declspec(naked) hk_worldEnd2DHudTimer() {
 }
 
 static void __cdecl RenderHudTimerPause_Impl(uint8_t* renderer) {
-    RenderHudTimerOverlay(renderer, GetWorldScreen(), 0x12u);
-    RenderHudTimerOverlay(renderer, GetWorldScreen(), 9u);
+    uint8_t* ws = GetWorldScreen();
+    HudCornerRect tr12{};
+    RenderHudTimerOverlay(renderer, ws, 0x12u, &tr12);
+    RenderHudPrismCounterOverlay(renderer, ws, 0x12u, &tr12);
+    HudCornerRect tr9{};
+    RenderHudTimerOverlay(renderer, ws, 9u, &tr9);
+    RenderHudPrismCounterOverlay(renderer, ws, 9u, &tr9);
 }
 
 static void __declspec(naked) hk_menuEnd2DHudTimer() {
@@ -1730,6 +2093,57 @@ static void __declspec(naked) hk_menuEnd2DHudTimer() {
 }
 
 } // namespace
+
+namespace edgemod {
+
+void __cdecl RenderPauseHeaderTimer(int x, int y, int width) {
+    uint8_t* ws = GetWorldScreen();
+    uint8_t* level = GetLevel();
+    if (ws == nullptr || ws[0x2120] == 0 || level == nullptr || width <= 0) return;
+
+    int32_t curEl = *reinterpret_cast<const int32_t*>(ws + 0x10c);
+    int32_t curEd = *reinterpret_cast<const int32_t*>(ws + 0x108)
+                  + ((ws[0x6c] != 0) ? *reinterpret_cast<const int32_t*>(ws + 0x78) : 0);
+
+    int rank = 5;
+    double remTicks = 0.0;
+    double barFrac = 0.0;
+    uint32_t rankRgb = 0xffffffu;
+    ComputeTimerStats(level, static_cast<double>(curEl), static_cast<double>(curEd), &rank, &remTicks, &barFrac, &rankRgb);
+
+    uint32_t rankRgba = RgbToRgba(rankRgb, 255u);
+    uint32_t* pTextCol = reinterpret_cast<uint32_t*>(0x5f4268);
+    uint32_t savedTextCol = *pTextCol;
+
+    wchar_t elBuf[32];
+    EdgeWString elWs;
+    FormatTicksWstr(static_cast<double>(curEl), elBuf, 32, &elWs);
+    *pTextCol = 0xffffffffu;
+    Game_DrawText(&elWs, x, y, 0x2000, 0x2000, 1, 0, 0x14);
+
+    wchar_t remBuf[32];
+    EdgeWString remWs;
+    FormatTicksWstr(remTicks, remBuf, 32, &remWs);
+    *pTextCol = rankRgba;
+    Game_DrawText(&remWs, x, y + 18, 0x2000, 0x2000, 1, 0, 0x14);
+
+    static const wchar_t* const kRankTexts[6] = {L"D", L"C", L"B", L"A", L"S", L"S+"};
+    EdgeWString rankWs;
+    rankWs.set_literal(kRankTexts[rank], (rank == 5) ? 2u : 1u);
+    *pTextCol = rankRgba;
+    Game_DrawText(&rankWs, x + width, y + 18, 0x2000, 0x2000, 1, 0, 0x18);
+
+    uint32_t trackRgba = MakeRgba(255, 255, 255, 42);
+    Game_DrawQuad(x, y + 38, width, 5, &trackRgba);
+    int fillW = std::clamp(static_cast<int>(std::lround(barFrac * static_cast<double>(width))), 0, width);
+    if (fillW > 0) {
+        Game_DrawQuad(x, y + 38, fillW, 5, &rankRgba);
+    }
+
+    *pTextCol = savedTextCol;
+}
+
+} // namespace edgemod
 
 void RegisterUiSmoothPart2() {
     // ScoresMenu & CreditsMenu vtable[2]

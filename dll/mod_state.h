@@ -48,6 +48,13 @@ extern uint8_t g_timerMode;   // 0=off, 1=level, 2=rank, 3=both
 extern float   g_timerSize;   // 0.25..2.0 (presets: 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2)
 extern uint8_t g_timerPos;    // 0=TL, 1=TR, 2=BL, 3=BR
 extern uint8_t g_edgeTimerMode; // 0=2D, 1=2D scaled, 2=3D
+extern uint8_t g_prismCounterType; // 0=off, 1=short, 2=full
+extern float   g_prismCounterSize; // 0.25..2.0 (presets matching g_timerSize)
+extern uint8_t g_prismCounterPos;  // 0=TL, 1=TR, 2=BL, 3=BR
+extern int32_t g_timerBgOpacity;   // 0..100, step 10 (default 70)
+extern int32_t g_prismBgOpacity;   // 0..100, step 10 (default 70)
+extern int32_t g_timerShadowOpacity; // 0..100, step 10 (default 0)
+extern int32_t g_prismShadowOpacity; // 0..100, step 10 (default 0)
 
 // Shared smoothing state used across UI smooth modules & time format (mod_ui_smooth_part1/2.cpp)
 extern float   g_uiAlpha;
@@ -55,8 +62,10 @@ extern uint8_t g_justTicked;
 extern int32_t g_pauseSubSwipeX;
 extern int32_t g_pauseSubSwipePrevX;
 constexpr int32_t kPauseOpenReadyTick = 9;
+int32_t __cdecl GetPauseContentShiftY();
 
 void __cdecl FmtInt0to100Wstr(int val, EdgeWString* out);
+void __cdecl FormatPrismRatioWstr(int32_t collected, int32_t total, wchar_t* wbuf, size_t cap, EdgeWString* out);
 
 // Shared layout constant (spacious vanilla stride for nested Options categories)
 constexpr int kOptionsRowTextY(int row) {
@@ -137,6 +146,7 @@ inline void Game_DrawRainbowRectBorder(int frame, int x, int y, int w, int h, in
 
 // Shared helpers callable from mod_ui_smooth_part2.cpp
 uint32_t __cdecl GetSmoothMenuRainbow(int frame);
+int __cdecl MeasureTextWidth(const EdgeWString* ws, int scaleX, int extraX);
 int __cdecl DrawTextAutoFit(
     const EdgeWString* ws, int x, int y, int scaleX, int scaleY,
     int extraX, int extraY, int alignFlags, int maxWidth
@@ -144,7 +154,9 @@ int __cdecl DrawTextAutoFit(
 void SetSfxVolume(int newVol, int sfxId, bool save);
 void SetMusicVolume(int newVol, int sfxId, bool save);
 void SyncFocusAudioMute();
-bool GetHudTimerMenuPreview(uint32_t state, uint8_t* outMode, float* outSize, uint8_t* outPos, bool* outForceSample);
+bool GetHudTimerMenuPreview(uint32_t state, uint8_t* outMode, float* outSize, uint8_t* outPos, bool* outForceSample, bool* outDockBesideMenu);
+bool GetHudPrismCounterMenuPreview(uint32_t state, uint8_t* outType, float* outSize, uint8_t* outPos, bool* outForceSample, bool* outDockBesideMenu);
+void __cdecl RenderPauseHeaderTimer(int x, int y, int width);
 void OnColorThemeChanged();
 uint32_t __fastcall RenderPlayerCubeWithColorTheme(void* cube);
 void EnsureMusicPlaylistReady();

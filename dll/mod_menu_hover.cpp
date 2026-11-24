@@ -156,13 +156,14 @@ static int HitTestMenuSlot(const uint8_t* menu, uint32_t vtbl, int pausePage, in
     }
 
     if (vtbl == kVtblPause) {
+        const int pauseShiftY = GetPauseContentShiftY();
         if (pausePage == 0) {
             int ox = *reinterpret_cast<const int32_t*>(0x5f9718);
             int oy = *reinterpret_cast<const int32_t*>(0x5f971c);
             int left = bx + 2 + ox;
             if (mx < left || mx >= left + 0x16c) return -1;
             for (int i = 0; i < 5; ++i) {
-                int top = by + 0x55 + oy + i * 0x26;
+                int top = by + 0x55 + pauseShiftY + oy + i * 0x26;
                 if (my >= top && my < top + 0x25) return i;
             }
             return -1;
@@ -171,7 +172,7 @@ static int HitTestMenuSlot(const uint8_t* menu, uint32_t vtbl, int pausePage, in
             return HitTestOptionsSlot(true, mx, my);
         }
         if (pausePage == 2) {
-            int top = by + 0x81;
+            int top = by + 0x81 + pauseShiftY;
             if (my < top || my >= top + 0x3f) return -1;
             if (mx >= bx + 0x24 && mx < bx + 0x24 + 0x76) return 0;
             if (mx >= bx + 0xd0 && mx < bx + 0xd0 + 0x76) return 1;
@@ -281,13 +282,14 @@ static void DrawHoveredSlotBorder(const uint8_t* menu, uint32_t vtbl, int pauseP
             Game_DrawRainbowRectBorder(frame, bx + 0xd0, by + 0x2e, 0x76, 0x3f, 2, 255);
         }
     } else if (vtbl == kVtblPause) {
+        const int pauseShiftY = GetPauseContentShiftY();
         if (pausePage == 0 && sel < 5) {
-            Game_DrawRainbowRectBorder(frame, bx + 2, by + 0x55 + sel * 0x26, 0x16c, 0x25, 2, 255);
+            Game_DrawRainbowRectBorder(frame, bx + 2, by + 0x55 + pauseShiftY + sel * 0x26, 0x16c, 0x25, 2, 255);
         } else if (pausePage == 2) {
             if (sel == 0) {
-                Game_DrawRainbowRectBorder(frame, bx + 0x24, by + 0x81, 0x76, 0x3f, 2, 255);
+                Game_DrawRainbowRectBorder(frame, bx + 0x24, by + 0x81 + pauseShiftY, 0x76, 0x3f, 2, 255);
             } else if (sel == 1) {
-                Game_DrawRainbowRectBorder(frame, bx + 0xd0, by + 0x81, 0x76, 0x3f, 2, 255);
+                Game_DrawRainbowRectBorder(frame, bx + 0xd0, by + 0x81 + pauseShiftY, 0x76, 0x3f, 2, 255);
             }
         }
     } else if (vtbl == kVtblDebrief) {

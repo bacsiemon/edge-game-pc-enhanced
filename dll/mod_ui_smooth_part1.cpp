@@ -436,9 +436,9 @@ static void __declspec(naked) hk_onInterpolate() {
 // ------------------------------------------------------------------
 // PauseMenu, EndLevel, PauseConfirm, ModelNode, Scroll & Submenu helpers
 // ------------------------------------------------------------------
-constexpr int32_t kPauseOpenTicks    = 8;
-constexpr int32_t kPauseCloseTicks   = 7;
-constexpr float   kPauseMenuVisibleH = 280.0f;
+constexpr int32_t kPauseOpenTicks        = 8;
+constexpr int32_t kPauseCloseTicks       = 7;
+constexpr float   kPauseMenuBaseVisibleH = 280.0f;
 
 static float   g_pauseLastProgress       = 1.0f;
 static float   g_pauseCloseStartProgress = 1.0f;
@@ -560,7 +560,7 @@ static void __fastcall PauseRenderWrap_Impl(uint8_t* pm, void*, int32_t frame) {
     int32_t virtH = GetPauseVirtH();
     float e = ComputePauseSlideProgress(pm);
     float bgDist = static_cast<float>(virtH);
-    float menuDist = (std::min)(bgDist, kPauseMenuVisibleH);
+    float menuDist = (std::min)(bgDist, kPauseMenuBaseVisibleH + static_cast<float>(GetPauseContentShiftY()));
     g_pauseRenderBgOffsetY = -(1.0f - e) * bgDist;
     g_pauseRenderMenuOffsetY = -(1.0f - e) * menuDist;
 
@@ -705,8 +705,9 @@ static void __declspec(naked) hk_pauseP2Skip() {
 
 static void __declspec(naked) hk_pauseSmoothSlideY() {
     __asm {
+        call GetPauseContentShiftY
+        mov esi, eax
         xor ebx, ebx
-        xor esi, esi
         mov eax, 0x4ad1a0
         jmp eax
     }

@@ -22,12 +22,20 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 | **Audio**       | `music start`          | `land`, `fall`                                                                   | toggle            | Instant 2-state switch                                                                                             |
 | **Audio**       | `music playlist`       | `pc`, `java`                                                                     | toggle            | Live toggle backed by `music/playlist.xml` (`pc` default, saved in `edgemod_settings.ini` under `music_playlist`) |
 | **Audio**       | `mute when unfocused`  | `off`, `on`                                                                      | toggle            | Mutes SFX and music while window is unfocused/minimized (`off` default, saved under `mute_unfocused`)              |
-| **UI**          | `time format`          | `def`, `new`                                                                     | toggle            | Instant 2-state switch                                                                                             |
-| **UI**          | `edge timer`           | `2D`, `2D scaled`, `3D`                                                          | popup             | `2D` (default), `2D scaled` (scales to camera zoom level), or `3D` (Android world-space 3D edge timer)             |
-| **UI**          | `timer`                | *(opens **Timer** submenu)*                                                      | submenu (`>`)     | Nested 3rd-level category                                                                                          |
-| **UI -> Timer** | `type`                 | `off`, `level`, `rank`, `both`                                                   | popup             | 4 named choices; live corner timer in Pause, sample timer in Main Options (default `both`)                         |
-| **UI -> Timer** | `size`                 | `0.25`, `0.5`, `0.75`, `1`, `1.25`, `1.5`, `1.75`, `2`                           | slider            | Live corner timer resize while dragging (sample timer in Main Options; default `1`)                                |
-| **UI -> Timer** | `position`             | `TL`, `TR`, `BL`, `BR`                                                           | popup             | 4 named choices; live/sample corner timer preview behind popup (default `TR`)                                      |
+| **UI**                   | `time format`          | `def`, `new`                                                                     | toggle            | Instant 2-state switch                                                                                             |
+| **UI**                   | `edge timer`           | `2D`, `2D scaled`, `3D`                                                          | popup             | `2D` (default), `2D scaled` (scales to camera zoom level), or `3D` (Android world-space 3D edge timer)             |
+| **UI**                   | `timer`                | *(opens **Timer** submenu)*                                                      | submenu (`>`)     | Nested 3rd-level category                                                                                          |
+| **UI**                   | `prism counter`        | *(opens **Prism Counter** submenu)*                                              | submenu (`>`)     | Nested 3rd-level category                                                                                          |
+| **UI -> Timer**          | `type`                 | `off`, `level`, `rank`, `both`                                                   | popup             | 4 named choices; docked live/sample preview beside menu (default `both`)                                           |
+| **UI -> Timer**          | `size`                 | `0.25`, `0.5`, `0.75`, `1`, `1.25`, `1.5`, `1.75`, `2`                           | slider            | Live full-opacity resize preview beside menu while dragging (sample in Main Options; default `1`)                  |
+| **UI -> Timer**          | `background`           | `0`..`100`                                                                       | slider            | Background & border opacity in steps of `10` (default `70`); `0` hides the background box                          |
+| **UI -> Timer**          | `drop shadow`          | `0`..`100`                                                                       | slider            | Drop shadow opacity for numbers and rank bar in steps of `10` (default `0`)                                        |
+| **UI -> Timer**          | `position`             | `TL`, `TR`, `BL`, `BR`                                                           | popup             | 4 named choices; dims & snaps preview (with companion prism counter) to chosen corner behind popup (default `TR`)  |
+| **UI -> Prism Counter**  | `type`                 | `off`, `short`, `full`                                                           | popup             | `short` shows `count/total`; `full` shows individual prisms (`<= 20`) or `count/total` (`> 20`), default `full`    |
+| **UI -> Prism Counter**  | `size`                 | `0.25`, `0.5`, `0.75`, `1`, `1.25`, `1.5`, `1.75`, `2`                           | slider            | Live full-opacity resize preview beside menu while dragging (sample in Main Options; default `1`)                  |
+| **UI -> Prism Counter**  | `background`           | `0`..`100`                                                                       | slider            | Background & border opacity in steps of `10` (default `70`); `0` hides the background box                          |
+| **UI -> Prism Counter**  | `drop shadow`          | `0`..`100`                                                                       | slider            | Drop shadow opacity for prism dots/icon and numbers in steps of `10` (default `0`)                                 |
+| **UI -> Prism Counter**  | `position`             | `TL`, `TR`, `BL`, `BR`                                                           | popup             | 4 named choices; dims & snaps preview (with companion timer) to chosen corner, dodges minimap (default `TR`)       |
 | **Gameplay**    | `up key`               | 2 localized key modes                                                            | toggle            | Instant 2-state switch                                                                                             |
 | **Gameplay**    | `skip intro`           | `off`, `on`                                                                      | toggle            | Instant 2-state switch                                                                                             |
 | **Gameplay**    | `cam distance`         | `mobile` (`-1`), `0.5`, `0.65`, `0.75`, `1`, `1.25`, `1.5`, `2`                  | popup             | Named `mobile` mode + numeric multipliers (default `1`)                                                            |
@@ -38,9 +46,9 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 
 ## Layout & Consistency
 
-- **Submenu Navigation & `>` Indicators:** All rows opening nested submenus display a right-aligned `>` arrow (`Main Menu` rows `edge challenge`, `scores`, `options`; `edge challenge` rows `normal`, `extended levels`, `bonus levels`; `scores` rows `normal`, `extended`, `bonus`; Pause root row `options` at index `3`; Options root rows `display`, `graphics`, `audio`, `ui`, `gameplay`; `UI` row `timer`). `instructions` sits on `Main Menu` below `options` (removed from `edge challenge`).
+- **Submenu Navigation & `>` Indicators:** All rows opening nested submenus display a right-aligned `>` arrow (`Main Menu` rows `edge challenge`, `scores`, `options`; `edge challenge` rows `normal`, `extended levels`, `bonus levels`; `scores` rows `normal`, `extended`, `bonus`; Pause root row `options` at index `3`; Options root rows `display`, `graphics`, `audio`, `ui`, `gameplay`; `UI` rows `timer`, `prism counter`). `instructions` sits on `Main Menu` below `options` (removed from `edge challenge`).
 - **Uniform Row Sizing & Widened Menus:** Widens menus to `368px` (`0x170`) with Pause root slots (`0x26` stride) matched to Pause Options, and shifts row text slightly up so under-value dots and slider bars fit cleanly above dividers. `ComputeMainOptLayout` and `ComputePauseOptRowH` dynamically compact row height when a category has many rows so rows never clip even at small virtual heights (`virtH = 512`).
-- **Sample Corner Timer (Main Options):** When `type`, `size`, or `position` under **UI -> Timer** is focused or its popup is open in Main Options, render a sample corner HUD timer preview (also shown dimmed/sampled if `type` is `off` while adjusting `size` or `position`), matching the live corner timer visible behind Pause Options.
+- **Sample & Live Corner Timer / Prism Counter Previews:** Corner HUD Timer & Prism Counter render during gameplay and stay hidden while paused—except when inside **UI -> Timer** or **UI -> Prism Counter** (in either Main Options or Pause Options), where they render a sample (Main Options) or live (Pause Options) preview. When adjusting `type`, `size`, `background`, or `drop shadow`, the preview always renders at full opacity and docks to the right of the menu strip so it never overlaps menu text (even if `type` is currently `off`); when focusing or opening `position`, it dims and snaps to the actual target corner (alongside the companion counter if enabled). During Pause, the Pause menu header directly embeds the full 2-row timer + progress bar above the prism strip.
 
 ---
 
@@ -51,7 +59,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 - **Display:** 2 dots under the value. Lighter dot indicates the selected option.
 - **Interaction:** Click / Enter / Left / Right toggles immediately and saves, playing hover SFX (`2`).
 
-### 2. Popups (8 setting popups + 1 confirm popup)
+### 2. Popups (10 setting popups + 1 confirm popup)
 
 - **Display:**
   - Setting popups show multiple horizontal dots under the value (lighter dot indicates the selected option). Action confirm popups (`reset score`) show no dots under the row.
@@ -63,13 +71,13 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
   - **Esc / Cancel / Click outside** closes without changing the value / without resetting, playing back SFX (`0xb`).
   - **Left / Right** on the row (when popup is closed) quick-cycles setting popups as a shortcut (disabled on `reset score`), playing hover SFX (`2`).
 
-### 3. Sliders (5 items)
+### 3. Sliders (10 items)
 
 - **Display:**
   - A bar under the value. Lighter portion indicates progress.
   - A **dot/tick marker** on the track highlights the default value.
 - **Interaction:**
   - **Mouse:** Click anywhere on the track to jump, drag thumb to scrub (pointer stays captured and row stays strong rainbow even if cursor leaves the row vertically), and release to save. Value changes during scrubbing play hover SFX (`2`).
-  - **Keyboard / Gamepad:** Left / Right steps by preset or fixed increment (`5` for `sounds`/`music`, preset index for `prism vfx`/`ui scale`/`timer size`), playing hover SFX (`2`).
+  - **Keyboard / Gamepad:** Left / Right steps by preset or fixed increment (`5` for `sounds`/`music`, `10` for `background`/`drop shadow`, preset index for `prism vfx`/`ui scale`/`size`), playing hover SFX (`2`).
   - **Reset to default:** Press `R` / `Backspace` / `Delete` while a slider row is focused to snap back to the default value, playing hover SFX (`2`).
   - **Special case (`ui scale`):** Update the displayed slider value while dragging/stepping, and call `ApplyUiScale` + `SaveModSettings` on mouse-up / Left-Right release (or cursor/focus change) without reverting `auto scale` to `off` (all mod options save atomically to `%LocalAppData%\Two Tribes\EDGE\edgemod_settings.ini`; vanilla options `fullscreen`, `sounds`, `music`, `up key`, and `reset score` continue using `Game_SaveUserSettings`).

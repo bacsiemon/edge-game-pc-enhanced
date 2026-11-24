@@ -106,6 +106,15 @@ static const Rgb8 kJavaFallingPalette[4][3] = {
 
 static const Rgb8 kJavaSwitchColor = {0xae, 0xc3, 0xd0};
 
+// Exact Android switch colors from libcgame.so CGeomCube::RenderAsBg (mode==5) & switch_off.spr:
+// Top = #B0B8C4, Left (+Z) = #94A1B4, Right (+X) = #838D9C.
+// PC switch.rmdl modulates switch.img (#B0B8C4) by per-vertex colors (Left=0xFF8B95AA, Right=0xFF858FA2).
+static const Rgb8 kAndroidSwitchTopColor = {0xb0, 0xb8, 0xc4};
+static constexpr uint32_t kPcSwitchLeftVCol       = 0xff8b95aau;
+static constexpr uint32_t kPcSwitchRightVCol      = 0xff858fa2u;
+static constexpr uint32_t kAndroidSwitchLeftVCol  = 0xffd6dfeau; // #B0B8C4 * #D6DFEA = #94A1B4
+static constexpr uint32_t kAndroidSwitchRightVCol = 0xffbec3cbu; // #B0B8C4 * #BEC3CB = #838D9C
+
 // Java pastel rainbow_menu (aO) used for Cube::ComputePalette on themes 0..1
 static const uint32_t kJavaRainbowMenu[13] = {
     0xfea9b6u, 0xfe9febu, 0xee9dfeu, 0xd3a9feu, 0xb5befeu, 0xa1cffeu, 0x96dafeu,
@@ -288,7 +297,7 @@ static void FillThemeTexturePixels(const TargetTexSpec& spec, D3DLOCKED_RECT* lr
         }
     } else {
         uint8_t alpha = (spec.kind == TEX_SWITCH_30OPACITY) ? 0x4du : 0xffu;
-        Rgb8 sw = isJava ? kJavaSwitchColor : Rgb8{0xc3, 0xb8, 0xaf};
+        Rgb8 sw = isJava ? kJavaSwitchColor : kAndroidSwitchTopColor;
         uint32_t col = PackArgb(alpha, sw);
         for (int y = 0; y < spec.height; ++y) {
             uint32_t* row = reinterpret_cast<uint32_t*>(base + y * lr->Pitch);
@@ -885,6 +894,167 @@ static void __fastcall Hook_MovingPlatformRender(uint8_t* plat) {
     OnColorThemeChanged();
 }
 
+static bool IsSwitchTexHash(uint32_t hash0) {
+    return hash0 == 0x301C8879u || hash0 == 0xB2446CF3u;
+}
+
+struct CachedSwitchSubMesh {
+    IDirect3DVertexBuffer9* vb = nullptr;
+    uint32_t numVerts = 0;
+    uint32_t stride = 0;
+    uint32_t colorOff = 0;
+    uint8_t appliedTheme = 0;
+    bool hasSideVerts = false;
+    std::vector<uint8_t> faceKind; // 0=top/other, 1=left (+Z), 2=right (+X)
+    std::vector<uint32_t> origColors;
+};
+
+static uint8_t* s_switchCacheLevel = nullptr;
+static IDirect3DDevice9* s_switchCacheDev = nullptr;
+static bool s_anySwitchVbModified = false;
+static std::vector<CachedSwitchSubMesh> s_switchSubMeshes;
+
+static void SyncSwitchModelVertexColors(uint8_t* nodePtr, uint8_t targetTheme) {
+    if (nodePtr == nullptr) return;
+    uint8_t* node = *reinterpret_cast<uint8_t**>(nodePtr);
+    while (node != nullptr) {
+        using GetMeshFn = uint8_t*(__thiscall*)(void*);
+        uint8_t* meshObj = (*reinterpret_cast<GetMeshFn**>(node))[1](node);
+        if (meshObj != nullptr) {
+            uint8_t* sm = *reinterpret_cast<uint8_t**>(meshObj + 0x1d0);
+            uint8_t* smEnd = *reinterpret_cast<uint8_t**>(meshObj + 0x1d4);
+            while (sm != nullptr && sm < smEnd) {
+                uint8_t* mat = *reinterpret_cast<uint8_t**>(sm + 0x04);
+                if (mat != nullptr) {
+                    uint8_t** texBegin = *reinterpret_cast<uint8_t***>(mat + 0x0c);
+                    uint8_t** texEnd   = *reinterpret_cast<uint8_t***>(mat + 0x10);
+                    if (texBegin != nullptr && texBegin < texEnd && texBegin[0] != nullptr) {
+                        const uint8_t* tex = texBegin[0];
+                        uint32_t h1 = *reinterpret_cast<const uint32_t*>(tex + 0x08);
+                        uint32_t h0 = *reinterpret_cast<const uint32_t*>(tex + 0x04);
+                        if (h1 == kTexturesFolderHash && IsSwitchTexHash(h0)) {
+                            auto* vb = *reinterpret_cast<IDirect3DVertexBuffer9**>(sm + 0xa0);
+                            uint32_t flags  = *reinterpret_cast<const uint32_t*>(sm + 0x80);
+                            uint32_t stride = *reinterpret_cast<const uint32_t*>(sm + 0x84);
+                            const uint8_t* p0 = *reinterpret_cast<const uint8_t* const*>(sm + 0x10);
+                            const uint8_t* p1 = *reinterpret_cast<const uint8_t* const*>(sm + 0x14);
+                            uint32_t numVerts = (p1 > p0) ? static_cast<uint32_t>((p1 - p0) / 12) : 0;
+                            constexpr uint32_t colorOff = 24u;
+                            if (vb != nullptr && numVerts > 0 && (flags & 3u) == 3u && stride >= 28u) {
+                                CachedSwitchSubMesh* entry = nullptr;
+                                for (auto& cached : s_switchSubMeshes) {
+                                    if (cached.vb == vb && cached.numVerts == numVerts) {
+                                        entry = &cached;
+                                        break;
+                                    }
+                                }
+                                if (entry == nullptr) {
+                                    void* ptr = nullptr;
+                                    if (SUCCEEDED(vb->Lock(0, 0, &ptr, D3DLOCK_READONLY)) && ptr != nullptr) {
+                                        CachedSwitchSubMesh info;
+                                        info.vb = vb;
+                                        info.numVerts = numVerts;
+                                        info.stride = stride;
+                                        info.colorOff = colorOff;
+                                        info.faceKind.resize(numVerts);
+                                        info.origColors.resize(numVerts);
+                                        uint8_t initialApplied = 0;
+                                        const uint8_t* basePtr = static_cast<const uint8_t*>(ptr);
+                                        for (uint32_t i = 0; i < numVerts; ++i) {
+                                            const uint8_t* vptr = basePtr + i * stride;
+                                            float nx = *reinterpret_cast<const float*>(vptr + 12u);
+                                            float nz = *reinterpret_cast<const float*>(vptr + 20u);
+                                            uint32_t col = *reinterpret_cast<const uint32_t*>(vptr + colorOff);
+                                            uint8_t kind = 0;
+                                            if (nz > 0.5f) {
+                                                kind = 1;
+                                            } else if (nx > 0.5f) {
+                                                kind = 2;
+                                            }
+                                            info.faceKind[i] = kind;
+                                            if (kind == 1 || kind == 2) {
+                                                info.hasSideVerts = true;
+                                            }
+                                            if (kind == 1 && col == kAndroidSwitchLeftVCol) {
+                                                info.origColors[i] = kPcSwitchLeftVCol;
+                                                initialApplied = 1u;
+                                            } else if (kind == 2 && col == kAndroidSwitchRightVCol) {
+                                                info.origColors[i] = kPcSwitchRightVCol;
+                                                initialApplied = 1u;
+                                            } else {
+                                                info.origColors[i] = col;
+                                            }
+                                        }
+                                        vb->Unlock();
+                                        info.appliedTheme = initialApplied;
+                                        if (initialApplied == 1u) {
+                                            s_anySwitchVbModified = true;
+                                        }
+                                        s_switchSubMeshes.push_back(std::move(info));
+                                        entry = &s_switchSubMeshes.back();
+                                    }
+                                }
+                                if (entry != nullptr && entry->hasSideVerts && entry->appliedTheme != targetTheme) {
+                                    void* ptr = nullptr;
+                                    if (SUCCEEDED(entry->vb->Lock(0, 0, &ptr, 0)) && ptr != nullptr) {
+                                        uint8_t* basePtr = static_cast<uint8_t*>(ptr);
+                                        for (uint32_t i = 0; i < entry->numVerts; ++i) {
+                                            uint8_t kind = entry->faceKind[i];
+                                            uint32_t outCol = entry->origColors[i];
+                                            if (targetTheme == 1u) {
+                                                if (kind == 1) outCol = kAndroidSwitchLeftVCol;
+                                                else if (kind == 2) outCol = kAndroidSwitchRightVCol;
+                                            }
+                                            *reinterpret_cast<uint32_t*>(basePtr + i * entry->stride + entry->colorOff) = outCol;
+                                        }
+                                        entry->vb->Unlock();
+                                        entry->appliedTheme = targetTheme;
+                                        if (targetTheme == 1u) {
+                                            s_anySwitchVbModified = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                sm += 0xa8;
+            }
+        }
+        SyncSwitchModelVertexColors(node + 0xec, targetTheme);
+        node = *reinterpret_cast<uint8_t**>(node + 0xf4);
+    }
+}
+
+static void __fastcall Hook_SwitchRender(uint8_t* sw) {
+    using OrigFn = void(__thiscall*)(void*);
+    auto orig = reinterpret_cast<OrigFn>(0x485c30);
+    if (sw == nullptr) {
+        orig(sw);
+        return;
+    }
+
+    uint8_t* curLevel = GetLevel();
+    IDirect3DDevice9* curDev = g_cachedDev;
+    if (curLevel != s_switchCacheLevel || curDev != s_switchCacheDev) {
+        s_switchSubMeshes.clear();
+        s_switchCacheLevel = curLevel;
+        s_switchCacheDev = curDev;
+    }
+
+    uint8_t targetTheme = (g_colorTheme == 1u) ? 1u : 0u;
+    if (targetTheme == 0u && !s_anySwitchVbModified) {
+        orig(sw);
+        return;
+    }
+
+    uint8_t* model = *reinterpret_cast<uint8_t**>(sw + 0x30);
+    if (model != nullptr) {
+        SyncSwitchModelVertexColors(model, targetTheme);
+    }
+    orig(sw);
+}
+
 static void __fastcall Hook_SetMeshLightingState(
     void* renderer, void*, uint32_t enableLighting, uint32_t useVertexColor
 ) {
@@ -1072,4 +1242,8 @@ void RegisterColorTheme() {
     // 17. WorldScreen::render Ghost Cube::render Transparents (0x47b406, 5B)
     static const uint8_t exGhostCubeTransp[5] = {0xe8, 0x05, 0xc0, 0xf8, 0xff};
     RegRelCall(0x47b406, exGhostCubeTransp, 5, 5, &Hook_GhostCubeTransparents);
+
+    // 18. WorldScreen::render Switch::render (0x47b309, 5B)
+    static const uint8_t exSwitchRender[5] = {0xe8, 0x22, 0xa9, 0x00, 0x00};
+    RegRelCall(0x47b309, exSwitchRender, 5, 5, &Hook_SwitchRender);
 }

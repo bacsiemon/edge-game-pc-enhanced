@@ -473,7 +473,7 @@ static void __declspec(naked) hk_playerCubeRender() {
 }
 
 // ------------------------------------------------------------------
-// 3. Mobile (1) & Java (2) 3D Finish Effect Renderers (0x47b439)
+// 3. Mobile (1) & Java (2) 3D Finish Effect Renderers (0x47b418)
 // ------------------------------------------------------------------
 static void GetCameraEyeFromDevice(IDirect3DDevice9* dev, float* outEye) {
     D3DMATRIX v{};
@@ -641,16 +641,14 @@ static void RenderMobileFinishEffect(IDirect3DDevice9* dev, uint32_t curFrame, u
     dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, static_cast<UINT>(verts.size() / 3u), verts.data(), sizeof(FinishVert));
 }
 
-static void RenderJavaFinishEffect(IDirect3DDevice9* dev, uint32_t curFrame, uint32_t theme, float t) {
-    (void)curFrame;
+static void RenderJavaFinishEffect(IDirect3DDevice9* dev, uint32_t theme, float t) {
     float bh = t * 0.80f;
     if (bh >= 50.0f) return;
     float scaleX = 1.0f - bh * (90.0f / 4096.0f);
     if (scaleX <= 0.0f) return;
 
-    float p = std::clamp(bh / (4096.0f / 90.0f), 0.0f, 1.0f);
-    // Subtle initial vertical stretch that gradually accelerates toward ~11.5x at full height
-    float scaleY = 1.0f + 10.5f * (0.48f * p + 0.52f * p * p);
+    // Exact J2ME a.d(Graphics, int) linear vertical stretch: ((bh * 2867) % 245760) / 3 + 4096
+    float scaleY = 1.0f + std::fmod(bh * 2867.0f, 245760.0f) / (3.0f * 4096.0f);
 
     D3DMATRIX view{};
     float rx =  0.70710678f, ry = 0.0f,        rz = -0.70710678f;
@@ -700,15 +698,22 @@ static void RenderJavaFinishEffect(IDirect3DDevice9* dev, uint32_t curFrame, uin
     D3DCOLOR colLeft  = ShadeRgb(baseRgb, strobe + 15, 255);
     D3DCOLOR colRight = ShadeRgb(baseRgb, strobe - 35, 255);
 
-    constexpr int kSegs = 256;
+    constexpr int kBandSegs = 64;
     constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
 
     std::vector<FinishVert> verts;
-    verts.reserve(static_cast<size_t>(kSegs) * 18u);
+    verts.reserve(static_cast<size_t>(kBandSegs) * 48u);
+
+    // Exact J2ME a.d(Graphics, int) horizontal sway for 0.spr (50x59 px idle cube):
+    // angleDeg = y_spr * 5 + as * 15 = (1 - u) * 295 + bh * 15
+    // wobblePx = (cos256(angleDeg) * (30 * u) * (scaleY_fp / 3)) >> 20 = 10 * u * scaleY * cos(...)
+    // Divided by 50 px cube width => 0.20 * scaleY * u * w0, with a ~1.5-frame ease-in at t=0.
+    float swayEaseIn = std::clamp(bh / 1.2f, 0.0f, 1.0f);
+    swayEaseIn = swayEaseIn * (2.0f - swayEaseIn);
 
     auto wobbleAt = [&](float u) -> float {
-        float angRad = ((1.0f - u) * 255.0f + bh * 16.5f) * kDeg2Rad;
-        float amp = ((scaleY - 1.0f) * 0.46f + p * 0.50f) * (u * w0);
+        float angRad = ((1.0f - u) * 295.0f + bh * 15.0f) * kDeg2Rad;
+        float amp = (0.20f * scaleY * swayEaseIn) * (u * w0);
         return std::cos(angRad) * amp;
     };
     auto makePt = [&](float u, float xOff, float outP[3]) {
@@ -719,19 +724,19 @@ static void RenderJavaFinishEffect(IDirect3DDevice9* dev, uint32_t curFrame, uin
         outP[2] = baseZ + rz * h + uz * v;
     };
     auto emitBandQuad = [&](float u0, float u1, float sL0, float sR0, float sL1, float sR1, D3DCOLOR col) {
-        float w0 = std::fabs(sR0 - sL0);
-        float w1 = std::fabs(sR1 - sL1);
-        if (w0 < 1e-4f && w1 < 1e-4f) return;
+        float span0 = std::fabs(sR0 - sL0);
+        float span1 = std::fabs(sR1 - sL1);
+        if (span0 < 1e-4f && span1 < 1e-4f) return;
         float pL0[3], pR0[3], pR1[3], pL1[3];
         makePt(u0, sL0, pL0);
         makePt(u0, sR0, pR0);
         makePt(u1, sR1, pR1);
         makePt(u1, sL1, pL1);
-        if (w0 < 1e-4f) {
+        if (span0 < 1e-4f) {
             verts.push_back({pL0[0], pL0[1], pL0[2], col});
             verts.push_back({pR1[0], pR1[1], pR1[2], col});
             verts.push_back({pL1[0], pL1[1], pL1[2], col});
-        } else if (w1 < 1e-4f) {
+        } else if (span1 < 1e-4f) {
             verts.push_back({pL0[0], pL0[1], pL0[2], col});
             verts.push_back({pR0[0], pR0[1], pR0[2], col});
             verts.push_back({pR1[0], pR1[1], pR1[2], col});
@@ -740,17 +745,15 @@ static void RenderJavaFinishEffect(IDirect3DDevice9* dev, uint32_t curFrame, uin
         }
     };
 
-    float baseCapFrac = 0.25f / scaleY;
-    float capStretch  = 0.42f + 0.58f * p;
-    float capFrac     = std::clamp(baseCapFrac + (0.25f - baseCapFrac) * capStretch, 0.08f, 0.25f);
+    // Exact J2ME 0.spr uniform vertical stretch keeps cap proportions at 25% of total height
+    constexpr float capFrac = 0.25f;
     float uA = capFrac;
     float uB = 1.0f - 2.0f * capFrac;
     float uC = 1.0f - capFrac;
 
-    constexpr int kBandSegs = 64;
-    for (int s = 0; s < kBandSegs; ++s) {
-        float f0 = static_cast<float>(s) / static_cast<float>(kBandSegs);
-        float f1 = static_cast<float>(s + 1) / static_cast<float>(kBandSegs);
+    for (int seg = 0; seg < kBandSegs; ++seg) {
+        float f0 = static_cast<float>(seg) / static_cast<float>(kBandSegs);
+        float f1 = static_cast<float>(seg + 1) / static_cast<float>(kBandSegs);
         float u0 = uA * f0;
         float u1 = uA * f1;
         float hw0 = halfWFull * f0;
@@ -758,17 +761,17 @@ static void RenderJavaFinishEffect(IDirect3DDevice9* dev, uint32_t curFrame, uin
         emitBandQuad(u0, u1, -hw0, 0.0f, -hw1, 0.0f, colLeft);
         emitBandQuad(u0, u1, 0.0f, hw0, 0.0f, hw1, colRight);
     }
-    for (int s = 0; s < kBandSegs; ++s) {
-        float f0 = static_cast<float>(s) / static_cast<float>(kBandSegs);
-        float f1 = static_cast<float>(s + 1) / static_cast<float>(kBandSegs);
+    for (int seg = 0; seg < kBandSegs; ++seg) {
+        float f0 = static_cast<float>(seg) / static_cast<float>(kBandSegs);
+        float f1 = static_cast<float>(seg + 1) / static_cast<float>(kBandSegs);
         float u0 = uA + (uB - uA) * f0;
         float u1 = uA + (uB - uA) * f1;
         emitBandQuad(u0, u1, -halfWFull, 0.0f, -halfWFull, 0.0f, colLeft);
         emitBandQuad(u0, u1, 0.0f, halfWFull, 0.0f, halfWFull, colRight);
     }
-    for (int s = 0; s < kBandSegs; ++s) {
-        float f0 = static_cast<float>(s) / static_cast<float>(kBandSegs);
-        float f1 = static_cast<float>(s + 1) / static_cast<float>(kBandSegs);
+    for (int seg = 0; seg < kBandSegs; ++seg) {
+        float f0 = static_cast<float>(seg) / static_cast<float>(kBandSegs);
+        float f1 = static_cast<float>(seg + 1) / static_cast<float>(kBandSegs);
         float u0 = uB + (uC - uB) * f0;
         float u1 = uB + (uC - uB) * f1;
         float tw0 = halfWFull * f0;
@@ -777,9 +780,9 @@ static void RenderJavaFinishEffect(IDirect3DDevice9* dev, uint32_t curFrame, uin
         emitBandQuad(u0, u1, -tw0, tw0, -tw1, tw1, colTop);
         emitBandQuad(u0, u1, tw0, halfWFull, tw1, halfWFull, colRight);
     }
-    for (int s = 0; s < kBandSegs; ++s) {
-        float f0 = static_cast<float>(s) / static_cast<float>(kBandSegs);
-        float f1 = static_cast<float>(s + 1) / static_cast<float>(kBandSegs);
+    for (int seg = 0; seg < kBandSegs; ++seg) {
+        float f0 = static_cast<float>(seg) / static_cast<float>(kBandSegs);
+        float f1 = static_cast<float>(seg + 1) / static_cast<float>(kBandSegs);
         float u0 = uC + (1.0f - uC) * f0;
         float u1 = uC + (1.0f - uC) * f1;
         float tw0 = halfWFull * (1.0f - f0);
@@ -821,7 +824,7 @@ static void __cdecl RenderCustomFinishEffect_Impl() {
     if (g_finishEffect == 1u) {
         RenderMobileFinishEffect(dev, curFrame, theme, t);
     } else if (g_finishEffect == 2u) {
-        RenderJavaFinishEffect(dev, curFrame, theme, t);
+        RenderJavaFinishEffect(dev, theme, t);
     }
 }
 

@@ -22,6 +22,7 @@ uint8_t g_timeFmt     = 0;
 uint8_t g_skipIntro   = 0;
 uint8_t g_musicStart  = 0;
 uint8_t g_musicPlaylist = 0; // 0=pc, 1=java
+uint8_t g_muteUnfocused = 0; // 0=off, 1=on
 uint8_t g_prismVfx    = 1;
 uint8_t g_chromaAb    = 1;
 int32_t g_aaSamples   = -1; // sentinel until loaded/migrated
@@ -281,6 +282,7 @@ EDGE_STATIC_WSTR(g_wstrTimeFmt,   "time format");
 EDGE_STATIC_WSTR(g_wstrSkipIntro, "skip intro");
 EDGE_STATIC_WSTR(g_wstrMusicStart,   "music start");
 EDGE_STATIC_WSTR(g_wstrMusicPlaylist, "music playlist");
+EDGE_STATIC_WSTR(g_wstrMuteUnfocused, "mute when unfocused");
 EDGE_STATIC_WSTR(g_wstrTimer,        "timer");
 EDGE_STATIC_WSTR(g_wstrTimerType,    "type");
 EDGE_STATIC_WSTR(g_wstrTimerSizeLbl, "size");
@@ -377,6 +379,7 @@ enum OptItem : int {
     OPT_MUSIC,
     OPT_MUSIC_START,
     OPT_MUSIC_PLAYLIST,
+    OPT_MUTE_UNFOCUSED,
     OPT_UP_KEY,
     OPT_SKIP_INTRO,
     OPT_TIME_FMT,
@@ -804,6 +807,7 @@ static void SaveModSettings() {
     uint8_t skipIntro = (g_skipIntro != 0) ? 1u : 0u;
     uint8_t musicStart = (g_musicStart != 0) ? 1u : 0u;
     uint8_t musicPlaylist = (g_musicPlaylist != 0) ? 1u : 0u;
+    uint8_t muteUnfocused = (g_muteUnfocused != 0) ? 1u : 0u;
     uint8_t prismVfx = (g_prismVfx <= 3u) ? g_prismVfx : 1u;
     uint8_t chromaAb = (g_chromaAb != 0) ? 1u : 0u;
     int32_t aaSamples = (g_aaSamples >= 0 && g_aaSamples <= 16) ? g_aaSamples : 0;
@@ -847,6 +851,7 @@ static void SaveModSettings() {
     writeInt("skip_intro", skipIntro);
     writeInt("music_start", musicStart);
     writeInt("music_playlist", musicPlaylist);
+    writeInt("mute_unfocused", muteUnfocused);
     writeInt("prism_vfx", prismVfx);
     writeInt("chroma_ab", chromaAb);
     writeInt("aa_samples", aaSamples);
@@ -971,7 +976,7 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
     bool inEdgeModSec = false;
     int32_t schemaVer = 0;
     uint32_t seenMask = 0;
-    constexpr uint32_t kAllModKeysMask = (1u << 22) - 1u;
+    constexpr uint32_t kAllModKeysMask = (1u << 23) - 1u;
 
     while (pos < data.size()) {
         size_t nl = data.find('\n', pos);
@@ -1077,6 +1082,11 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
             if (ParseAsciiInt(vP, vE, &iv)) {
                 g_musicPlaylist = (iv != 0) ? 1u : 0u;
                 seenMask |= (1u << 11);
+            }
+        } else if (AsciiEqIc(kP, kE, "mute_unfocused")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_muteUnfocused = (iv != 0) ? 1u : 0u;
+                seenMask |= (1u << 22);
             }
         } else if (AsciiEqIc(kP, kE, "prism_vfx")) {
             if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 3) {
@@ -1306,6 +1316,7 @@ static void LoadModSettingsOnStartup_Impl(uint8_t* userSettings) {
     g_skipIntro     = 0;
     g_musicStart    = 0;
     g_musicPlaylist = 0;
+    g_muteUnfocused = 0;
     g_prismVfx      = legacyFx ? 1u : 0u;
     g_chromaAb      = legacyFx ? 1u : 0u;
     g_aaSamples     = GetLegacyDefaultAa(legacyFx);
@@ -1689,6 +1700,16 @@ static void MusicPlaylistAction_Impl(int sfxId) {
     OnMusicPlaylistChanged();
 }
 
+static void MuteUnfocusedAction_Impl(int sfxId) {
+    uint8_t* sm = GetScreenMgr();
+    g_muteUnfocused ^= 1u;
+    if (sm != nullptr && sfxId > 0) {
+        Game_PlaySfx(sm, sfxId);
+    }
+    SaveModSettings();
+    SyncFocusAudioMute();
+}
+
 // ------------------------------------------------------------------
 // 3. Nested Options & Pause Page 1 state, dispatch, hitTest & rendering
 // ------------------------------------------------------------------
@@ -1764,8 +1785,9 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         outItems[1] = OPT_MUSIC;
         outItems[2] = OPT_MUSIC_START;
         outItems[3] = OPT_MUSIC_PLAYLIST;
-        outItems[4] = OPT_BACK;
-        return 5;
+        outItems[4] = OPT_MUTE_UNFOCUSED;
+        outItems[5] = OPT_BACK;
+        return 6;
     case OPT_CAT_UI:
         outItems[0] = OPT_TIME_FMT;
         outItems[1] = OPT_EDGE_TIMER;
@@ -1828,6 +1850,7 @@ static bool IsOptItemAdjustable(OptItem item) {
     case OPT_MUSIC:
     case OPT_MUSIC_START:
     case OPT_MUSIC_PLAYLIST:
+    case OPT_MUTE_UNFOCUSED:
     case OPT_UP_KEY:
     case OPT_SKIP_INTRO:
     case OPT_TIME_FMT:
@@ -1879,6 +1902,7 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_COLOR_THEME:      return &g_wstrColorTheme;
     case OPT_MUSIC_START:      return &g_wstrMusicStart;
     case OPT_MUSIC_PLAYLIST:   return &g_wstrMusicPlaylist;
+    case OPT_MUTE_UNFOCUSED:   return &g_wstrMuteUnfocused;
     case OPT_SKIP_INTRO:       return &g_wstrSkipIntro;
     case OPT_TIME_FMT:         return &g_wstrTimeFmt;
     case OPT_EDGE_TIMER:       return &g_wstrEdgeTimer;
@@ -1918,6 +1942,7 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_FINISH_PLATFORM:
     case OPT_MUSIC_START:
     case OPT_MUSIC_PLAYLIST:
+    case OPT_MUTE_UNFOCUSED:
     case OPT_UP_KEY:
     case OPT_SKIP_INTRO:
     case OPT_TIME_FMT:
@@ -2009,6 +2034,7 @@ static int GetToggleState(OptItem item) {
     case OPT_FINISH_PLATFORM: return g_finishPlatform ? 1 : 0;
     case OPT_MUSIC_START:     return g_musicStart ? 1 : 0;
     case OPT_MUSIC_PLAYLIST:  return g_musicPlaylist ? 1 : 0;
+    case OPT_MUTE_UNFOCUSED:  return g_muteUnfocused ? 1 : 0;
     case OPT_UP_KEY:      return (sm != nullptr && sm[0x2b4] != 0) ? 1 : 0;
     case OPT_SKIP_INTRO:  return g_skipIntro ? 1 : 0;
     case OPT_TIME_FMT:    return g_timeFmt ? 1 : 0;
@@ -2542,6 +2568,10 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
         return g_musicStart ? &g_wstrFall : &g_wstrLand;
     case OPT_MUSIC_PLAYLIST:
         return (g_musicPlaylist != 0) ? &g_wstrJava : &g_wstrPc;
+    case OPT_MUTE_UNFOCUSED:
+        Game_GetLocalizedWString(tmp, g_muteUnfocused ? 0xb : 0xc);
+        *outFreeHeap = true;
+        return tmp;
     case OPT_UP_KEY: {
         uint8_t upVal = (sm != nullptr) ? sm[0x2b4] : 0;
         Game_GetLocalizedWString(tmp, (upVal != 0) ? 0x44 : 0x43);
@@ -2610,6 +2640,7 @@ static void ExecuteOptToggle(OptItem item, int sfxId) {
     case OPT_FINISH_PLATFORM: FinishPlatformAction_Impl(sfxId); break;
     case OPT_MUSIC_START:     MusicStartAction_Impl(sfxId); break;
     case OPT_MUSIC_PLAYLIST:  MusicPlaylistAction_Impl(sfxId); break;
+    case OPT_MUTE_UNFOCUSED:  MuteUnfocusedAction_Impl(sfxId); break;
     case OPT_UP_KEY:          ToggleUpKeyWithSfx(sfxId); break;
     case OPT_SKIP_INTRO:      SkipIntroAction_Impl(sfxId); break;
     case OPT_TIME_FMT:        TimeFmtAction_Impl(sfxId); break;

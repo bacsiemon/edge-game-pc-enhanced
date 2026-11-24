@@ -21,6 +21,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 | **Audio**       | `music`                | `0`..`100`                                                                       | slider            | Live volume preview while dragging (default `100`)                                                                 |
 | **Audio**       | `music start`          | `land`, `fall`                                                                   | toggle            | Instant 2-state switch                                                                                             |
 | **Audio**       | `music playlist`       | `pc`, `java`                                                                     | toggle            | Live toggle backed by `music/playlist.xml` (`pc` default, saved in `edgemod_settings.ini` under `music_playlist`) |
+| **Audio**       | `mute when unfocused`  | `off`, `on`                                                                      | toggle            | Mutes SFX and music while window is unfocused/minimized (`off` default, saved under `mute_unfocused`)              |
 | **UI**          | `time format`          | `def`, `new`                                                                     | toggle            | Instant 2-state switch                                                                                             |
 | **UI**          | `edge timer`           | `2D`, `2D scaled`, `3D`                                                          | popup             | `2D` (default), `2D scaled` (scales to camera zoom level), or `3D` (Android world-space 3D edge timer)             |
 | **UI**          | `timer`                | *(opens **Timer** submenu)*                                                      | submenu (`>`)     | Nested 3rd-level category                                                                                          |
@@ -45,7 +46,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 
 ## Control Behavior Guidelines
 
-### 1. Toggles (9 items)
+### 1. Toggles (10 items)
 
 - **Display:** 2 dots under the value. Lighter dot indicates the selected option.
 - **Interaction:** Click / Enter / Left / Right toggles immediately and saves, playing hover SFX (`2`).

@@ -34,7 +34,43 @@ static void __declspec(naked) hk_MaterialApplyTexTransform() {
     }
 }
 
+static bool g_windowFocused = true;
+static bool g_focusMuteApplied = false;
+
+static HWND GetGameHwnd() {
+    HWND hwnd = *reinterpret_cast<HWND*>(0x5f8bc8);
+    if (hwnd == nullptr) {
+        hwnd = reinterpret_cast<HWND(__cdecl*)()>(0x414820)();
+    }
+    return hwnd;
+}
+
+static bool QueryWindowFocused(HWND hwnd) {
+    if (hwnd == nullptr) {
+        hwnd = GetGameHwnd();
+    }
+    if (hwnd == nullptr) return true;
+    if (IsIconic(hwnd)) return false;
+    HWND fg = GetForegroundWindow();
+    if (fg == nullptr) return false;
+    if (fg == hwnd) return true;
+    DWORD fgPid = 0;
+    GetWindowThreadProcessId(fg, &fgPid);
+    return fgPid == GetCurrentProcessId();
+}
+
+static bool IsAudioMutedByFocus() {
+    return (g_muteUnfocused != 0) && !g_windowFocused;
+}
+
 static void __stdcall RendererBeginSceneTexFlags_Impl(void* dev) {
+    if (g_muteUnfocused != 0 || g_focusMuteApplied) {
+        bool focused = QueryWindowFocused(nullptr);
+        if (focused != g_windowFocused) {
+            g_windowFocused = focused;
+        }
+        SyncFocusAudioMute();
+    }
     if (dev == nullptr) return;
     using SetTssFn = HRESULT(__stdcall*)(void*, uint32_t, uint32_t, uint32_t);
     auto** vt = *reinterpret_cast<void***>(dev);
@@ -78,7 +114,7 @@ static void ApplySfxVolume(int sfxVol) {
     sfxVol = ClampVol(sfxVol);
     uint8_t* ap = GetAudioPlayer();
     if (ap != nullptr) {
-        float fVol = static_cast<float>(static_cast<double>(sfxVol) / 100.0);
+        float fVol = IsAudioMutedByFocus() ? 0.0f : static_cast<float>(static_cast<double>(sfxVol) / 100.0);
         using SetVolFn = void(__thiscall*)(void*, int, float);
         reinterpret_cast<SetVolFn>(0x474480)(ap, 0, fVol);
     }
@@ -127,6 +163,7 @@ static void __cdecl MusicVolAction_Impl() {
 }
 
 static float __cdecl CalcScaledMusicVol(float rawVol) {
+    if (IsAudioMutedByFocus()) return 0.0f;
     uint8_t* sm = GetScreenMgr();
     int musVol = (sm != nullptr) ? ClampVol(*reinterpret_cast<int*>(sm + 0x2ac)) : 100;
     double scaleConst = *reinterpret_cast<const double*>(0x585490);
@@ -153,11 +190,49 @@ static void __cdecl ApplyVolOnLoad_Impl(uint8_t* sm) {
     int* pSfx = reinterpret_cast<int*>(sm + 0x2b0);
     *pMus = ClampVol(*pMus);
     *pSfx = ClampVol(*pSfx);
+    g_windowFocused = QueryWindowFocused(nullptr);
+    g_focusMuteApplied = IsAudioMutedByFocus();
     ApplySfxVolume(*pSfx);
     uint8_t* ap = GetAudioPlayer();
     if (ap != nullptr) {
         reinterpret_cast<void(__thiscall*)(void*, int, float)>(0x474480)(ap, 1, 0.0f);
     }
+}
+
+static LRESULT CALLBACK hk_GameWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    bool updateFocus = false;
+    bool focused = g_windowFocused;
+    switch (msg) {
+    case WM_ACTIVATEAPP:
+        updateFocus = true;
+        focused = (wParam != 0) && !IsIconic(hwnd);
+        break;
+    case WM_ACTIVATE: {
+        updateFocus = true;
+        bool active = (LOWORD(wParam) != WA_INACTIVE) && (HIWORD(wParam) == 0);
+        focused = active ? !IsIconic(hwnd) : QueryWindowFocused(hwnd);
+        break;
+    }
+    case WM_SETFOCUS:
+        updateFocus = true;
+        focused = !IsIconic(hwnd);
+        break;
+    case WM_KILLFOCUS:
+        updateFocus = true;
+        focused = QueryWindowFocused(hwnd);
+        break;
+    case WM_SIZE:
+        updateFocus = true;
+        focused = (wParam == SIZE_MINIMIZED) ? false : QueryWindowFocused(hwnd);
+        break;
+    default:
+        break;
+    }
+    if (updateFocus && focused != g_windowFocused) {
+        g_windowFocused = focused;
+        SyncFocusAudioMute();
+    }
+    return reinterpret_cast<WNDPROC>(0x44d4e0)(hwnd, msg, wParam, lParam);
 }
 
 static void __declspec(naked) hk_applyVolOnLoad() {
@@ -245,6 +320,24 @@ void SetMusicVolume(int newVol, int sfxId, bool save) {
     }
 }
 
+void SyncFocusAudioMute() {
+    bool shouldMute = IsAudioMutedByFocus();
+    if (shouldMute == g_focusMuteApplied) return;
+    uint8_t* ap = GetAudioPlayer();
+    if (ap == nullptr) return;
+    uint8_t* sm = GetScreenMgr();
+    if (sm == nullptr && !shouldMute) return;
+    g_focusMuteApplied = shouldMute;
+    int sfxVol = (sm != nullptr) ? ClampVol(*reinterpret_cast<int*>(sm + 0x2b0)) : 100;
+    ApplySfxVolume(sfxVol);
+    if (sm != nullptr) {
+        float trackVol = *reinterpret_cast<float*>(sm + 0x94);
+        reinterpret_cast<void(__thiscall*)(void*, int, float)>(0x474480)(ap, 1, trackVol);
+    } else {
+        reinterpret_cast<void(__thiscall*)(void*, int, float)>(0x474480)(ap, 1, 0.0f);
+    }
+}
+
 } // namespace edgemod
 
 void RegisterCoreFixes() {
@@ -286,5 +379,7 @@ void RegisterCoreFixes() {
 
         static const uint8_t expLoad[5] = {0xe8, 0x4c, 0x03, 0x01, 0x00};
         RegRelCall(0x482b7f, expLoad, 5, 5, &hk_applyVolOnLoad, 0x90);
+
+        RegU32(0x44d72f, 0x0044d4e0u, reinterpret_cast<uint32_t>(&hk_GameWndProc));
     }
 }

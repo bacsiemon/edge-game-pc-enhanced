@@ -31,6 +31,7 @@ Mod settings are stored separately in `%LocalAppData%\Two Tribes\EDGE\edgemod_se
 - **0–100 Volume Sliders**: Adjust **`sounds`** and **`music`** smoothly from `0` to `100` under **Options → Audio** (instead of just `off` / `on`), with working sound effects attenuation.
 - **Music Start Timing**: Choose **`land`** or **`fall`** under **Options → Audio → `music start`**.
 - **Java / PC OST Toggle (`music playlist`)**: Switch live between **`pc`** and **`java`** soundtracks under **Options → Audio → `music playlist`**, driven by an editable `music/playlist.xml` file (auto-generated on first launch if missing, with per-level auto-generation for custom or newly added levels) alongside extended custom music ID lookup (`music/<id>_*.ogg`).
+- **Mute When Unfocused (`mute when unfocused`)**: Toggle **`off`** or **`on`** under **Options → Audio → `mute when unfocused`** to automatically mute game sounds and music whenever the window loses focus or is minimized.
 
 ---
 

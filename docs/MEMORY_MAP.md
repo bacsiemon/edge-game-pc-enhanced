@@ -1,10 +1,10 @@
 # EDGE Binary Reference & Allocated Slots
 
-Verified against original Steam `edge.exe.bak` (`2,714,624` bytes, SHA-256 `b73a0df8e07d47f3d3e4b57642514033c00449c0070876513323c257c3cabe9b`).
+Verified against unmodified Steam `edge.exe` (`2,714,624` bytes, SHA-256 `b73a0df8e07d47f3d3e4b57642514033c00449c0070876513323c257c3cabe9b`).
 
 ## C++ Proxy DLL Architecture (`dll/` -> `XINPUT1_3.dll`)
 
-When deployed via `py build_dll.py --apply`, `edge.exe` stays 100% clean vanilla (`edge.exe.bak`, SHA-256 `b73a0df8e07d47f3d3e4b57642514033c00449c0070876513323c257c3cabe9b`), and `XINPUT1_3.dll` (built with 32-bit MSVC `cl.exe` x86) forwards all 11 standard/undocumented `XInput` ordinals (`2..8`, `100..103`) to `SysWOW64\xinput1_3.dll` while applying all `449` hooks in memory on `DLL_PROCESS_ATTACH`. None of the `.text` code caves (`Block A`..`Block Z`), `.rdata` slack (`0x5e2840..0x5e2a00`), or `.bss` page tail (`0x5fa800..0x5faa36`) are used; all mod globals, strings, jump tables, and logic live inside `XINPUT1_3.dll`:
+When deployed via `py build_dll.py --apply`, `edge.exe` stays 100% clean vanilla (`2,714,624` bytes, SHA-256 `b73a0df8e07d47f3d3e4b57642514033c00449c0070876513323c257c3cabe9b`), and `XINPUT1_3.dll` (built with 32-bit MSVC `cl.exe` x86) forwards all 11 standard/undocumented `XInput` ordinals (`2..8`, `100..103`) to `SysWOW64\xinput1_3.dll` while applying all `449` hooks in memory on `DLL_PROCESS_ATTACH`. None of the `.text` code caves (`Block A`..`Block Z`), `.rdata` slack (`0x5e2840..0x5e2a00`), or `.bss` page tail (`0x5fa800..0x5faa36`) are used; all mod globals, strings, jump tables, and logic live inside `XINPUT1_3.dll`:
 - `dll/xinput_proxy.cpp` & `dll/xinput1_3.def` & `dll/patch_utils.h`: XInput forwarding, `EdgeWString`/`EdgeString` helpers, `VirtualProtect` patch installer, and `EdgeMod_VerifyBuffer`.
 - `dll/mod_core_fixes.cpp`: Bonus-levels unlock, D3D9 texture-transform color fix, `0..100` Music/SFX volume (`"Default"` XACT category), and extended music ID resolution (`27..255` -> `music/<id>_*.ogg` / `music/<id>.ogg` via `0x473e60`).
 - `dll/mod_ui_scale_rt.cpp`: Physical vs virtual 2D scaling core and offscreen `uiRT` supersampling.

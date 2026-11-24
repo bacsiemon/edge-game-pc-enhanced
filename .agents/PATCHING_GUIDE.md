@@ -10,7 +10,7 @@ Active features and fixes live in the native 32-bit C++ proxy DLL (`dll/*.cpp`, 
    - Check `docs/MEMORY_MAP.md` for PE section mappings, `.rdata`/`.data`/`.bss` addresses, and verified engine structs/signatures.
    - Check `docs/RESEARCH_NOTES.md` before re-investigating D3D9 states, Steam community checks, UI scaling, or 30 Hz UI counters.
 2. **Inspect targeted functions**:
-   - Use `safe_disasm.py` (`edge.exe.bak` queries hit `.cache/bak_disasm.sqlite` after a one-time index build, and unaligned start addresses automatically snap to the enclosing instruction):
+   - Use `safe_disasm.py` (unmodified `edge.exe` queries hit `.cache/bak_disasm.sqlite` after a one-time index build, and unaligned start addresses automatically snap to the enclosing instruction):
      ```powershell
      py tools\safe_disasm.py 0x407eb0 0x407f00
      py tools\safe_disasm.py --func 0x47af27
@@ -24,7 +24,7 @@ Active features and fixes live in the native 32-bit C++ proxy DLL (`dll/*.cpp`, 
    - Add or update hook modules under `dll/*.cpp`, register patches with expected original bytes (`RegRelCall` / `RegRelJmp` / `RegBytes`) in `xinput_proxy.cpp` or module init, and wire new `.cpp` files into `DLL_SOURCES` in `build_dll.py`.
    - Always assert expected original bytes at hook sites so conflicts fail loudly in `verify_dll.exe` instead of corrupting machine code.
 5. **Stage, verify, and deploy**:
-   - Build and verify offline first (never edit `edge.exe.bak`; never overwrite a running `edge.exe`):
+   - Build and verify offline first (never modify `edge.exe` on disk; never overwrite a running `edge.exe`):
      ```powershell
      py build_dll.py --stage
      ```
@@ -41,18 +41,18 @@ Active features and fixes live in the native 32-bit C++ proxy DLL (`dll/*.cpp`, 
 Use the persistent disassembly cache under `.cache/` (auto-managed) instead of repeating slow WSL scans or loading large files into context:
 
 1. **Instant Disassembly Index (`.cache/bak_disasm.sqlite`)**:
-   - Indexes clean `edge.exe.bak` `.text` (`0x401000..0x5765a0`) once from `objdump -d --no-show-raw-insn -M intel` into SQLite table `insns(va INTEGER PRIMARY KEY, asm TEXT)`.
+   - Indexes unmodified `edge.exe` `.text` (`0x401000..0x5765a0`) once from `objdump -d --no-show-raw-insn -M intel` into SQLite table `insns(va INTEGER PRIMARY KEY, asm TEXT)`.
    - **Whole-function lookup (`--func`)**: When holding any xref or call site, pass `--func <va>` instead of guessing start/stop bounds:
      ```powershell
      py tools\safe_disasm.py --func 0x4a216c --max-lines 80
      ```
      This resolves `int3`-delimited function bounds from `.cache/bak_disasm.sqlite` without spawning `wsl`.
    - **Minimal line budgets**: Pass `--max-lines 40`..`80` when inspecting a single hook site; unaligned `<start>` VAs snap backward automatically.
-   - **Targeted xref/offset SQLite search**: To find every call site or struct-offset access in `edge.exe.bak` without disassembling functions, query `insns` with a tight `LIMIT`:
+   - **Targeted xref/offset SQLite search**: To find every call site or struct-offset access in unmodified `edge.exe` without disassembling functions, query `insns` with a tight `LIMIT`:
      ```powershell
      py -c 'import sqlite3; c=sqlite3.connect(".cache/bak_disasm.sqlite"); print([(hex(v),a) for v,a in c.execute("SELECT va, asm FROM insns WHERE asm LIKE ? LIMIT 20", ("%4a20f0%",))])'
      ```
-   - Only delete `.cache/bak_disasm.sqlite` if you replace `edge.exe.bak`.
+   - Only delete `.cache/bak_disasm.sqlite` if the target `edge.exe` binary changes.
 2. **Minimal File Reads**:
    - Check `docs/MEMORY_MAP.md` & `docs/RESEARCH_NOTES.md` first before inspecting binaries or DLL hook internals.
    - Search `dll/*.cpp` with `Select-String` / `rg -n` and read `<= 50`-line slices instead of full files; edit via file-edit tools (`edit_file`/`write_file`), never bash heredocs.

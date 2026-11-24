@@ -11,7 +11,7 @@ extern "C" __declspec(dllexport) int __cdecl EdgeMod_VerifierHost() {
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "Usage: verify_dll.exe <dll_path> <bak_exe_path> [ranges_out_txt]\n");
+        std::fprintf(stderr, "Usage: verify_dll.exe <dll_path> <edge_exe_path> [ranges_out_txt]\n");
         return 2;
     }
 

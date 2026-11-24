@@ -5,7 +5,6 @@ Automatically collapses int3 padding runs and resolves function bounds.
 """
 
 import argparse
-import hashlib
 import os
 import re
 import shutil
@@ -16,8 +15,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tools.common import (
     DEFAULT_GAME_DIR,
-    EXPECTED_BAK_SHA256,
-    EXPECTED_BAK_SIZE,
+    EXPECTED_EXE_SIZE,
+    find_clean_edge_exe,
+    is_clean_edge_exe,
     to_host_path,
     to_wsl_path,
 )
@@ -64,16 +64,6 @@ def parse_hex(val: str) -> int:
     return int(val, 16) if val.lower().startswith("0x") else int(val, 10)
 
 
-def _is_clean_bak(exe_path: str) -> bool:
-    if not os.path.isfile(exe_path) or os.path.getsize(exe_path) != EXPECTED_BAK_SIZE:
-        return False
-    h = hashlib.sha256()
-    with open(exe_path, "rb") as f:
-        while chunk := f.read(65536):
-            h.update(chunk)
-    return h.hexdigest() == EXPECTED_BAK_SHA256
-
-
 def _run_objdump(exe_path: str, start: int, stop: int) -> str:
     use_wsl = (os.name == "nt") and not shutil.which("objdump")
     target = to_wsl_path(exe_path) if use_wsl else exe_path
@@ -98,7 +88,7 @@ def _ensure_bak_index(bak_path: str) -> sqlite3.Connection:
     conn.execute("CREATE TABLE IF NOT EXISTS insns (va INTEGER PRIMARY KEY, asm TEXT NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)")
     row = conn.execute("SELECT v FROM meta WHERE k = 'size'").fetchone()
-    if row is not None and row[0] == str(EXPECTED_BAK_SIZE):
+    if row is not None and row[0] == str(EXPECTED_EXE_SIZE):
         has_rows = conn.execute("SELECT 1 FROM insns LIMIT 1").fetchone()
         if has_rows is not None:
             return conn
@@ -112,7 +102,7 @@ def _ensure_bak_index(bak_path: str) -> sqlite3.Connection:
     with conn:
         conn.execute("DELETE FROM insns")
         conn.executemany("INSERT INTO insns (va, asm) VALUES (?, ?)", rows)
-        conn.execute("INSERT OR REPLACE INTO meta (k, v) VALUES ('size', ?)", (str(EXPECTED_BAK_SIZE),))
+        conn.execute("INSERT OR REPLACE INTO meta (k, v) VALUES ('size', ?)", (str(EXPECTED_EXE_SIZE),))
     return conn
 
 
@@ -175,25 +165,27 @@ def _align_start_live(raw_lines: list[str], req_start: int) -> tuple[list[str], 
 
 
 def main() -> int:
-    default_exe = to_host_path(os.path.join(DEFAULT_GAME_DIR, "edge.exe.bak"))
+    game_dir = to_host_path(DEFAULT_GAME_DIR)
+    clean_default = find_clean_edge_exe(game_dir)
+    default_exe = str(clean_default) if clean_default else os.path.join(game_dir, "edge.exe")
     p = argparse.ArgumentParser(description="Cached disassembly viewer for EDGE .text functions.")
     p.add_argument("start", nargs="?", type=parse_hex, help="Start virtual address in .text (e.g. 0x407eb0)")
     p.add_argument("stop", nargs="?", type=parse_hex, help="Stop virtual address in .text (e.g. 0x407f00)")
-    p.add_argument("--func", type=parse_hex, help="Resolve enclosing function bounds in edge.exe.bak around VA")
-    p.add_argument("--exe", default=default_exe, help="Path to edge.exe.bak or staged executable")
+    p.add_argument("--func", type=parse_hex, help="Resolve enclosing function bounds in unmodified edge.exe around VA")
+    p.add_argument("--exe", default=default_exe, help="Path to unmodified edge.exe (or staged executable)")
     p.add_argument("--max-lines", type=int, default=0, help="Maximum instruction lines to print (0 = unlimited)")
     args = p.parse_args()
 
     max_lines = max(args.max_lines, 0)
     bak_conn: sqlite3.Connection | None = None
-    is_bak = _is_clean_bak(args.exe)
+    is_clean = is_clean_edge_exe(args.exe)
 
     if args.func is not None:
-        bak_path = args.exe if is_bak else default_exe
-        if not _is_clean_bak(bak_path):
-            print(f"Error: clean backup needed for --func index: {bak_path}", file=sys.stderr)
+        clean_path = args.exe if is_clean else default_exe
+        if not is_clean_edge_exe(clean_path):
+            print(f"Error: unmodified edge.exe needed for --func index: {clean_path}", file=sys.stderr)
             return 1
-        bak_conn = _ensure_bak_index(bak_path)
+        bak_conn = _ensure_bak_index(clean_path)
         start_va, stop_va = _resolve_func_bounds(bak_conn, args.func)
     else:
         if args.start is None or args.stop is None:
@@ -205,7 +197,7 @@ def main() -> int:
         return 1
 
     align_note: str | None = None
-    if is_bak and stop_va <= BAK_INDEX_STOP:
+    if is_clean and stop_va <= BAK_INDEX_STOP:
         if bak_conn is None:
             bak_conn = _ensure_bak_index(args.exe)
         actual_start = start_va

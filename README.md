@@ -43,20 +43,20 @@ To uninstall, disable any `.edgemod` packs in EdgeTool if used, then delete `XIN
 
 ## Building from Source
 
-**Requirements:** Windows, Python 3, Visual Studio 2022 (with C++ Desktop / x86 build tools), and an unmodified backup `edge.exe.bak` in your EDGE folder.
+**Requirements:** Windows, Python 3, Visual Studio 2022 (with C++ Desktop / x86 build tools), and an unmodified `edge.exe` in your EDGE folder.
 
 If EDGE is installed outside standard Steam library folders, set the `EDGE_GAME_DIR` environment variable or pass `--game-dir <path>`:
 
 ```powershell
-# Build XINPUT1_3.dll and verify against edge.exe.bak (updates releases\XINPUT1_3.dll)
+# Build XINPUT1_3.dll and verify against unmodified edge.exe (updates releases\XINPUT1_3.dll)
 py build_dll.py --stage
 
-# Verify file hashes of edge.exe.bak, edge.exe, and XINPUT1_3.dll
+# Verify file hashes of edge.exe and XINPUT1_3.dll
 py build_dll.py --verify
 
-# Close EDGE first, ensure edge.exe is clean, and install XINPUT1_3.dll
+# Close EDGE first, verify edge.exe is unmodified, and install XINPUT1_3.dll
 py build_dll.py --apply
 
-# Remove XINPUT1_3.dll and restore clean edge.exe
+# Remove XINPUT1_3.dll
 py build_dll.py --restore
 ```

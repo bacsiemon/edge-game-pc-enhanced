@@ -10,7 +10,15 @@ import struct
 import subprocess
 import sys
 
-from tools.common import DEFAULT_GAME_DIR, EXPECTED_BAK_SHA256, EXPECTED_BAK_SIZE, to_host_path
+from tools.common import (
+    DEFAULT_GAME_DIR,
+    EXPECTED_EXE_SHA256,
+    EXPECTED_EXE_SIZE,
+    find_clean_edge_exe,
+    is_clean_edge_exe,
+    sha256_file,
+    to_host_path,
+)
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent
 DLL_DIR = REPO_ROOT / "dll"
@@ -37,14 +45,6 @@ DLL_SOURCES = [
     "mod_ui_smooth_part1.cpp",
     "mod_ui_smooth_part2.cpp",
 ]
-
-
-def sha256_file(path: os.PathLike | str) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        while chunk := f.read(65536):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def is_edge_running() -> bool:
@@ -132,15 +132,15 @@ def check_exports(dll_path: pathlib.Path) -> list[tuple[int, str | None]]:
     return exports
 
 
-def verify_against_bak(bak_path: pathlib.Path) -> None:
+def verify_against_exe(exe_path: pathlib.Path) -> None:
     exports = check_exports(DLL_OUT)
     print(f"Verified PE32 exports ({len(exports)} ordinals present, including 2..8 & 100..103).")
 
-    res = subprocess.run([str(VERIFIER_OUT), str(DLL_OUT), str(bak_path), str(RANGES_TXT)], capture_output=True, text=True)
+    res = subprocess.run([str(VERIFIER_OUT), str(DLL_OUT), str(exe_path), str(RANGES_TXT)], capture_output=True, text=True)
     print(res.stdout.strip())
     if res.returncode != 0:
         print(res.stderr, file=sys.stderr)
-        raise RuntimeError("Offline expected-bytes verification against edge.exe.bak FAILED")
+        raise RuntimeError("Offline expected-bytes verification against unmodified edge.exe FAILED")
 
 
 def main() -> int:
@@ -148,10 +148,10 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Build, verify, and deploy XINPUT1_3.dll mod for EDGE.")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--stage", action="store_true", help="Build DLL and verify offline (default)")
-    mode.add_argument("--apply", action="store_true", help="Build, restore clean edge.exe from backup, and install XINPUT1_3.dll")
-    mode.add_argument("--restore", action="store_true", help="Remove XINPUT1_3.dll and restore clean edge.exe")
+    mode.add_argument("--apply", action="store_true", help="Build, verify unmodified edge.exe, and install XINPUT1_3.dll")
+    mode.add_argument("--restore", action="store_true", help="Remove XINPUT1_3.dll (and restore clean edge.exe if modified)")
     mode.add_argument("--verify", action="store_true", help="Verify deployed edge.exe + XINPUT1_3.dll hashes")
-    p.add_argument("--game-dir", default=str(default_game), help="Game directory containing edge.exe")
+    p.add_argument("--game-dir", default=str(default_game), help="Game directory containing unmodified edge.exe")
     args = p.parse_args()
 
     game_dir = pathlib.Path(args.game_dir)
@@ -160,7 +160,10 @@ def main() -> int:
     installed_dll = game_dir / "XINPUT1_3.dll"
 
     if args.verify:
-        for lbl, fp in [("backup", bak_path), ("edge.exe", exe_path), ("dll_built", DLL_OUT), ("dll_rel", RELEASE_DLL), ("dll_game", installed_dll)]:
+        entries = [("edge.exe", exe_path), ("dll_built", DLL_OUT), ("dll_rel", RELEASE_DLL), ("dll_game", installed_dll)]
+        if bak_path.exists():
+            entries.insert(1, ("backup", bak_path))
+        for lbl, fp in entries:
             if fp.exists():
                 print(f"{lbl:10s}: size={fp.stat().st_size} sha256={sha256_file(fp)} ({fp})")
             else:
@@ -171,20 +174,34 @@ def main() -> int:
         if is_edge_running():
             print("Error: edge.exe is currently running.", file=sys.stderr)
             return 1
-        assert bak_path.exists(), f"Missing {bak_path}"
-        shutil.copy2(bak_path, exe_path)
         if installed_dll.exists():
             installed_dll.unlink()
             print(f"Removed {installed_dll}")
-        print(f"Restored {exe_path} (sha256={sha256_file(exe_path)})")
-        return 0
+        if is_clean_edge_exe(exe_path):
+            print(f"Confirmed clean unmodified {exe_path} (sha256={EXPECTED_EXE_SHA256})")
+            return 0
+        if is_clean_edge_exe(bak_path):
+            shutil.copy2(bak_path, exe_path)
+            print(f"Restored {exe_path} from {bak_path} (sha256={sha256_file(exe_path)})")
+            return 0
+        print(
+            f"Error: {exe_path} is missing or modified and no clean edge.exe.bak fallback was found. "
+            "Verify game files in Steam.",
+            file=sys.stderr,
+        )
+        return 1
 
-    assert bak_path.exists(), f"Missing {bak_path}"
-    assert sha256_file(bak_path) == EXPECTED_BAK_SHA256, "edge.exe.bak SHA-256 mismatch"
-    assert bak_path.stat().st_size == EXPECTED_BAK_SIZE
+    clean_exe = find_clean_edge_exe(game_dir)
+    if clean_exe is None:
+        print(
+            f"Error: unmodified edge.exe ({EXPECTED_EXE_SIZE} bytes, sha256={EXPECTED_EXE_SHA256}) "
+            f"not found in {game_dir}. Verify game files in Steam.",
+            file=sys.stderr,
+        )
+        return 1
 
     compile_dll_and_verifier()
-    verify_against_bak(bak_path)
+    verify_against_exe(clean_exe)
     RELEASE_DLL.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(DLL_OUT, RELEASE_DLL)
     print(f"Updated release {RELEASE_DLL}")
@@ -193,9 +210,16 @@ def main() -> int:
         if is_edge_running():
             print("Error: edge.exe is currently running. Close EDGE before --apply.", file=sys.stderr)
             return 1
-        if sha256_file(exe_path) != EXPECTED_BAK_SHA256:
-            shutil.copy2(bak_path, exe_path)
-            print(f"Restored clean vanilla {exe_path} (sha256={sha256_file(exe_path)})")
+        if not is_clean_edge_exe(exe_path):
+            if is_clean_edge_exe(bak_path):
+                shutil.copy2(bak_path, exe_path)
+                print(f"Restored clean vanilla {exe_path} (sha256={sha256_file(exe_path)})")
+            else:
+                print(
+                    f"Error: {exe_path} is missing or modified. Verify game files in Steam before --apply.",
+                    file=sys.stderr,
+                )
+                return 1
         shutil.copy2(DLL_OUT, installed_dll)
         print(f"Installed {installed_dll} ({installed_dll.stat().st_size} bytes, sha256={sha256_file(installed_dll)})")
     else:

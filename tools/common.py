@@ -1,8 +1,10 @@
+import hashlib
 import os
+import pathlib
 import re
 
-EXPECTED_BAK_SIZE = 2714624
-EXPECTED_BAK_SHA256 = "b73a0df8e07d47f3d3e4b57642514033c00449c0070876513323c257c3cabe9b"
+EXPECTED_EXE_SIZE = 2714624
+EXPECTED_EXE_SHA256 = "b73a0df8e07d47f3d3e4b57642514033c00449c0070876513323c257c3cabe9b"
 
 
 def to_host_path(win_path: str) -> str:
@@ -26,6 +28,29 @@ def to_wsl_path(path: str) -> str:
     return abs_p.replace("\\", "/")
 
 
+def sha256_file(path: os.PathLike | str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def is_clean_edge_exe(path: os.PathLike | str) -> bool:
+    p = pathlib.Path(path)
+    return p.is_file() and p.stat().st_size == EXPECTED_EXE_SIZE and sha256_file(p) == EXPECTED_EXE_SHA256
+
+
+def find_clean_edge_exe(game_dir: os.PathLike | str) -> pathlib.Path | None:
+    """Locate an unmodified EDGE executable in `game_dir` (`edge.exe` first, optional `edge.exe.bak` fallback)."""
+    gd = pathlib.Path(game_dir)
+    for name in ("edge.exe", "edge.exe.bak"):
+        cand = gd / name
+        if is_clean_edge_exe(cand):
+            return cand
+    return None
+
+
 def resolve_default_game_dir() -> str:
     """Resolve the EDGE installation folder from EDGE_GAME_DIR or common Steam library paths."""
     env_dir = os.environ.get("EDGE_GAME_DIR", "").strip()
@@ -39,8 +64,8 @@ def resolve_default_game_dir() -> str:
     ]
     for candidate in candidates:
         host_dir = to_host_path(candidate)
-        if os.path.isfile(os.path.join(host_dir, "edge.exe.bak")) or os.path.isfile(
-            os.path.join(host_dir, "edge.exe")
+        if os.path.isfile(os.path.join(host_dir, "edge.exe")) or os.path.isfile(
+            os.path.join(host_dir, "edge.exe.bak")
         ):
             return candidate
     return candidates[0]

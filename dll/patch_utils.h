@@ -87,7 +87,7 @@ inline uint8_t* GetAudioPlayer() { return *reinterpret_cast<uint8_t**>(0x5f903c)
 inline uint8_t* GetLevel() { return *reinterpret_cast<uint8_t**>(0x5f9040); }
 inline uint8_t* GetMatrixStack() { return *reinterpret_cast<uint8_t**>(0x5f87d0); }
 
-// PE VA <-> file offset mapper for offline verification against edge.exe.bak
+// PE VA <-> file offset mapper for offline verification against unmodified edge.exe
 inline bool VaToFileOffset(uint32_t va, uint32_t* outOff) {
     if (va >= 0x401000 && va < 0x576600) {
         *outOff = (va - 0x401000) + 0x400;

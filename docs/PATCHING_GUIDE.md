@@ -2,12 +2,12 @@
 
 Fast workflow for adding or modifying features/fixes in this repository cleanly and reliably.
 
-## Fast 7-Step Workflow
+## Fast Workflow
 
-> **Note**: Active features and fixes live in the native 32-bit C++ proxy DLL (`dll/*.cpp`, built and verified with `py build_dll.py --stage`, `--apply`, and `--verify`), which avoids code-cave, `.rdata`, and `.bss` slot limits. Steps 4–6 below also describe the legacy static binary patcher (`patches/*.py` / `patch_edge.py` / `find_free_slots.py`) kept for cross-check reference.
+Active features and fixes live in the native 32-bit C++ proxy DLL (`dll/*.cpp`, built and verified with `py build_dll.py --stage`, `--apply`, and `--verify`), which applies runtime hooks in memory and avoids code-cave, `.rdata`, and `.bss` slot limits.
 
 1. **Read known maps first**:
-   - Check `docs/MEMORY_MAP.md` for PE section mappings, allocated padding slots (`Block A`..`E`, `0x5765b0`), `.rdata`/`.bss` addresses, and verified engine structs/signatures.
+   - Check `docs/MEMORY_MAP.md` for PE section mappings, `.rdata`/`.data`/`.bss` addresses, and verified engine structs/signatures.
    - Check `docs/RESEARCH_NOTES.md` before re-investigating D3D9 states, Steam community checks, UI scaling, or 30 Hz UI counters.
 2. **Inspect targeted functions**:
    - Use `safe_disasm.py` (`edge.exe.bak` queries hit `.cache/bak_disasm.sqlite` after a one-time index build, and unaligned start addresses automatically snap to the enclosing instruction):
@@ -20,41 +20,25 @@ Fast workflow for adding or modifying features/fixes in this repository cleanly 
    - Config: `%LocalAppData%\Two Tribes\EDGE\settings.ini`
    - User save JSON: `%LocalAppData%\Two Tribes\EDGE\local_savedata.ttsav`
    - Crash minidumps: `<EDGE_GAME_DIR>\edge_*_crash_*.mdmp` (parse `ExceptionStream` = 6 and `MemoryListStream` = 5 in Python `struct` to get exact `EIP`/`ESP`/`EBP` and stack words).
-4. **Allocate code, data, and `.bss` safely**:
-   - Check remaining headroom in existing blocks before claiming a new slot:
+4. **Write clean modular C++ hooks**:
+   - Add or update hook modules under `dll/*.cpp`, register patches with expected original bytes (`RegRelCall` / `RegRelJmp` / `RegBytes`) in `xinput_proxy.cpp` or module init, and wire new `.cpp` files into `DLL_SOURCES` in `build_dll.py`.
+   - Always assert expected original bytes at hook sites so conflicts fail loudly in `verify_dll.exe` instead of corrupting machine code.
+5. **Stage, verify, and deploy**:
+   - Build and verify offline first (never edit `edge.exe.bak`; never overwrite a running `edge.exe`):
      ```powershell
-     py tools\find_free_slots.py
+     py build_dll.py --stage
      ```
-   - If you need a new `.text` region, find unused functions or alignment runs and verify zero external callers/pointers against clean `edge.exe.bak`:
+   - If `edge.exe` is running when deploying, close it cleanly first (falling back to `Stop-Process` if needed), run `--apply` and `--verify`, and launch/reopen EDGE via `steam://rungameid/38740`; verify it runs cleanly without crashing:
      ```powershell
-     py tools\find_free_slots.py --scan-padding 64
-     py tools\find_free_slots.py --check-refs 0xSTART 0xEND
+     py build_dll.py --apply
+     py build_dll.py --verify
      ```
-   - Also check unaligned/overlapping byte references, surrounding base-struct arrays, and non-zero initial bytes in `edge.exe.bak` before allocating `.data`/`.bss` globals (or place runtime-initialized `.bss` globals in the unreferenced page-tail beyond `0x5fa7cc` inside `.data`'s 4KB page `< 0x5fb000`).
-5. **Write clean symbolic patches**:
-   - Put reusable helpers or feature modules under `patches/` using `assemble_at`, `link_block_with_symbols`, `expect_replace`, and `put_bytes(..., budget=...)` from `patches/common.py`.
-   - Always assert expected original bytes at inline hook sites via `expect_replace` so conflicts fail loudly at build time instead of corrupting machine code.
-   - Wire new patch toggles cleanly into `patch_edge.py`.
-   - Zero-fill or `0xcc`-pad freed/unused regions before writing assembled blocks.
-6. **Stage, verify, and deploy**:
-   - Build a staged image first (never edit `edge.exe.bak`; never overwrite a running `edge.exe`):
-     ```powershell
-     py patch_edge.py --stage
-     py tools\safe_disasm.py 0x484c10 0x484e5f --exe edge_patched_staged.exe
-     ```
-   - If `edge.exe` is running when deploying, automatically close it cleanly first (falling back to `Stop-Process` if needed), run `--apply` and `--verify`, and launch/reopen EDGE via `steam://rungameid/38740`; verify it runs fine without crashing and keep it open if it does:
-     ```powershell
-     py patch_edge.py --apply
-     py patch_edge.py --verify
-     ```
-   - Clean up temporary staged executables once verified/deployed unless kept intentionally.
-   - `assemble_at` and `link_block_with_symbols` cache compiled bytes and symbol maps in `.cache/asm_cache.sqlite` (and batch WSL binutils calls), so unchanged patch blocks rebuild in `< 1` second.
-7. **Update the markdown if needed**:
+6. **Update the markdown if needed**:
    - Whenever adding or modifying features, options, DLL modules, save/INI keys, or newly verified engine addresses/structs, update `README.md`, `docs/MEMORY_MAP.md`, `docs/RESEARCH_NOTES.md`, and `docs/OPTIONS_UI.md` so the documentation stays in sync.
 
-## Fast & Token-Efficient Usage (Caches & Search Habits)
+## Fast & Token-Efficient Usage (Cache & Search Habits)
 
-Use the persistent caches under `.cache/` (auto-managed) instead of repeating slow WSL scans or loading large files into context:
+Use the persistent disassembly cache under `.cache/` (auto-managed) instead of repeating slow WSL scans or loading large files into context:
 
 1. **Instant Disassembly Index (`.cache/bak_disasm.sqlite`)**:
    - Indexes clean `edge.exe.bak` `.text` (`0x401000..0x5765a0`) once from `objdump -d --no-show-raw-insn -M intel` into SQLite table `insns(va INTEGER PRIMARY KEY, asm TEXT)`.
@@ -63,20 +47,15 @@ Use the persistent caches under `.cache/` (auto-managed) instead of repeating sl
      py tools\safe_disasm.py --func 0x4a216c --max-lines 80
      ```
      This resolves `int3`-delimited function bounds from `.cache/bak_disasm.sqlite` without spawning `wsl`.
-   - **Minimal line budgets**: Pass `--max-lines 40`..`80` when inspecting a single hook site; unaligned `<start>` VAs snap backward automatically (both on `.bak` via `.cache/bak_disasm.sqlite` and on `--exe edge_patched_staged.exe` via live alignment).
+   - **Minimal line budgets**: Pass `--max-lines 40`..`80` when inspecting a single hook site; unaligned `<start>` VAs snap backward automatically.
    - **Targeted xref/offset SQLite search**: To find every call site or struct-offset access in `edge.exe.bak` without disassembling functions, query `insns` with a tight `LIMIT`:
      ```powershell
      py -c 'import sqlite3; c=sqlite3.connect(".cache/bak_disasm.sqlite"); print([(hex(v),a) for v,a in c.execute("SELECT va, asm FROM insns WHERE asm LIKE ? LIMIT 20", ("%4a20f0%",))])'
      ```
-2. **Incremental Assembly Cache (`.cache/asm_cache.sqlite`)**:
-   - `assemble_at` and `link_block_with_symbols` in `patches/common.py` key cached outputs by SHA-256 of `(mode, va, equ_defs + asm_lines)`.
-   - Cache misses run one batched `wsl sh -c` command (`as` + `ld` + `objcopy` + `nm`) instead of spawning WSL per tool.
-   - Test edits directly via `py patch_edge.py --stage`: only modified blocks recompile, while untouched blocks hit `.cache/asm_cache.sqlite` (`< 1`s warm). Avoid throwaway `py -c` assembler checks.
-   - Cache entries invalidate automatically when assembly lines or external symbols change; only delete `.cache/*.sqlite` if you replace `edge.exe.bak` or change the toolchain.
-3. **Minimal File & Slot Reads**:
-   - Check `docs/MEMORY_MAP.md` & `docs/RESEARCH_NOTES.md` first before inspecting binaries or patch internals.
-   - Run `py tools\find_free_slots.py` to check `free_tail` capacity in existing blocks before reading patch files or running `--scan-padding`.
-   - Search `patches/*.py` with `Select-String` / `rg -n` and read `<= 50`-line helper slices instead of full 1,000+ line modules; edit via file-edit tools (`edit_file`/`write_file`), never bash heredocs.
+   - Only delete `.cache/bak_disasm.sqlite` if you replace `edge.exe.bak`.
+2. **Minimal File Reads**:
+   - Check `docs/MEMORY_MAP.md` & `docs/RESEARCH_NOTES.md` first before inspecting binaries or DLL hook internals.
+   - Search `dll/*.cpp` with `Select-String` / `rg -n` and read `<= 50`-line slices instead of full files; edit via file-edit tools (`edit_file`/`write_file`), never bash heredocs.
 
 ## Engine-Specific x86 Pitfalls (Avoid Re-Learning These)
 

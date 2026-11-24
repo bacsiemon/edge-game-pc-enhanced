@@ -10,7 +10,7 @@ import struct
 import subprocess
 import sys
 
-from patches.common import DEFAULT_GAME_DIR, EXPECTED_BAK_SHA256, EXPECTED_BAK_SIZE, to_host_path
+from tools.common import DEFAULT_GAME_DIR, EXPECTED_BAK_SHA256, EXPECTED_BAK_SIZE, to_host_path
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent
 DLL_DIR = REPO_ROOT / "dll"
@@ -36,16 +36,6 @@ DLL_SOURCES = [
     "mod_color_theme.cpp",
     "mod_ui_smooth_part1.cpp",
     "mod_ui_smooth_part2.cpp",
-]
-
-# Diff regions in edge_patched_staged.exe that are intentionally superseded or unused in the DLL architecture:
-# - 0x4061b8..0x4061c5: NDS branch shortcut only needed to reclaim Block B (0x4061c8..0x406404)
-# - 0x4b2713..0x4b2727, 0x4ac9c3..0x4ac9d8: audio_volume redirected jump call sites; DLL hooks 0x494610/0x494650 directly
-# - 0x4b2908..0x4b299d: Options slide Y (`0x4b2907` starts 1B earlier in DLL over dead mov/lea; both land at 0x4b299d)
-SUPERSEDED_STATIC_RANGES = [
-    (0x4061b8, 0x4061c5),
-    (0x4b2713, 0x4b2727),
-    (0x4ac9c3, 0x4ac9d8),
 ]
 
 
@@ -142,7 +132,7 @@ def check_exports(dll_path: pathlib.Path) -> list[tuple[int, str | None]]:
     return exports
 
 
-def verify_against_bak_and_staged(bak_path: pathlib.Path, staged_path: pathlib.Path) -> None:
+def verify_against_bak(bak_path: pathlib.Path) -> None:
     exports = check_exports(DLL_OUT)
     print(f"Verified PE32 exports ({len(exports)} ordinals present, including 2..8 & 100..103).")
 
@@ -151,55 +141,6 @@ def verify_against_bak_and_staged(bak_path: pathlib.Path, staged_path: pathlib.P
     if res.returncode != 0:
         print(res.stderr, file=sys.stderr)
         raise RuntimeError("Offline expected-bytes verification against edge.exe.bak FAILED")
-
-    if not staged_path.exists():
-        print("Staged static EXE not present; skipping static-diff cross-check.")
-        return
-
-    reg_ranges = []
-    for line in RANGES_TXT.read_text().splitlines():
-        s_str, e_str = line.split()
-        reg_ranges.append((int(s_str, 16), int(e_str, 16)))
-
-    caves = [
-        (0x4061c8, 0x406404), (0x407e87, 0x408382), (0x412f60, 0x4130de), (0x41f220, 0x41f3ca),
-        (0x4234d0, 0x4235e0), (0x4248e0, 0x4249b2), (0x43b060, 0x43b1b8), (0x44bad0, 0x44bd20),
-        (0x44df40, 0x44e154), (0x453520, 0x4537a0), (0x453fa0, 0x4542cd), (0x45cc80, 0x45cd9d),
-        (0x45dc20, 0x45df90), (0x45eae0, 0x45edc2), (0x479010, 0x4791cb), (0x484c10, 0x484e5f),
-        (0x4f79c0, 0x4f7ad6), (0x4fa5d0, 0x4fa8f0), (0x4faa80, 0x4face0), (0x4fca10, 0x4fcc34),
-        (0x510d30, 0x510fe0), (0x511030, 0x5114b0), (0x51bdc0, 0x51bed5), (0x52c560, 0x52caa0),
-        (0x5347d0, 0x5348ec), (0x539770, 0x539a19), (0x541b10, 0x541c2c), (0x5423f0, 0x542750),
-        (0x5765b0, 0x576600), (0x5e2840, 0x5e2a00), (0x5f8730, 0x5f8744), (0x5f8798, 0x5f87a8),
-    ]
-
-    def off2va(off):
-        if 0x400 <= off < 0x175a00: return 0x401000 + (off - 0x400)
-        if 0x175a00 <= off < 0x1e1400: return 0x577000 + (off - 0x175a00)
-        if 0x1e1400 <= off < 0x1f6c00: return 0x5e3000 + (off - 0x1e1400)
-        return None
-
-    def in_cave(va):
-        return any(s <= va < e for s, e in caves)
-
-    bak = bak_path.read_bytes()
-    stg = staged_path.read_bytes()
-    uncovered = []
-    i = 0
-    n = len(bak)
-    while i < n:
-        if bak[i] != stg[i]:
-            va = off2va(i)
-            if va and not in_cave(va):
-                covered = any(rs <= va < re for rs, re in reg_ranges) or any(
-                    ss <= va < se for ss, se in SUPERSEDED_STATIC_RANGES
-                )
-                if not covered:
-                    uncovered.append(va)
-        i += 1
-    if uncovered:
-        print(f"ERROR: {len(uncovered)} static diff bytes not covered by DLL patches, e.g. {[hex(x) for x in uncovered[:15]]}")
-        raise RuntimeError("Coverage check failed")
-    print("Cross-check vs edge_patched_staged.exe: 100% of static non-cave patch regions covered.")
 
 
 def main() -> int:
@@ -217,7 +158,6 @@ def main() -> int:
     bak_path = game_dir / "edge.exe.bak"
     exe_path = game_dir / "edge.exe"
     installed_dll = game_dir / "XINPUT1_3.dll"
-    staged_exe = REPO_ROOT / "edge_patched_staged.exe"
 
     if args.verify:
         for lbl, fp in [("backup", bak_path), ("edge.exe", exe_path), ("dll_built", DLL_OUT), ("dll_rel", RELEASE_DLL), ("dll_game", installed_dll)]:
@@ -244,7 +184,7 @@ def main() -> int:
     assert bak_path.stat().st_size == EXPECTED_BAK_SIZE
 
     compile_dll_and_verifier()
-    verify_against_bak_and_staged(bak_path, staged_exe)
+    verify_against_bak(bak_path)
     RELEASE_DLL.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(DLL_OUT, RELEASE_DLL)
     print(f"Updated release {RELEASE_DLL}")

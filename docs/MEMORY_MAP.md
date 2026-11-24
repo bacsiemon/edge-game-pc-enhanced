@@ -13,7 +13,7 @@ When deployed via `py build_dll.py --apply`, `edge.exe` stays 100% clean vanilla
 - `dll/mod_color_theme.cpp`: Runtime Android (`EDGE-v4.0.1-full.apk` / `Edge-EX-v4.0.3-full.apk`) color theme (`colorTheme`): procedural `IDirect3DTexture9` replacement (`levelwall_1..4`, `planet_1..4`, `fallingplatform_1..4`, `switch*`), Android single-light + `1.0×` ambient cube lighting, unlit bumpers, and full-level-height `(heightTiles - 0.5) * 30` wall gradients across static level meshes, moving platforms, and bumpers.
 - `dll/mod_ui_smooth_part1.cpp` & `dll/mod_ui_smooth_part2.cpp`: 60/unlimited-FPS interpolation for menus, HUD, minimap, fades, rainbow highlights, `DebriefMenu`, `ScoresMenu`, `CreditsMenu`, `LevelSelectMenu`, `ConfirmExitGameMenu`, and Edge Time counters.
 
-The tables below document both the engine addresses/structs (used directly by the C++ DLL) and the legacy static PE slot allocations (used only if building with `patch_edge.py`).
+The tables below document both the engine addresses/structs (used directly by the C++ DLL) and the legacy static PE slot allocations (historical reference from the legacy static patcher).
 
 ## PE Sections (`va2off`)
 

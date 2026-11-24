@@ -14,7 +14,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from patches.common import (
+from tools.common import (
     DEFAULT_GAME_DIR,
     EXPECTED_BAK_SHA256,
     EXPECTED_BAK_SIZE,

@@ -3,7 +3,7 @@ name: edge-pc-patching
 description: >-
   Follows the established workflow, memory map, and build/verification pipeline
   when debugging, extending, or creating PC binary patches for EDGE inside
-  edge-pc-mod. Use when adding features, fixing bugs, or updating patch modules
+  edge-game-pc-enhanced. Use when adding features, fixing bugs, or updating patch modules
   in this repository.
 ---
 

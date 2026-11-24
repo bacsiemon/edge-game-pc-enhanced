@@ -1,4 +1,4 @@
-# EDGE PC Mod
+# EDGE PC Enhanced
 
 A drop-in enhancement mod (`XINPUT1_3.dll`) for the Steam PC version of **EDGE**. It applies all fixes and new options at runtime without permanently modifying `edge.exe`.
 

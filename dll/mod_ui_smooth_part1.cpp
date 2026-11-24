@@ -1124,11 +1124,17 @@ static void __declspec(naked) hk_subFade_4b1b87() {
     }
 }
 
+static uint32_t __cdecl GetSmoothSlotRainbow(int32_t frame) {
+    uint32_t col = ApplyMenuSlotRainbowStyle(GetSmoothMenuRainbow(frame));
+    g_rbTmp = col;
+    return col;
+}
+
 static void __declspec(naked) hk_rb_4b9b06() {
     __asm {
         mov ebx, eax
         push DWORD PTR [ebp - 0x68]
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov ecx, 0x4b9b21
         jmp ecx
@@ -1137,7 +1143,7 @@ static void __declspec(naked) hk_rb_4b9b06() {
 static void __declspec(naked) hk_rb_4b9b8b() {
     __asm {
         push ebx
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov ecx, eax
         mov eax, OFFSET g_rbTmp
@@ -1148,7 +1154,7 @@ static void __declspec(naked) hk_rb_4b9b8b() {
 static void __declspec(naked) hk_rb_4b9ca2() {
     __asm {
         push ebx
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov ecx, eax
         mov edx, 0x4b9cb8
@@ -1158,7 +1164,7 @@ static void __declspec(naked) hk_rb_4b9ca2() {
 static void __declspec(naked) hk_rb_4b9002() {
     __asm {
         push DWORD PTR [ebp - 0x68]
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov edx, eax
         mov edi, OFFSET g_rbTmp
@@ -1170,7 +1176,7 @@ static void __declspec(naked) hk_rb_4b90e3() {
     __asm {
         mov ebx, eax
         push DWORD PTR [ebp - 0x68]
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov ecx, eax
         mov edx, 0x4b90fe
@@ -1180,7 +1186,7 @@ static void __declspec(naked) hk_rb_4b90e3() {
 static void __declspec(naked) hk_rb_4b9171() {
     __asm {
         push DWORD PTR [ebp - 0x68]
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov edx, eax
         mov ecx, 0x4b918a
@@ -1190,7 +1196,7 @@ static void __declspec(naked) hk_rb_4b9171() {
 static void __declspec(naked) hk_rb_4b9238() {
     __asm {
         push DWORD PTR [ebp - 0x68]
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov ecx, 0x4b9251
         jmp ecx
@@ -1285,7 +1291,7 @@ static void __declspec(naked) hk_rb_4ad2d8() {
         mov eax, DWORD PTR [ebp - 0x54]
         lea eax, [eax + edi + 3]
         push eax
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov edx, eax
         mov ecx, 0x4ad2ef
@@ -1297,7 +1303,7 @@ static void __declspec(naked) hk_rb_4ae11c() {
         mov eax, DWORD PTR [ebp - 0x54]
         add eax, 3
         push eax
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov edx, eax
         mov ecx, 0x4ae132
@@ -1309,7 +1315,7 @@ static void __declspec(naked) hk_rb_4ae14d() {
         mov eax, DWORD PTR [ebp - 0x54]
         add eax, 3
         push eax
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov edx, eax
         mov ecx, 0x4ae163

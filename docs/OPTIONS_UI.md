@@ -58,7 +58,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
   - Shows all valid choices, marking the active choice and **highlighting the default value with a dot** (or `no` / `yes` with `no` focused by default for `reset score`).
 - **Interaction:**
   - **Click / Enter** on the row opens the anchored popup.
-  - **Up / Down / Mouse Hover + Enter / Click** picks a choice (or confirms/cancels for `reset score`), closes the popup, and saves.
+  - **Up / Down / Mouse Hover + Enter / Click** picks a choice (or confirms/cancels for `reset score`), closes the popup, and saves. Moving the mouse off-popup in mouse mode clears the choice highlight; pressing Up/Down/Enter restores the last highlighted choice first; hovered choices use subtle (`25%`) rainbow with a 2px rainbow border and switch to strong rainbow while pressed.
   - **Esc / Cancel / Click outside** closes without changing the value / without resetting.
   - **Left / Right** on the row (when popup is closed) quick-cycles setting popups as a shortcut (disabled on `reset score`).
 
@@ -68,7 +68,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
   - A bar under the value. Lighter portion indicates progress.
   - A **dot/tick marker** on the track highlights the default value.
 - **Interaction:**
-  - **Mouse:** Click anywhere on the track to jump, drag thumb to scrub (pointer stays captured even if cursor leaves the row vertically), and release to save. Value changes during scrubbing play hover SFX (`2`).
+  - **Mouse:** Click anywhere on the track to jump, drag thumb to scrub (pointer stays captured and row stays strong rainbow even if cursor leaves the row vertically), and release to save. Value changes during scrubbing play hover SFX (`2`).
   - **Keyboard / Gamepad:** Left / Right steps by preset or fixed increment (`5` for `sounds`/`music`, preset index for `prism vfx`/`ui scale`/`timer size`), playing hover SFX (`2`).
   - **Reset to default:** Right-click on the slider row or press `R` / `Backspace` / `Delete` (or gamepad reset button) to snap back to the default value.
   - **Special case (`ui scale`):** Update the displayed slider value while dragging/stepping, and call `ApplyUiScale` + `Game_SaveUserSettings` on mouse-up / Left-Right release (or cursor/focus change) without reverting `auto scale` to `off`.

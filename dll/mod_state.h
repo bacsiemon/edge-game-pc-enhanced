@@ -127,6 +127,12 @@ inline void Game_SetProjectionTransform(const void* mat) {
     reinterpret_cast<void(__thiscall*)(const void*, int)>(0x435780)(mat, 0);
 }
 
+inline void Game_DrawRainbowRectBorder(int frame, int x, int y, int w, int h, int thickness, int alpha) {
+    reinterpret_cast<void(__cdecl*)(int, int, int, int, int, int, int)>(0x495f30)(
+        frame, x, y, w, h, thickness, alpha
+    );
+}
+
 // Shared helpers callable from mod_ui_smooth_part2.cpp
 uint32_t __cdecl GetSmoothMenuRainbow(int frame);
 int __cdecl DrawTextAutoFit(
@@ -142,5 +148,22 @@ void OnMusicPlaylistChanged();
 float __cdecl ComputeEdgeTimerZoomScale(const uint8_t* ws, int32_t slot);
 void  __cdecl RenderEdgeTimer3D();
 void  __cdecl GetEdgeTimerSmoothState(const uint8_t* ws, int32_t slot, float* outEffTicks, float* outEffRise, uint32_t* outBaseRgb);
+
+// Menu hover state & helpers (mod_menu_hover.cpp)
+uint32_t __cdecl ApplyMenuSlotRainbowStyle(uint32_t rainbowRgb);
+bool     __cdecl IsCurrentMenuSlotVisible();
+bool     __cdecl IsCurrentMenuSlotPressed();
+int32_t  __cdecl GetLevelSelectHoveredTile();
+bool     __cdecl IsMenuInputKeyboardMode();
+void     __cdecl SetMenuInputKeyboardMode(bool isKeyboard);
+int32_t  __cdecl GetCurrentMenuRenderFrame();
+bool     __cdecl IsMenuRenderInteractive();
+
+// OptionsMenu / PauseMenu P1 layout & control queries (mod_menu_camera_options.cpp)
+int      __cdecl GetActiveOptionsCategory(bool inPause);
+int      __cdecl HitTestOptionsSlot(bool inPause, int mx, int my);
+bool     __cdecl IsOptionsPopupOpen(bool inPause);
+bool     __cdecl IsOptionsSliderDragging(bool inPause);
+bool     __cdecl IsOptionsMenuReadyForHover(const uint8_t* menuObj, bool inPause);
 
 } // namespace edgemod

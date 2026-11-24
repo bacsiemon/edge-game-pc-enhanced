@@ -417,6 +417,9 @@ struct OptUiState {
     int     popupRectH;
     int     popupItemH;
     int     popupPadY;
+    bool    popupSlotVisible;
+    bool    popupSlotPressed;
+    bool    popupNeedsInitialSync;
 
     bool    dragActive;
     bool    dragInPause;
@@ -1542,6 +1545,9 @@ static void CommitPendingUiScale() {
 
 static void ResetOptUiState(bool commitUiScale) {
     g_optUi.popupOpen = false;
+    g_optUi.popupSlotVisible = false;
+    g_optUi.popupSlotPressed = false;
+    g_optUi.popupNeedsInitialSync = false;
     g_optUi.dragActive = false;
     g_optUi.suppressNextClickAction = false;
     if (commitUiScale) {
@@ -1723,12 +1729,19 @@ static void OpenPopupForRow(OptItem item, int row, bool inPause) {
     CommitPendingUiScale();
     int cnt = GetPopupChoiceCount(item);
     if (cnt <= 0) return;
+    bool kbd = IsMenuInputKeyboardMode();
     g_optUi.popupOpen = true;
     g_optUi.popupInPause = inPause;
     g_optUi.popupItem = item;
     g_optUi.popupRow = row;
     g_optUi.popupChoiceCount = cnt;
     g_optUi.popupHighlight = GetPopupCurrentChoice(item);
+    g_optUi.popupItemH = 0;
+    g_optUi.popupSlotVisible = kbd;
+    g_optUi.popupSlotPressed = false;
+    g_optUi.popupNeedsInitialSync = !kbd;
+    g_optUi.lastMouseX = -99999;
+    g_optUi.lastMouseY = -99999;
     Game_PlaySfx(GetScreenMgr(), 0xc);
 }
 
@@ -2303,10 +2316,13 @@ static void DrawOptPopupOverlay(
 
     uint32_t brdCol = RgbToRgbaOpaque(0x3b3b3bu);
     uint32_t bgCol  = RgbToRgbaOpaque(0xffffffu);
-    uint32_t hiCol  = RgbToRgbaOpaque(hiBarRgb);
+    uint32_t popHiRgb = g_optUi.popupSlotPressed
+        ? hiBarRgb
+        : Game_ColorLerp(0xffffffu, hiBarRgb, 25);
+    uint32_t hiCol  = RgbToRgbaOpaque(popHiRgb);
     Game_DrawQuad(drawX - 2, popupY - 2, popupW + 4, popupH + 4, &brdCol);
     Game_DrawQuad(drawX, popupY, popupW, popupH, &bgCol);
-    if (g_optUi.popupHighlight >= 0 && g_optUi.popupHighlight < nChoices) {
+    if (g_optUi.popupSlotVisible && g_optUi.popupHighlight >= 0 && g_optUi.popupHighlight < nChoices) {
         Game_DrawQuad(drawX, popupY + padY + g_optUi.popupHighlight * itemH, popupW, itemH, &hiCol);
     }
 
@@ -2331,6 +2347,13 @@ static void DrawOptPopupOverlay(
         if (cFree) cTmp.free_if_heap();
     }
     *pFontCol = savedFontCol;
+
+    if (g_optUi.popupSlotVisible && g_optUi.popupHighlight >= 0 && g_optUi.popupHighlight < nChoices) {
+        Game_DrawRainbowRectBorder(
+            GetCurrentMenuRenderFrame(),
+            drawX, popupY + padY + g_optUi.popupHighlight * itemH, popupW, itemH, 2, 255
+        );
+    }
 }
 
 static void UpdateOptControlsPerFrame(bool inPause, int cat, int selRow, int valXScreen, int rightBoundScreen) {
@@ -2360,22 +2383,44 @@ static void UpdateOptControlsPerFrame(bool inPause, int cat, int selRow, int val
         CommitPendingUiScale();
     }
 
-    if (g_optUi.popupOpen && g_optUi.popupInPause == inPause && sm[0xa8] != 0) {
-        int mx = *reinterpret_cast<int*>(sm + 0xa0);
-        int my = *reinterpret_cast<int*>(sm + 0xa4);
-        if (mx != g_optUi.lastMouseX || my != g_optUi.lastMouseY) {
-            g_optUi.lastMouseX = mx;
-            g_optUi.lastMouseY = my;
-            if (g_optUi.popupItemH > 0 &&
+    if (g_optUi.popupOpen && g_optUi.popupInPause == inPause) {
+        if (sm[0xa8] != 0 && g_optUi.popupItemH > 0) {
+            int mx = *reinterpret_cast<int*>(sm + 0xa0);
+            int my = *reinterpret_cast<int*>(sm + 0xa4);
+            bool moved = (mx != g_optUi.lastMouseX || my != g_optUi.lastMouseY);
+            if (moved) {
+                g_optUi.lastMouseX = mx;
+                g_optUi.lastMouseY = my;
+                SetMenuInputKeyboardMode(false);
+            }
+            bool insidePopup =
                 mx >= g_optUi.popupRectX && mx < g_optUi.popupRectX + g_optUi.popupRectW &&
                 my >= g_optUi.popupRectY + g_optUi.popupPadY &&
-                my < g_optUi.popupRectY + g_optUi.popupRectH - g_optUi.popupPadY) {
-                int idx = (my - (g_optUi.popupRectY + g_optUi.popupPadY)) / g_optUi.popupItemH;
-                if (idx >= 0 && idx < g_optUi.popupChoiceCount && idx != g_optUi.popupHighlight) {
-                    g_optUi.popupHighlight = idx;
-                    Game_PlaySfx(sm, 2);
+                my < g_optUi.popupRectY + g_optUi.popupRectH - g_optUi.popupPadY;
+            if (moved || g_optUi.popupNeedsInitialSync) {
+                bool silent = g_optUi.popupNeedsInitialSync && !moved;
+                g_optUi.popupNeedsInitialSync = false;
+                if (insidePopup) {
+                    int idx = (my - (g_optUi.popupRectY + g_optUi.popupPadY)) / g_optUi.popupItemH;
+                    if (idx >= 0 && idx < g_optUi.popupChoiceCount) {
+                        bool changed = (!g_optUi.popupSlotVisible || idx != g_optUi.popupHighlight);
+                        g_optUi.popupHighlight = idx;
+                        g_optUi.popupSlotVisible = true;
+                        if (changed && !silent) {
+                            Game_PlaySfx(sm, 2);
+                        }
+                    }
+                } else if (!IsMenuInputKeyboardMode()) {
+                    g_optUi.popupSlotVisible = false;
                 }
             }
+            bool mouseDown = (sm[0] != 0 || sm[0xca] != 0);
+            g_optUi.popupSlotPressed = g_optUi.popupSlotVisible && mouseDown && insidePopup;
+        } else {
+            if (g_optUi.popupItemH > 0 && !IsMenuInputKeyboardMode() && sm[0] == 0 && sm[0xca] == 0) {
+                g_optUi.popupSlotVisible = false;
+            }
+            g_optUi.popupSlotPressed = false;
         }
     }
 
@@ -2383,7 +2428,7 @@ static void UpdateOptControlsPerFrame(bool inPause, int cat, int selRow, int val
     bool resetDown = ((GetAsyncKeyState('R') & 0x8000) != 0)
                   || ((GetAsyncKeyState(VK_BACK) & 0x8000) != 0)
                   || ((GetAsyncKeyState(VK_DELETE) & 0x8000) != 0);
-    if (resetDown && !g_optUi.prevResetKeyDown && !g_optUi.popupOpen && !g_optUi.dragActive) {
+    if (resetDown && !g_optUi.prevResetKeyDown && !g_optUi.popupOpen && !g_optUi.dragActive && IsCurrentMenuSlotVisible()) {
         OptItem items[kMaxOptRows];
         int nRows = GetOptItems(cat, inPause, items);
         if (selRow >= 0 && selRow < nRows && GetOptCtrlKind(items[selRow]) == CTRL_SLIDER) {
@@ -2411,11 +2456,18 @@ static int HandleOptMouseHitTest(
             py >= g_optUi.popupRectY && py < g_optUi.popupRectY + g_optUi.popupRectH) {
             int relY = py - (g_optUi.popupRectY + g_optUi.popupPadY);
             int idx = std::clamp(relY / g_optUi.popupItemH, 0, g_optUi.popupChoiceCount - 1);
-            if (idx != g_optUi.popupHighlight) {
-                g_optUi.popupHighlight = idx;
+            bool changed = (!g_optUi.popupSlotVisible || idx != g_optUi.popupHighlight);
+            g_optUi.popupHighlight = idx;
+            g_optUi.popupSlotVisible = true;
+            g_optUi.popupNeedsInitialSync = false;
+            g_optUi.popupSlotPressed = !isRelease;
+            if (isPress) {
+                SetMenuInputKeyboardMode(false);
+                g_optUi.suppressNextClickAction = false;
+            }
+            if (changed) {
                 Game_PlaySfx(sm, 2);
             }
-            if (isPress) g_optUi.suppressNextClickAction = false;
             return g_optUi.popupRow;
         }
         if (isPress) {
@@ -2562,10 +2614,11 @@ static int __cdecl OptionsHitTest_Impl(uint8_t* optionsMenu, const int* pt) {
     int rowH = kMainOptRowH;
     ComputeMainOptLayout(nRows, virtH, &stride, &backTopRel, &rowH);
 
+    int slotPad = (std::max)(0, (stride - rowH) / 2);
     int rowTops[kMaxOptRows];
     for (int row = 0; row < nRows; ++row) {
         int yRel = (row == backIdx) ? backTopRel : (0x56 + stride * row);
-        rowTops[row] = basePt[1] + yRel;
+        rowTops[row] = basePt[1] + yRel - slotPad;
     }
 
     int minX = basePt[0] + 2;
@@ -2575,7 +2628,7 @@ static int __cdecl OptionsHitTest_Impl(uint8_t* optionsMenu, const int* pt) {
     int& sel = *reinterpret_cast<int*>(optionsMenu + 0x10);
     int res = HandleOptMouseHitTest(
         false, g_mainOptCat, sel, pt,
-        nRows, items, rowTops, rowH,
+        nRows, items, rowTops, rowH + 2 * slotPad,
         minX, maxX, valXScreen, rightBoundScreen
     );
     g_optUi.mainSelRow = sel;
@@ -2715,19 +2768,38 @@ static void __cdecl OptionsUpdate_Impl(uint8_t* optionsMenu, float dt) {
         int nRows = GetOptRowCount(g_mainOptCat, false);
         if (g_optUi.popupOpen && !g_optUi.popupInPause) {
             if (sm[0xad] != 0) {
+                SetMenuInputKeyboardMode(true);
+                g_optUi.popupNeedsInitialSync = false;
+                g_optUi.popupSlotPressed = false;
                 Game_PlaySfx(sm, 2);
-                if (g_optUi.popupChoiceCount > 0) {
+                if (!g_optUi.popupSlotVisible) {
+                    g_optUi.popupSlotVisible = true;
+                } else if (g_optUi.popupChoiceCount > 0) {
                     g_optUi.popupHighlight = (g_optUi.popupHighlight + g_optUi.popupChoiceCount - 1) % g_optUi.popupChoiceCount;
                 }
             } else if (sm[0xb0] != 0) {
+                SetMenuInputKeyboardMode(true);
+                g_optUi.popupNeedsInitialSync = false;
+                g_optUi.popupSlotPressed = false;
                 Game_PlaySfx(sm, 2);
-                if (g_optUi.popupChoiceCount > 0) {
+                if (!g_optUi.popupSlotVisible) {
+                    g_optUi.popupSlotVisible = true;
+                } else if (g_optUi.popupChoiceCount > 0) {
                     g_optUi.popupHighlight = (g_optUi.popupHighlight + 1) % g_optUi.popupChoiceCount;
                 }
             } else if (sm[0xc8] != 0) {
+                SetMenuInputKeyboardMode(true);
                 OptionsCancel_Impl(optionsMenu);
             } else if (sm[0xc5] != 0) {
-                ApplyPopupChoice(g_optUi.popupItem, g_optUi.popupHighlight, 2);
+                SetMenuInputKeyboardMode(true);
+                g_optUi.popupNeedsInitialSync = false;
+                g_optUi.popupSlotPressed = false;
+                if (!g_optUi.popupSlotVisible) {
+                    g_optUi.popupSlotVisible = true;
+                    Game_PlaySfx(sm, 2);
+                } else {
+                    ApplyPopupChoice(g_optUi.popupItem, g_optUi.popupHighlight, 2);
+                }
             }
         } else {
             if (sm[0xad] != 0) {
@@ -2814,7 +2886,9 @@ static void __declspec(naked) hk_optUpdate() {
 static void __cdecl RenderMainOptionsBody_Impl(uint8_t* ebpFrame, uint32_t barOuterRgb) {
     uint8_t* menuObj = *reinterpret_cast<uint8_t**>(ebpFrame - 0x5c);
     int selRow = *reinterpret_cast<int*>(menuObj + 0x10);
-    g_optUi.mainSelRow = selRow;
+    if (selRow >= 0) {
+        g_optUi.mainSelRow = selRow;
+    }
     bool drawUnselected = (ebpFrame[-0x41] != 0);
     int xBase = *reinterpret_cast<int*>(ebpFrame - 0x4c);
     int yBase = *reinterpret_cast<int*>(ebpFrame - 0x48);
@@ -2833,6 +2907,7 @@ static void __cdecl RenderMainOptionsBody_Impl(uint8_t* ebpFrame, uint32_t barOu
     int rowH = kMainOptRowH;
     ComputeMainOptLayout(nRows, virtH, &stride, &backTopRel, &rowH);
     int dy = (kMainOptRowH - rowH) / 2;
+    int slotPad = (std::max)(0, (stride - rowH) / 2); // flush slots: bar fills the full row stride
 
     // Header text uses pre-computed RGBA at [ebp - 0x40]
     const int rightBound = xBase + menuW - 8;
@@ -2849,16 +2924,24 @@ static void __cdecl RenderMainOptionsBody_Impl(uint8_t* ebpFrame, uint32_t barOu
     if (hdrFree) hdrTmp.free_if_heap();
 
     // Highlight bar
+    uint32_t rawBarInnerRgb = barInnerRgb;
+    uint32_t rawBarOuterRgb = barOuterRgb;
+    uint32_t effBarInnerRgb = (barInnerRgb == 0xffffffu || barInnerRgb == 0x808080u)
+        ? barInnerRgb
+        : ApplyMenuSlotRainbowStyle(barInnerRgb);
+    uint32_t effBarOuterRgb = (barOuterRgb == barInnerRgb)
+        ? effBarInnerRgb
+        : barOuterRgb;
     if (selRow >= 0 && selRow < nRows) {
         int selTopRel = (selRow == backIdx) ? backTopRel : (0x56 + stride * selRow);
-        if (barInnerRgb != barOuterRgb) {
-            uint32_t outerRgba = RgbToRgbaOpaque(barOuterRgb);
-            Game_DrawQuad(xBase + 2, yBase + selTopRel + barSlideY - 2, menuW - 4, rowH + 4, &outerRgba);
-            uint32_t innerRgba = RgbToRgbaOpaque(barInnerRgb);
-            Game_DrawQuad(xBase + 4, yBase + selTopRel + barSlideY, menuW - 8, rowH, &innerRgba);
+        if (effBarInnerRgb != effBarOuterRgb) {
+            uint32_t outerRgba = RgbToRgbaOpaque(effBarOuterRgb);
+            Game_DrawQuad(xBase + 2, yBase + selTopRel + barSlideY - slotPad - 2, menuW - 4, rowH + 2 * slotPad + 4, &outerRgba);
+            uint32_t innerRgba = RgbToRgbaOpaque(effBarInnerRgb);
+            Game_DrawQuad(xBase + 4, yBase + selTopRel + barSlideY - slotPad, menuW - 8, rowH + 2 * slotPad, &innerRgba);
         } else {
-            uint32_t fillRgba = RgbToRgbaOpaque(barInnerRgb);
-            Game_DrawQuad(xBase + 2, yBase + selTopRel + barSlideY, menuW - 4, rowH, &fillRgba);
+            uint32_t fillRgba = RgbToRgbaOpaque(effBarInnerRgb);
+            Game_DrawQuad(xBase + 2, yBase + selTopRel + barSlideY - slotPad, menuW - 4, rowH + 2 * slotPad, &fillRgba);
         }
     }
 
@@ -2866,7 +2949,7 @@ static void __cdecl RenderMainOptionsBody_Impl(uint8_t* ebpFrame, uint32_t barOu
     for (int row = 0; row < nRows; ++row) {
         if (selRow != row && !drawUnselected) continue;
         uint32_t fgRgb = (selRow == row) ? selRgb : normRgb;
-        uint32_t bgRgb = (selRow == row) ? barInnerRgb : 0xffffffu;
+        uint32_t bgRgb = (selRow == row) ? effBarInnerRgb : 0xffffffu;
         uint32_t rgba = RgbToRgbaOpaque(fgRgb);
         *reinterpret_cast<uint32_t*>(ebpFrame - 0x40) = rgba;
         *reinterpret_cast<uint32_t*>(0x5f4268) = rgba;
@@ -2906,6 +2989,14 @@ static void __cdecl RenderMainOptionsBody_Impl(uint8_t* ebpFrame, uint32_t barOu
         }
     }
 
+    if (IsMenuRenderInteractive() && selRow >= 0 && selRow < nRows) {
+        int selTopRel = (selRow == backIdx) ? backTopRel : (0x56 + stride * selRow);
+        Game_DrawRainbowRectBorder(
+            GetCurrentMenuRenderFrame(),
+            xBase + 2, yBase + selTopRel + barSlideY - slotPad, menuW - 4, rowH + 2 * slotPad, 2, 255
+        );
+    }
+
     if (g_optUi.popupOpen && !g_optUi.popupInPause &&
         g_optUi.popupRow >= 0 && g_optUi.popupRow < nRows) {
         int popRow = g_optUi.popupRow;
@@ -2913,7 +3004,7 @@ static void __cdecl RenderMainOptionsBody_Impl(uint8_t* ebpFrame, uint32_t barOu
         if (selRow == popRow) {
             popRowTopY += barSlideY;
         }
-        uint32_t hiBarRgb = (barInnerRgb == 0xffffffu) ? barOuterRgb : barInnerRgb;
+        uint32_t hiBarRgb = (rawBarInnerRgb == 0xffffffu) ? rawBarOuterRgb : rawBarInnerRgb;
         DrawOptPopupOverlay(g_optUi.popupItem, rightBound, popRowTopY, rowH, false, 0, hiBarRgb);
     }
 }
@@ -3016,6 +3107,13 @@ static void __declspec(naked) hk_pauseIsAdj() {
 
 static void __cdecl PauseP1StepCursor_Impl(uint8_t* pauseMenu, int delta) {
     if (g_optUi.popupOpen && g_optUi.popupInPause) {
+        SetMenuInputKeyboardMode(true);
+        g_optUi.popupNeedsInitialSync = false;
+        g_optUi.popupSlotPressed = false;
+        if (!g_optUi.popupSlotVisible) {
+            g_optUi.popupSlotVisible = true;
+            return;
+        }
         int cnt = g_optUi.popupChoiceCount;
         if (cnt > 0) {
             g_optUi.popupHighlight = (g_optUi.popupHighlight + delta + cnt) % cnt;
@@ -3175,6 +3273,14 @@ static void __cdecl PauseP1Action_Impl(uint8_t* pauseMenu) {
     int sfxId = fromKey ? 2 : 0xc;
     if (g_optUi.popupOpen && g_optUi.popupInPause) {
         if (!isLr) {
+            if (!g_optUi.popupSlotVisible && sm != nullptr && sm[0xc5] != 0) {
+                SetMenuInputKeyboardMode(true);
+                g_optUi.popupNeedsInitialSync = false;
+                g_optUi.popupSlotPressed = false;
+                g_optUi.popupSlotVisible = true;
+                Game_PlaySfx(sm, 2);
+                return;
+            }
             ApplyPopupChoice(g_optUi.popupItem, g_optUi.popupHighlight, sfxId);
         }
         return;
@@ -3242,7 +3348,7 @@ static int ComputePauseOptRowH(int yBase, int nRows) {
     return kPauseOptRowH;
 }
 
-static void DrawPauseOptionsPane(int cat, int selRow, int xBase, int yBase, int slideY, int frame, int xOffset) {
+static void DrawPauseOptionsPane(int cat, int selRow, int xBase, int yBase, int slideY, int frame, int xOffset, bool isActivePane) {
     OptItem items[kMaxOptRows];
     int nRows = GetOptItems(cat, true, items);
     int rowH = ComputePauseOptRowH(yBase, nRows);
@@ -3271,7 +3377,10 @@ static void DrawPauseOptionsPane(int cat, int selRow, int xBase, int yBase, int 
     DrawTextAutoFit(hdrWs, labelX, yBase + slideY + 0x6b, 0x2000, 0x2000, 0, 0, 0x44, rightBound - labelX);
     if (hdrFree) hdrTmp.free_if_heap();
 
-    uint32_t rainbowRgb = GetSmoothMenuRainbow(frame + 3);
+    uint32_t rawRainbowRgb = GetSmoothMenuRainbow(frame + 3);
+    uint32_t rainbowRgb = isActivePane
+        ? ApplyMenuSlotRainbowStyle(rawRainbowRgb)
+        : Game_ColorLerp(0xffffffu, rawRainbowRgb, 25);
     uint32_t rainbowRgba = RgbToRgbaOpaque(rainbowRgb);
     if (selRow >= 0 && selRow < nRows) {
         Game_DrawQuad(innerLeft, yBase + slideY + 0x76 + selRow * rowH, innerW, rowH, &rainbowRgba);
@@ -3317,6 +3426,12 @@ static void DrawPauseOptionsPane(int cat, int selRow, int xBase, int yBase, int 
     }
 
     Game_DrawQuad(paneLeft, yBase + slideY + 0x75 + nRows * rowH, paneW, 1, dividerCol);
+
+    if (isActivePane && IsMenuRenderInteractive() && selRow >= 0 && selRow < nRows) {
+        Game_DrawRainbowRectBorder(
+            frame, innerLeft, yBase + slideY + 0x76 + selRow * rowH, innerW, rowH, 2, 255
+        );
+    }
 }
 
 static void __cdecl RenderPauseOptionsBody_Impl(uint8_t* ebpFrame, int slideY) {
@@ -3353,7 +3468,7 @@ static void __cdecl RenderPauseOptionsBody_Impl(uint8_t* ebpFrame, int slideY) {
         float paneEnd = static_cast<float>((d + 1) * subStride);
         if (subSwipeX < paneEnd && (subSwipeX + static_cast<float>(subStride)) > paneStart) {
             int paneSel = (activeDepth == d) ? curSelRow : g_pauseSubRow[d];
-            DrawPauseOptionsPane(g_pauseSubCatAtDepth[d], paneSel, xBase, yBase, slideY, frame, d * subStride);
+            DrawPauseOptionsPane(g_pauseSubCatAtDepth[d], paneSel, xBase, yBase, slideY, frame, d * subStride, activeDepth == d);
         }
     }
     if (subSwipeX > 0.0f) {
@@ -4349,7 +4464,32 @@ static void __cdecl LsTileInnerQuad_Impl(
     uint8_t* ls, int32_t tileIdx, const uint8_t* ebpFrame,
     int32_t innerX, int32_t innerY, int32_t w, int32_t h, const uint8_t* innerRgba
 ) {
-    Game_DrawQuad(innerX, innerY, w, h, innerRgba);
+    uint8_t drawRgba[4] = {innerRgba[0], innerRgba[1], innerRgba[2], innerRgba[3]};
+    bool isHovered = false;
+    uint32_t hoverRainbowRgb = 0xffffffu;
+
+    if (ls != nullptr &&
+        *reinterpret_cast<const int32_t*>(ls + 4) >= 8 &&
+        *reinterpret_cast<const int32_t*>(ls + 8) < 0 &&
+        tileIdx != *reinterpret_cast<const int32_t*>(ls + 0x38) &&
+        tileIdx == GetLevelSelectHoveredTile()) {
+        isHovered = true;
+        int32_t frame = *reinterpret_cast<const int32_t*>(ebpFrame - 0x54);
+        hoverRainbowRgb = GetSmoothMenuRainbow(frame);
+        if (drawRgba[0] == 0xffu && drawRgba[1] == 0xffu && drawRgba[2] == 0xffu) {
+            uint32_t subtleRgb = Game_ColorLerp(0xffffffu, hoverRainbowRgb, 25);
+            drawRgba[0] = static_cast<uint8_t>((subtleRgb >> 16) & 0xffu);
+            drawRgba[1] = static_cast<uint8_t>((subtleRgb >> 8) & 0xffu);
+            drawRgba[2] = static_cast<uint8_t>(subtleRgb & 0xffu);
+        }
+    }
+
+    Game_DrawQuad(innerX, innerY, w, h, drawRgba);
+
+    if (isHovered) {
+        int32_t frame = *reinterpret_cast<const int32_t*>(ebpFrame - 0x54);
+        Game_DrawRainbowRectBorder(frame, innerX - 2, innerY - 2, w + 4, h + 4, 2, 255);
+    }
 
     if (ls == nullptr || tileIdx < 0 || tileIdx >= *reinterpret_cast<int32_t*>(ls + 0x18)) return;
     const uint8_t* tileFlags = *reinterpret_cast<const uint8_t* const*>(ls + 0x4c);
@@ -4379,6 +4519,8 @@ static void __cdecl LsTileInnerQuad_Impl(
                 triRgb = Game_ColorLerp(triRgb, flashCol, pct);
             }
         }
+    } else if (isHovered) {
+        triRgb = Game_ColorLerp(triRgb, hoverRainbowRgb, 25);
     }
 
     uint8_t triRgba[4] = {
@@ -4573,6 +4715,70 @@ bool GetHudTimerMenuPreview(uint32_t state, uint8_t* outMode, float* outSize, ui
         }
     }
     return (*outMode != 0);
+}
+
+int __cdecl GetActiveOptionsCategory(bool inPause) {
+    return inPause ? g_pauseOptCat : g_mainOptCat;
+}
+
+bool __cdecl IsOptionsPopupOpen(bool inPause) {
+    return g_optUi.popupOpen && g_optUi.popupInPause == inPause;
+}
+
+bool __cdecl IsOptionsSliderDragging(bool inPause) {
+    return g_optUi.dragActive && g_optUi.dragInPause == inPause;
+}
+
+bool __cdecl IsOptionsMenuReadyForHover(const uint8_t* menuObj, bool inPause) {
+    if (menuObj == nullptr) return false;
+    int enterFrames = *reinterpret_cast<const int*>(menuObj + 4);
+    int exitTimer   = *reinterpret_cast<const int*>(menuObj + 8);
+    if (exitTimer >= 0) return false;
+    if (!inPause) {
+        return enterFrames >= 8;
+    }
+    if (enterFrames < 5) return false;
+    int page    = *reinterpret_cast<const int*>(menuObj + 0x44);
+    int scrollX = *reinterpret_cast<const int*>(menuObj + 0x4c);
+    if (page != 1 || scrollX < kMenuWideW) return false;
+    return g_pauseSubSwipeX == GetOptCategoryDepth(g_pauseOptCat) * kMenuWideW;
+}
+
+int __cdecl HitTestOptionsSlot(bool inPause, int mx, int my) {
+    int basePt[2] = {0, 0};
+    GetMenuBasePt_Impl(basePt);
+    int menuW = *reinterpret_cast<const int*>(0x589ddc);
+    int cat = inPause ? g_pauseOptCat : g_mainOptCat;
+    int nRows = GetOptRowCount(cat, inPause);
+    if (nRows <= 0) return -1;
+
+    if (!inPause) {
+        int minX = basePt[0] + 2;
+        int maxX = basePt[0] + menuW - 2;
+        if (mx < minX || mx >= maxX) return -1;
+        int virtH = reinterpret_cast<int(__cdecl*)()>(0x496060)();
+        int stride = 0x32;
+        int backTopRel = 0;
+        int rowH = kMainOptRowH;
+        ComputeMainOptLayout(nRows, virtH, &stride, &backTopRel, &rowH);
+        int backIdx = nRows - 1;
+        int slotPad = (std::max)(0, (stride - rowH) / 2);
+        for (int row = 0; row < nRows; ++row) {
+            int top = basePt[1] + ((row == backIdx) ? backTopRel : (0x56 + stride * row)) - slotPad;
+            if (my >= top && my < top + rowH + 2 * slotPad) return row;
+        }
+        return -1;
+    }
+
+    int minX = basePt[0] + 2;
+    int maxX = basePt[0] + kMenuWideW - 2;
+    if (mx < minX || mx >= maxX) return -1;
+    int rowH = ComputePauseOptRowH(basePt[1], nRows);
+    for (int row = 0; row < nRows; ++row) {
+        int top = basePt[1] + 0x75 + row * rowH;
+        if (my >= top && my < top + rowH) return row;
+    }
+    return -1;
 }
 
 } // namespace edgemod

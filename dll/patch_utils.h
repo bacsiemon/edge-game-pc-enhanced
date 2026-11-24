@@ -218,3 +218,4 @@ void RegisterColorTheme();
 void RegisterUiSmoothPart1();
 void RegisterUiSmoothPart2();
 void RegisterEdgeTimer();
+void RegisterMenuHover();

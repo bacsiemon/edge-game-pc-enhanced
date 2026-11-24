@@ -316,11 +316,17 @@ static void __declspec(naked) hk_drawBtnRainbow() {
     }
 }
 
+static uint32_t __cdecl GetSmoothSlotRainbow(int32_t frame) {
+    uint32_t col = ApplyMenuSlotRainbowStyle(GetSmoothMenuRainbow(frame));
+    g_rbTmp = col;
+    return col;
+}
+
 // ScoresSelectMenu rainbow hooks
 static void __declspec(naked) hk_rb_4b1c71() {
     __asm {
         push edi
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov edi, OFFSET g_rbTmp
         mov ecx, 0x4b1c8e
@@ -330,7 +336,7 @@ static void __declspec(naked) hk_rb_4b1c71() {
 static void __declspec(naked) hk_rb_4b1d5a() {
     __asm {
         push edi
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov edx, eax
         mov ecx, 0x4b1d70
@@ -340,7 +346,7 @@ static void __declspec(naked) hk_rb_4b1d5a() {
 static void __declspec(naked) hk_rb_4b1dfd() {
     __asm {
         push edi
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov ecx, 0x4b1e13
         jmp ecx
@@ -349,7 +355,7 @@ static void __declspec(naked) hk_rb_4b1dfd() {
 static void __declspec(naked) hk_rb_4b1f6a() {
     __asm {
         push edi
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov ecx, 0x4b1f80
         jmp ecx
@@ -604,7 +610,7 @@ static void __declspec(naked) hk_cegBlackoutAlpha() {
 static void __declspec(naked) hk_rb_4a8f84() {
     __asm {
         push edi
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov ecx, eax
         mov ebx, OFFSET g_rbTmp
@@ -615,7 +621,7 @@ static void __declspec(naked) hk_rb_4a8f84() {
 #define DEFINE_RB_CEG_ECX_HOOK(Name, ResumeImm) \
     static void __declspec(naked) Name() { \
         __asm { push edi } \
-        __asm { call GetSmoothMenuRainbow } \
+        __asm { call GetSmoothSlotRainbow } \
         __asm { add esp, 4 } \
         __asm { mov ecx, eax } \
         __asm { mov eax, ResumeImm } \
@@ -625,7 +631,7 @@ static void __declspec(naked) hk_rb_4a8f84() {
 #define DEFINE_RB_CEG_EAX_HOOK(Name, ResumeImm) \
     static void __declspec(naked) Name() { \
         __asm { push edi } \
-        __asm { call GetSmoothMenuRainbow } \
+        __asm { call GetSmoothSlotRainbow } \
         __asm { add esp, 4 } \
         __asm { mov edx, ResumeImm } \
         __asm { jmp edx } \
@@ -1156,7 +1162,7 @@ static void __declspec(naked) hk_debBtnRainbow() {
         mov edx, DWORD PTR [ebp - 0x104]
         lea eax, [esi + edx + 3]
         push eax
-        call GetSmoothMenuRainbow
+        call GetSmoothSlotRainbow
         add esp, 4
         mov edx, eax
         mov eax, 0x4abd10

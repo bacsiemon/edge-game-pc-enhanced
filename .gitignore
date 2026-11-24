@@ -1,0 +1,30 @@
+# Local disassembly & assembly caches
+.cache/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C++ DLL build artifacts
+dll/build/
+*.obj
+*.exp
+*.lib
+*.pdb
+*.ilk
+*.dll
+
+# Game binaries, staged executables, backups, and crash dumps
+*.exe
+*.bak
+*.mdmp
+
+# Release binaries & packaged asset mods
+releases/*.dll
+releases/mods/*.edgemod
+
+# Editor & OS metadata
+.DS_Store
+Thumbs.db
+.vscode/

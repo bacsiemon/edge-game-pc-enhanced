@@ -1,0 +1,15 @@
+# Repository Rules for `edge-pc-mod`
+
+These rules apply whenever working in this repository to keep workflows fast, token-efficient, and reliable:
+
+1. **Reuse maps & caches first (save time & tokens)**:
+   - Read `docs/PATCHING_GUIDE.md`, `docs/MEMORY_MAP.md`, and `docs/RESEARCH_NOTES.md` before opening binaries or re-discovering known addresses/ABIs.
+   - New features and fixes live in the native 32-bit C++ proxy DLL (`dll/*.cpp` + `dll/patch_utils.h` + `dll/xinput1_3.def`), built and verified via **`py build_dll.py --stage`** (`< 5`s via MSVC `cl.exe` x86). All globals, strings, and helpers live inside `XINPUT1_3.dll` (no code-cave or `.rdata`/`.bss` budgets needed).
+   - Use **`py tools/safe_disasm.py --func <va> [--max-lines N]`** as the primary way to inspect functions around any VA or xref: it queries the pre-indexed SQLite DB `.cache/bak_disasm.sqlite` directly without spawning `wsl`/`objdump` and resolves `int3` function bounds automatically.
+   - To find all `.text` instructions calling/referencing a VA or struct offset across `edge.exe.bak`, run a bounded SQLite query against `.cache/bak_disasm.sqlite` (`SELECT va, asm FROM insns WHERE ... LIMIT 20`) instead of writing binary scanners or running repeated disassembly calls.
+   - Locate symbols inside `dll/*.cpp` / `patches/*.py` with `Select-String` / `rg -n` and read targeted `<= 50`-line slices rather than loading whole modules. Edit files with structured file-edit tools (`edit_file`/`write_file`), never bash heredocs.
+2. **Legacy reference checks**: Legacy static patcher (`py patch_edge.py --stage` & `py tools/find_free_slots.py`) remains for historical cross-check reference; `py build_dll.py --stage` automatically verifies `EdgeMod_VerifyBuffer` against `edge.exe.bak` and cross-checks coverage against `edge_patched_staged.exe`.
+3. **Respect backups & auto-restart running game when deploying**: Never modify `edge.exe.bak`. When running `py build_dll.py --apply` or `--restore` (or legacy `patch_edge.py --apply`), if `edge.exe` is running, automatically close it cleanly (falling back to `Stop-Process` if needed), deploy and verify (`--verify`), and launch/reopen the game via `steam://rungameid/38740`; if the game runs fine after patching, keep it open. Use `--stage` when testing offline builds without restarting the game.
+4. **Releases**: `releases/` mirrors the game folder (`XINPUT1_3.dll`, `mods/*.edgemod`) for copy-paste install; `build_dll.py` refreshes the DLL there. Copy any newly built `.edgemod` into `releases/mods/`.
+5. **Update the markdown if needed**: Whenever adding or changing features, options, DLL modules, save/INI keys, or newly verified engine addresses/structs, update the relevant markdown docs (`README.md`, `docs/MEMORY_MAP.md`, `docs/RESEARCH_NOTES.md`, `docs/OPTIONS_UI.md`) to stay in sync.
+6. **Git hygiene**: Never commit compiled build outputs, game binaries, local SQLite caches, crash dumps, or packaged `.edgemod` archives (`edge.exe`, `edge_patched_staged.exe`, `.cache/`, `dll/build/`, `releases/*.dll`, `releases/mods/*.edgemod`).

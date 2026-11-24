@@ -8,7 +8,7 @@
 
 namespace edgemod {
 
-uint8_t g_colorTheme = 0; // 0=pc, 1=mobile
+uint8_t g_colorTheme = 0; // 0=pc, 1=mobile, 2=java
 
 void OnColorThemeChanged() {
     uint8_t count = *reinterpret_cast<uint8_t*>(0x5f87c9);
@@ -54,6 +54,86 @@ static const Rgb8 kAndroidLevelPalette[4][11] = {
     }
 };
 
+// Java static level tileset & planet palettes (from tileset_res_01..04.png, shadowall_01..04.spr, shadow.spr)
+static const Rgb8 kJavaLevelPalette[4][11] = {
+    {
+        {0xfc, 0xfc, 0xfc}, {0xf3, 0xf3, 0xfa}, {0xde, 0xde, 0xf0}, {0x6a, 0x7b, 0x8c},
+        {0xca, 0xcd, 0xe0}, {0x58, 0x6c, 0x7a}, {0x94, 0x9c, 0xac}, {0x70, 0x78, 0x8c},
+        {0x20, 0x28, 0x34}, {0x62, 0x6a, 0x7e}, {0x16, 0x1c, 0x26}
+    },
+    {
+        {0xf5, 0xf3, 0xf9}, {0xe6, 0xe8, 0xef}, {0x94, 0x98, 0xac}, {0x26, 0x2b, 0x33},
+        {0x83, 0x88, 0x99}, {0x16, 0x1c, 0x22}, {0x74, 0x7c, 0x84}, {0x54, 0x5d, 0x6a},
+        {0x1a, 0x20, 0x28}, {0x48, 0x50, 0x5d}, {0x12, 0x16, 0x1e}
+    },
+    {
+        {0x7b, 0x81, 0x94}, {0x70, 0x76, 0x89}, {0x52, 0x59, 0x6a}, {0x0e, 0x14, 0x12},
+        {0x46, 0x4d, 0x5c}, {0x06, 0x0a, 0x06}, {0x46, 0x4d, 0x5c}, {0x32, 0x39, 0x46},
+        {0x10, 0x14, 0x19}, {0x2a, 0x30, 0x3c}, {0x0a, 0x0e, 0x12}
+    },
+    {
+        {0x51, 0x5a, 0x6a}, {0x47, 0x50, 0x60}, {0x39, 0x44, 0x50}, {0x0a, 0x10, 0x14},
+        {0x30, 0x3b, 0x45}, {0x05, 0x09, 0x0c}, {0x2c, 0x33, 0x3d}, {0x1e, 0x26, 0x30},
+        {0x08, 0x0c, 0x10}, {0x18, 0x1f, 0x28}, {0x04, 0x07, 0x0a}
+    }
+};
+
+// Exact Java moving platform palettes (from plateform.spr / plateform_big.spr pal[0..3]:
+// [0]=top, [1]=left top, [2]=left bottom, [3]=right top, [4]=right bottom)
+static const Rgb8 kJavaMovingPlatPalette[4][5] = {
+    {{0xfc, 0xfc, 0xfc}, {0xc5, 0xc7, 0xd6}, {0xb4, 0xb6, 0xcd}, {0xbd, 0xc2, 0xcd}, {0xac, 0xb2, 0xbd}},
+    {{0xec, 0xec, 0xec}, {0x7b, 0x7d, 0x94}, {0x6a, 0x6d, 0x83}, {0x70, 0x74, 0x80}, {0x5a, 0x65, 0x73}},
+    {{0x7b, 0x81, 0x94}, {0x41, 0x4c, 0x52}, {0x39, 0x3c, 0x4a}, {0x39, 0x44, 0x4a}, {0x31, 0x3b, 0x41}},
+    {{0x52, 0x59, 0x6a}, {0x41, 0x47, 0x53}, {0x31, 0x38, 0x41}, {0x39, 0x3c, 0x41}, {0x29, 0x32, 0x39}}
+};
+
+// Exact Java bumper palettes (from bumpers.spr pal[0..3]:
+// [0]=roof, [1]=left top, [2]=left bottom, [3]=right top, [4]=right bottom)
+static const Rgb8 kJavaBumperPalette[4][5] = {
+    {{0xe8, 0xe8, 0xf0}, {0xbc, 0xc0, 0xd4}, {0xa8, 0xac, 0xc0}, {0xac, 0xb4, 0xc4}, {0x96, 0x9e, 0xb0}},
+    {{0xe8, 0xe8, 0xf0}, {0x90, 0x94, 0xa4}, {0x7e, 0x82, 0x92}, {0x7c, 0x80, 0x94}, {0x6a, 0x6e, 0x82}},
+    {{0x78, 0x80, 0x94}, {0x3c, 0x48, 0x4c}, {0x30, 0x3a, 0x3e}, {0x34, 0x3c, 0x40}, {0x28, 0x30, 0x34}},
+    {{0x50, 0x58, 0x68}, {0x34, 0x3c, 0x40}, {0x28, 0x30, 0x34}, {0x2c, 0x38, 0x40}, {0x20, 0x2a, 0x32}}
+};
+
+// Exact Java falling platform palette (from pff.spr pal[0..3]: [0]=top, [1]=left, [2]=right)
+static const Rgb8 kJavaFallingPalette[4][3] = {
+    {{0xfc, 0xfc, 0xfc}, {0xbd, 0xc2, 0xd5}, {0x94, 0x9d, 0xb4}},
+    {{0xf5, 0xf3, 0xf9}, {0x7b, 0x81, 0x94}, {0x5a, 0x5d, 0x6a}},
+    {{0x7b, 0x81, 0x94}, {0x41, 0x48, 0x52}, {0x29, 0x2c, 0x31}},
+    {{0x51, 0x5a, 0x6a}, {0x20, 0x2c, 0x31}, {0x10, 0x18, 0x18}}
+};
+
+static const Rgb8 kJavaSwitchColor = {0xae, 0xc3, 0xd0};
+
+// Java pastel rainbow_menu (aO) used for Cube::ComputePalette on themes 0..1
+static const uint32_t kJavaRainbowMenu[13] = {
+    0xfea9b6u, 0xfe9febu, 0xee9dfeu, 0xd3a9feu, 0xb5befeu, 0xa1cffeu, 0x96dafeu,
+    0x3df89du, 0x80ff85u, 0xadff5au, 0xeef21cu, 0xffd275u, 0xffbd84u
+};
+
+// Exact Android prism 18-color cycle from libcgame.so @ 0x671000
+static const Rgb8 kAndroidPrismColors[18] = {
+    {0xff, 0xaf, 0x0f}, {0xfc, 0xff, 0x10}, {0xa9, 0xff, 0x11}, {0x61, 0xff, 0x1e},
+    {0x33, 0xff, 0x55}, {0x12, 0xff, 0x6c}, {0x12, 0xff, 0xbb}, {0x12, 0xf2, 0xff},
+    {0x04, 0xc8, 0xf7}, {0x4f, 0xa1, 0xff}, {0x60, 0x73, 0xff}, {0x84, 0x5f, 0xff},
+    {0xad, 0x44, 0xf9}, {0xdc, 0x50, 0xff}, {0xff, 0x50, 0xce}, {0xff, 0x55, 0x94},
+    {0xff, 0x55, 0x5a}, {0xff, 0x76, 0x31}
+};
+
+// Exact Java prism 9-color shaded & top-face cycles from prism_big.spr (pal[11..19], pal[21..29])
+static const Rgb8 kJavaPrismDark[9] = {
+    {0xdc, 0x7a, 0xff}, {0xff, 0x78, 0xe2}, {0xff, 0x9b, 0x7d},
+    {0xff, 0xc8, 0x3d}, {0xbc, 0xf0, 0x00}, {0x5b, 0xed, 0x18},
+    {0x3c, 0xc9, 0xf0}, {0x78, 0xa0, 0xff}, {0xa7, 0x8c, 0xff}
+};
+
+static const Rgb8 kJavaPrismTop[9] = {
+    {0xf7, 0xe0, 0xff}, {0xff, 0xde, 0xf8}, {0xff, 0xe9, 0xe3},
+    {0xff, 0xe5, 0xa3}, {0xea, 0xff, 0x9e}, {0xcb, 0xff, 0xb2},
+    {0xbf, 0xf1, 0xff}, {0xd1, 0xdf, 0xff}, {0xe8, 0xe0, 0xff}
+};
+
 constexpr uint32_t kTexturesFolderHash = 0x039573F7u;
 constexpr int kTargetTexCount = 14;
 
@@ -91,7 +171,11 @@ static const TargetTexSpec kTargetTexSpecs[kTargetTexCount] = {
 };
 
 static IDirect3DDevice9*  g_cachedDev = nullptr;
-static IDirect3DTexture9* g_mobileTex[kTargetTexCount] = {};
+static IDirect3DTexture9* g_themeTex[2][kTargetTexCount] = {};
+static IDirect3DTexture9* g_javaMovingPlatTex[4] = {};
+static IDirect3DTexture9* g_javaBumperTex[4] = {};
+static bool               g_inJavaBumperRender = false;
+static bool               g_inJavaMovingPlatformRender = false;
 
 static inline uint32_t PackArgb(uint8_t a, Rgb8 c) {
     return (static_cast<uint32_t>(a) << 24)
@@ -119,23 +203,49 @@ static inline Rgb8 LerpRgb8(Rgb8 a, Rgb8 b, float t) {
     return {ch(a.r, b.r), ch(a.g, b.g), ch(a.b, b.b)};
 }
 
-static void FillMobileTexturePixels(const TargetTexSpec& spec, D3DLOCKED_RECT* lr) {
-    const Rgb8* pal = kAndroidLevelPalette[spec.themeIdx];
+static void FillLevelWallPixels(
+    D3DLOCKED_RECT* lr,
+    Rgb8 topOdd, Rgb8 topEven,
+    Rgb8 leftTop, Rgb8 leftBot,
+    Rgb8 rightTop, Rgb8 rightBot
+) {
+    uint8_t* base = static_cast<uint8_t*>(lr->pBits);
+    uint32_t cOdd  = PackArgb(0xffu, topOdd);
+    uint32_t cEven = PackArgb(0xffu, topEven);
+    for (int y = 0; y < 256; ++y) {
+        float t = static_cast<float>(y) / 255.0f;
+        uint32_t cLeft  = PackArgb(0xffu, LerpRgb8(leftTop, leftBot, t));
+        uint32_t cRight = PackArgb(0xffu, LerpRgb8(rightTop, rightBot, t));
+        uint32_t* row = reinterpret_cast<uint32_t*>(base + y * lr->Pitch);
+        for (int x = 0; x < 64; ++x)    row[x] = cLeft;
+        for (int x = 64; x < 128; ++x)  row[x] = cRight;
+        for (int x = 128; x < 192; ++x) row[x] = cOdd;
+        for (int x = 192; x < 256; ++x) row[x] = cEven;
+    }
+}
+
+static IDirect3DTexture9* CreateJavaSolidWallTexture(IDirect3DDevice9* dev, const Rgb8* cols5) {
+    IDirect3DTexture9* tex = nullptr;
+    HRESULT hr = dev->CreateTexture(256, 256, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, nullptr);
+    if (FAILED(hr) || tex == nullptr) return nullptr;
+
+    D3DLOCKED_RECT lr{};
+    if (SUCCEEDED(tex->LockRect(0, &lr, nullptr, 0)) && lr.pBits != nullptr) {
+        FillLevelWallPixels(&lr, cols5[0], cols5[0], cols5[1], cols5[2], cols5[3], cols5[4]);
+        tex->UnlockRect(0);
+    } else {
+        tex->Release();
+        return nullptr;
+    }
+    return tex;
+}
+
+static void FillThemeTexturePixels(const TargetTexSpec& spec, D3DLOCKED_RECT* lr, bool isJava) {
+    const Rgb8* pal = isJava ? kJavaLevelPalette[spec.themeIdx] : kAndroidLevelPalette[spec.themeIdx];
     uint8_t* base = static_cast<uint8_t*>(lr->pBits);
 
     if (spec.kind == TEX_LEVELWALL) {
-        for (int y = 0; y < 256; ++y) {
-            float t = static_cast<float>(y) / 255.0f;
-            uint32_t cLeft  = PackArgb(0xffu, LerpRgb8(pal[2], pal[3], t));
-            uint32_t cRight = PackArgb(0xffu, LerpRgb8(pal[4], pal[5], t));
-            uint32_t cOdd   = PackArgb(0xffu, pal[0]);
-            uint32_t cEven  = PackArgb(0xffu, pal[1]);
-            uint32_t* row = reinterpret_cast<uint32_t*>(base + y * lr->Pitch);
-            for (int x = 0; x < 64; ++x)    row[x] = cLeft;
-            for (int x = 64; x < 128; ++x)  row[x] = cRight;
-            for (int x = 128; x < 192; ++x) row[x] = cOdd;
-            for (int x = 192; x < 256; ++x) row[x] = cEven;
-        }
+        FillLevelWallPixels(lr, pal[0], pal[1], pal[2], pal[3], pal[4], pal[5]);
     } else if (spec.kind == TEX_PLANET) {
         for (int y = 0; y < 64; ++y) {
             float t = static_cast<float>(y) / 63.0f;
@@ -148,27 +258,38 @@ static void FillMobileTexturePixels(const TargetTexSpec& spec, D3DLOCKED_RECT* l
             for (int x = 48; x < 64; ++x) row[x] = cTop;
         }
     } else if (spec.kind == TEX_FALLING_PLATFORM) {
-        uint32_t cBevel = PackArgb(0xffu, ScaleRgb(pal[1], 0.9f));
-        uint32_t cTop   = PackArgb(0xffu, ScaleRgb(pal[0], 0.9f));
-        uint32_t cLeft  = PackArgb(0xffu, LerpRgb8(pal[2], pal[3], 0.25f));
-        uint32_t cRight = PackArgb(0xffu, LerpRgb8(pal[4], pal[5], 0.25f));
+        Rgb8 cTopRgb   = isJava ? kJavaFallingPalette[spec.themeIdx][0] : ScaleRgb(pal[0], 0.9f);
+        Rgb8 cLeftRgb  = isJava ? kJavaFallingPalette[spec.themeIdx][1] : LerpRgb8(pal[2], pal[3], 0.25f);
+        Rgb8 cRightRgb = isJava ? kJavaFallingPalette[spec.themeIdx][2] : LerpRgb8(pal[4], pal[5], 0.25f);
+        Rgb8 cLbevRgb  = isJava ? LerpRgb8(cTopRgb, cLeftRgb, 0.55f)     : ScaleRgb(pal[1], 0.9f);
+        Rgb8 cRbevRgb  = isJava ? LerpRgb8(cTopRgb, cRightRgb, 0.65f)    : ScaleRgb(pal[1], 0.9f);
+        uint32_t cTop   = PackArgb(0xffu, cTopRgb);
+        uint32_t cLbev  = PackArgb(0xffu, cLbevRgb);
+        uint32_t cRbev  = PackArgb(0xffu, cRbevRgb);
+        uint32_t cLeft  = PackArgb(0xffu, cLeftRgb);
+        uint32_t cRight = PackArgb(0xffu, cRightRgb);
         for (int y = 0; y < 64; ++y) {
             uint32_t* row = reinterpret_cast<uint32_t*>(base + y * lr->Pitch);
             for (int x = 0; x < 64; ++x) {
-                uint32_t col = cBevel;
+                uint32_t col;
                 if (x >= 52) {
                     col = cRight;
-                } else if (y >= 52 && x <= 53) {
+                } else if (y >= 52) {
                     col = cLeft;
                 } else if (x <= 37 && y <= 37) {
                     col = cTop;
+                } else if (y > x) {
+                    col = cLbev;
+                } else {
+                    col = cRbev;
                 }
                 row[x] = col;
             }
         }
     } else {
         uint8_t alpha = (spec.kind == TEX_SWITCH_30OPACITY) ? 0x4du : 0xffu;
-        uint32_t col = PackArgb(alpha, {0xc3, 0xb8, 0xaf});
+        Rgb8 sw = isJava ? kJavaSwitchColor : Rgb8{0xc3, 0xb8, 0xaf};
+        uint32_t col = PackArgb(alpha, sw);
         for (int y = 0; y < spec.height; ++y) {
             uint32_t* row = reinterpret_cast<uint32_t*>(base + y * lr->Pitch);
             for (int x = 0; x < spec.width; ++x) {
@@ -178,7 +299,7 @@ static void FillMobileTexturePixels(const TargetTexSpec& spec, D3DLOCKED_RECT* l
     }
 }
 
-static IDirect3DTexture9* CreateMobileTexture(IDirect3DDevice9* dev, const TargetTexSpec& spec) {
+static IDirect3DTexture9* CreateThemeTexture(IDirect3DDevice9* dev, const TargetTexSpec& spec, bool isJava) {
     IDirect3DTexture9* tex = nullptr;
     HRESULT hr = dev->CreateTexture(
         spec.width, spec.height, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, nullptr
@@ -187,7 +308,7 @@ static IDirect3DTexture9* CreateMobileTexture(IDirect3DDevice9* dev, const Targe
 
     D3DLOCKED_RECT lr{};
     if (SUCCEEDED(tex->LockRect(0, &lr, nullptr, 0)) && lr.pBits != nullptr) {
-        FillMobileTexturePixels(spec, &lr);
+        FillThemeTexturePixels(spec, &lr, isJava);
         tex->UnlockRect(0);
     } else {
         tex->Release();
@@ -213,19 +334,52 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
     if (slot < 0) return defaultTex;
 
     if (d3dDev != g_cachedDev) {
-        for (int i = 0; i < kTargetTexCount; ++i) {
-            if (g_mobileTex[i] != nullptr) {
-                g_mobileTex[i]->Release();
-                g_mobileTex[i] = nullptr;
+        for (int t = 0; t < 2; ++t) {
+            for (int i = 0; i < kTargetTexCount; ++i) {
+                if (g_themeTex[t][i] != nullptr) {
+                    g_themeTex[t][i]->Release();
+                    g_themeTex[t][i] = nullptr;
+                }
+            }
+        }
+        for (int i = 0; i < 4; ++i) {
+            if (g_javaMovingPlatTex[i] != nullptr) {
+                g_javaMovingPlatTex[i]->Release();
+                g_javaMovingPlatTex[i] = nullptr;
+            }
+            if (g_javaBumperTex[i] != nullptr) {
+                g_javaBumperTex[i]->Release();
+                g_javaBumperTex[i] = nullptr;
             }
         }
         g_cachedDev = d3dDev;
     }
 
-    if (g_mobileTex[slot] == nullptr) {
-        g_mobileTex[slot] = CreateMobileTexture(d3dDev, kTargetTexSpecs[slot]);
+    bool isJava = (g_colorTheme == 2u);
+    if (isJava && kTargetTexSpecs[slot].kind == TEX_LEVELWALL) {
+        uint8_t themeIdx = kTargetTexSpecs[slot].themeIdx;
+        if (g_inJavaMovingPlatformRender) {
+            if (g_javaMovingPlatTex[themeIdx] == nullptr) {
+                g_javaMovingPlatTex[themeIdx] = CreateJavaSolidWallTexture(d3dDev, kJavaMovingPlatPalette[themeIdx]);
+            }
+            if (g_javaMovingPlatTex[themeIdx] != nullptr) {
+                return static_cast<void*>(g_javaMovingPlatTex[themeIdx]);
+            }
+        } else if (g_inJavaBumperRender) {
+            if (g_javaBumperTex[themeIdx] == nullptr) {
+                g_javaBumperTex[themeIdx] = CreateJavaSolidWallTexture(d3dDev, kJavaBumperPalette[themeIdx]);
+            }
+            if (g_javaBumperTex[themeIdx] != nullptr) {
+                return static_cast<void*>(g_javaBumperTex[themeIdx]);
+            }
+        }
     }
-    return g_mobileTex[slot] != nullptr ? static_cast<void*>(g_mobileTex[slot]) : defaultTex;
+
+    int themeSlot = isJava ? 1 : 0;
+    if (g_themeTex[themeSlot][slot] == nullptr) {
+        g_themeTex[themeSlot][slot] = CreateThemeTexture(d3dDev, kTargetTexSpecs[slot], isJava);
+    }
+    return g_themeTex[themeSlot][slot] != nullptr ? static_cast<void*>(g_themeTex[themeSlot][slot]) : defaultTex;
 }
 
 static void __declspec(naked) Hook_TextureApplyLoadTex() {
@@ -245,6 +399,10 @@ static void __declspec(naked) Hook_TextureApplyLoadTex() {
     }
 }
 
+static uint8_t GetJavaLight0Byte() {
+    return 194u;
+}
+
 static void __fastcall Hook_LightApply(uint8_t* light) {
     using OrigFn = void(__thiscall*)(void*);
     auto orig = reinterpret_cast<OrigFn>(0x4e9810);
@@ -261,14 +419,23 @@ static void __fastcall Hook_LightApply(uint8_t* light) {
     // LightD3D starts at light + 0x3c; D3D light slot index is at LightD3D + 0x68 (= light + 0xa4)
     int32_t d3dIdx = *reinterpret_cast<const int32_t*>(light + 0xa4);
     if (d3dIdx == 0) {
-        light[0] = 182;
-        light[1] = 182;
-        light[2] = 182;
+        bool isJava = (g_colorTheme == 2u);
+        uint8_t intensity = isJava ? GetJavaLight0Byte() : 182u;
+        light[0] = intensity;
+        light[1] = intensity;
+        light[2] = intensity;
         light[3] = 255;
         float* dir = reinterpret_cast<float*>(light + 0x08);
-        dir[0] = -0.4327311f;
-        dir[1] = -0.7212185f;
-        dir[2] = -0.5409138f;
+        if (isJava) {
+            // Balanced isometric cube light matching 0.spr am[8]:am[11]:am[14] (Top=1.00, Left=0.87, Right=0.74)
+            dir[0] = -0.3600000f;
+            dir[1] = -0.7500000f;
+            dir[2] = -0.5548874f;
+        } else {
+            dir[0] = -0.4327311f;
+            dir[1] = -0.7212185f;
+            dir[2] = -0.5409138f;
+        }
     } else {
         light[0] = 0;
         light[1] = 0;
@@ -282,7 +449,197 @@ static void __fastcall Hook_LightApply(uint8_t* light) {
     std::memcpy(light + 0x08, savedDir, sizeof(savedDir));
 }
 
-static bool g_inMobileBumperRender = false;
+static bool         g_prismMatOverride       = false;
+static bool         g_anyNormalPrismRendered = false;
+static D3DMATERIAL9 g_prismMat{};
+
+static void PreparePrismMaterial(int32_t animTick) {
+    uint8_t* sm = GetScreenMgr();
+    float alpha = (sm != nullptr && *reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x11u)
+        ? std::clamp(g_uiAlpha, 0.0f, 1.0f)
+        : 0.0f;
+
+    std::memset(&g_prismMat, 0, sizeof(g_prismMat));
+    g_prismMat.Diffuse.a = 1.0f;
+    g_prismMat.Ambient.a = 1.0f;
+
+    if (g_colorTheme == 1u) {
+        int i0 = ((animTick % 18) + 18) % 18;
+        int i1 = (i0 + 1) % 18;
+        Rgb8 base = LerpRgb8(kAndroidPrismColors[i0], kAndroidPrismColors[i1], alpha);
+        float diffScale = 80.0f / 182.0f;
+        g_prismMat.Diffuse.r  = diffScale;
+        g_prismMat.Diffuse.g  = diffScale;
+        g_prismMat.Diffuse.b  = diffScale;
+        g_prismMat.Emissive.r = static_cast<float>(base.r) / 255.0f;
+        g_prismMat.Emissive.g = static_cast<float>(base.g) / 255.0f;
+        g_prismMat.Emissive.b = static_cast<float>(base.b) / 255.0f;
+    } else {
+        float phase = std::fmod((static_cast<float>(animTick) + alpha) / 1.8f, 9.0f);
+        if (phase < 0.0f) phase += 9.0f;
+        int i0 = static_cast<int>(phase) % 9;
+        int i1 = (i0 + 1) % 9;
+        float frac = phase - std::floor(phase);
+
+        float dr = (static_cast<float>(kJavaPrismDark[i0].r) + static_cast<float>(kJavaPrismDark[i1].r - kJavaPrismDark[i0].r) * frac) / 255.0f;
+        float dg = (static_cast<float>(kJavaPrismDark[i0].g) + static_cast<float>(kJavaPrismDark[i1].g - kJavaPrismDark[i0].g) * frac) / 255.0f;
+        float db = (static_cast<float>(kJavaPrismDark[i0].b) + static_cast<float>(kJavaPrismDark[i1].b - kJavaPrismDark[i0].b) * frac) / 255.0f;
+
+        float tr = (static_cast<float>(kJavaPrismTop[i0].r) + static_cast<float>(kJavaPrismTop[i1].r - kJavaPrismTop[i0].r) * frac) / 255.0f;
+        float tg = (static_cast<float>(kJavaPrismTop[i0].g) + static_cast<float>(kJavaPrismTop[i1].g - kJavaPrismTop[i0].g) * frac) / 255.0f;
+        float tb = (static_cast<float>(kJavaPrismTop[i0].b) + static_cast<float>(kJavaPrismTop[i1].b - kJavaPrismTop[i0].b) * frac) / 255.0f;
+
+        float topLight = 0.8700000f;
+        g_prismMat.Diffuse.r  = (std::max)(0.0f, (tr - dr) / topLight);
+        g_prismMat.Diffuse.g  = (std::max)(0.0f, (tg - dg) / topLight);
+        g_prismMat.Diffuse.b  = (std::max)(0.0f, (tb - db) / topLight);
+        g_prismMat.Emissive.r = dr;
+        g_prismMat.Emissive.g = dg;
+        g_prismMat.Emissive.b = db;
+    }
+}
+
+struct ScopedJavaPrismLight {
+    IDirect3DDevice9* dev = nullptr;
+    D3DLIGHT9 saved{};
+    bool active = false;
+
+    explicit ScopedJavaPrismLight(bool enable) {
+        if (!enable) return;
+        dev = reinterpret_cast<IDirect3DDevice9*(__cdecl*)()>(0x40e6c0)();
+        if (dev != nullptr && SUCCEEDED(dev->GetLight(0, &saved))) {
+            D3DLIGHT9 prismLight = saved;
+            prismLight.Diffuse   = {1.0f, 1.0f, 1.0f, 1.0f};
+            prismLight.Direction = {0.2500000f, -0.8700000f, -0.4249706f};
+            dev->SetLight(0, &prismLight);
+            active = true;
+        }
+    }
+
+    ~ScopedJavaPrismLight() {
+        if (active && dev != nullptr) {
+            dev->SetLight(0, &saved);
+        }
+    }
+};
+
+static void __fastcall Hook_PrismRender(uint8_t* prism) {
+    using OrigFn = void(__thiscall*)(void*);
+    auto orig = reinterpret_cast<OrigFn>(0x487800);
+    if (g_colorTheme == 0 || prism == nullptr || *reinterpret_cast<void* const*>(prism + 0x24) != nullptr) {
+        orig(prism);
+        return;
+    }
+
+    int32_t animTick = *reinterpret_cast<const int32_t*>(prism + 0x14);
+    PreparePrismMaterial(animTick);
+    g_prismMatOverride = true;
+    g_anyNormalPrismRendered = true;
+    {
+        ScopedJavaPrismLight keyLight(g_colorTheme == 2u);
+        orig(prism);
+    }
+    g_prismMatOverride = false;
+}
+
+static void __fastcall Hook_PrismRenderTransparents(void* renderer) {
+    using OrigFn = void(__thiscall*)(void*);
+    auto orig = reinterpret_cast<OrigFn>(0x407410);
+    uint8_t* sm = GetScreenMgr();
+    bool inDebrief = (sm != nullptr && *reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x13u);
+    bool overrideMat = (g_colorTheme != 0 && g_anyNormalPrismRendered && !inDebrief);
+    if (overrideMat) {
+        g_prismMatOverride = true;
+    }
+    {
+        ScopedJavaPrismLight keyLight(overrideMat && g_colorTheme == 2u);
+        orig(renderer);
+    }
+    g_prismMatOverride = false;
+    g_anyNormalPrismRendered = false;
+}
+
+static const D3DMATERIAL9* __cdecl SelectPrismD3DMaterial(const uint8_t* matObj) {
+    return g_prismMatOverride ? &g_prismMat
+                              : reinterpret_cast<const D3DMATERIAL9*>(matObj + 0x60);
+}
+
+static void __declspec(naked) Hook_MaterialLoadD3DMat() {
+    // Replaces `call 0x40e6c0; mov ecx, [eax]; lea edx, [esi+0x60]` at 0x437289..0x437292 (10B).
+    // Returns eax = IDirect3DDevice9*, ecx = [eax], edx = D3DMATERIAL9* (preserves ebx, esi, edi, ebp).
+    __asm {
+        mov eax, 0x40e6c0
+        call eax
+        push eax
+        push esi
+        call SelectPrismD3DMaterial
+        add esp, 4
+        mov edx, eax
+        pop eax
+        mov ecx, dword ptr [eax]
+        ret
+    }
+}
+
+static const uint32_t* __cdecl SelectCubePaletteTable_Impl(int theme) {
+    if (g_colorTheme == 2u) {
+        return (theme >= 0 && theme <= 1)
+            ? kJavaRainbowMenu
+            : reinterpret_cast<const uint32_t*>(0x589b50);
+    }
+    return (theme == 3)
+        ? reinterpret_cast<const uint32_t*>(0x589b84)
+        : reinterpret_cast<const uint32_t*>(0x589b50);
+}
+
+static void __declspec(naked) Hook_SelectCubePaletteTable() {
+    // Replaces table selection at 0x48b98c..0x48b99e (19B) inside Cube::ComputePalette.
+    // Preserves ebx (theme), esi, edi, ebp; writes selected table ptr into [ebp-0x10].
+    __asm {
+        push ebx
+        call SelectCubePaletteTable_Impl
+        add esp, 4
+        mov dword ptr [ebp - 0x10], eax
+        ret
+    }
+}
+
+static int g_javaCubeDeltaTopRight[3] = {55, 55, 55};
+
+static void __cdecl Hook_ComputeCubePalette(int theme) {
+    reinterpret_cast<void(__cdecl*)(int)>(0x48b980)(theme);
+    if (g_colorTheme == 2u) {
+        uint8_t* ws = *reinterpret_cast<uint8_t**>(0x5f9064);
+        bool isRainbow = (ws != nullptr && ws[0xb5] != 0);
+        int t = (theme >= 0 && theme <= 3) ? theme : 2;
+        // Exact Java a.e() / e.f() offsets for 0.spr Frame 0 (Top=am[8], Left=am[11], Right=am[14])
+        static const int kJavaMid[4]        = { 9,  8, 11, 10};
+        static const int kJavaDeltaTop[4]   = { 5,  0, 27, 18};
+        static const int kJavaDeltaRight[4] = {-50, -60, -36, -40};
+
+        uint32_t* pal = reinterpret_cast<uint32_t*>(0x5f9110);
+        uint32_t midCol = pal[isRainbow ? 11 : kJavaMid[t]];
+        int mr = static_cast<int>((midCol >> 16) & 0xffu);
+        int mg = static_cast<int>((midCol >> 8) & 0xffu);
+        int mb = static_cast<int>(midCol & 0xffu);
+
+        int dTop   = isRainbow ? 27  : kJavaDeltaTop[t];
+        int dRight = isRainbow ? -42 : kJavaDeltaRight[t];
+
+        int rr = std::clamp(mr + dRight, 0, 255);
+        int rg = std::clamp(mg + dRight, 0, 255);
+        int rb = std::clamp(mb + dRight, 0, 255);
+
+        pal[15] = (static_cast<uint32_t>(rr) << 16)
+                | (static_cast<uint32_t>(rg) << 8)
+                | static_cast<uint32_t>(rb);
+
+        // Preserve full Top-to-Right contrast using unclamped target Top delta vs clamped Right base
+        g_javaCubeDeltaTopRight[0] = (std::max)(0, mr + dTop - rr);
+        g_javaCubeDeltaTopRight[1] = (std::max)(0, mg + dTop - rg);
+        g_javaCubeDeltaTopRight[2] = (std::max)(0, mb + dTop - rb);
+    }
+}
 
 static int GetLevelHeightTiles() {
     uint8_t* lvl = GetLevel();
@@ -405,7 +762,7 @@ static void __fastcall Hook_StaticLevelRender(uint8_t* model, void*, int arg) {
                 uint8_t* basePtr = static_cast<uint8_t*>(ptr);
                 for (uint32_t i = 0; i < entry.numVerts; ++i) {
                     uint8_t* vptr = basePtr + i * entry.stride;
-                    if (g_colorTheme != 0) {
+                    if (g_colorTheme == 1u) {
                         float y = *reinterpret_cast<const float*>(vptr + 4u);
                         float u = *reinterpret_cast<const float*>(vptr + entry.uvOff);
                         if (u < 0.5f) {
@@ -429,7 +786,7 @@ static void __fastcall Hook_StaticLevelRender(uint8_t* model, void*, int arg) {
 static void __cdecl Hook_SetHeightUV(void* model, int y) {
     float vScale = 1.0f;
     float vOff = 0.0f;
-    if (g_colorTheme == 0) {
+    if (g_colorTheme != 1u) {
         vOff = static_cast<float>(-static_cast<double>(y) * (1.0 / 120.0));
     } else {
         int hTiles = GetLevelHeightTiles();
@@ -452,13 +809,13 @@ static void __declspec(naked) Hook_MaterialColorOp() {
     // Replaces `mov edx, [esi+0x1c]; mov edx, [edx+edi*8+8]` at 0x4372d9..0x4372df (7B).
     // Preserves eax, ebx, esi, edi, ebp; returns desired D3DTSS_COLOROP in edx.
     __asm {
-        cmp byte ptr [g_inMobileBumperRender], 0
-        je normal_op
-        mov edx, 2 // D3DTOP_SELECTARG1
-        ret
-    normal_op:
+        cmp byte ptr [g_prismMatOverride], 0
+        jne prism_op
         mov edx, dword ptr [esi + 0x1c]
         mov edx, dword ptr [edx + edi*8 + 8]
+        ret
+    prism_op:
+        mov edx, 3 // D3DTOP_SELECTARG2
         ret
     }
 }
@@ -474,15 +831,21 @@ static void __fastcall Hook_BumperRender(uint8_t* bumper) {
     using DrawMeshFn    = void(__thiscall*)(void*, int);
 
     uint8_t* renderer = GetRenderer();
-    if (renderer != nullptr) {
-        reinterpret_cast<SetLightingFn>(0x405e40)(renderer, 0);
+    bool isJava = (g_colorTheme == 2u);
+    if (isJava) {
+        OnColorThemeChanged();
+        g_inJavaBumperRender = true;
     }
 
-    g_inMobileBumperRender = true;
     int param = *reinterpret_cast<const int*>(bumper + 0x10);
     for (int i = 0; i < 4; ++i) {
-        void* sideMesh = *reinterpret_cast<void**>(bumper + 0x54 + i * 8);
+        uint8_t* sideMesh = *reinterpret_cast<uint8_t**>(bumper + 0x54 + i * 8);
         if (sideMesh != nullptr) {
+            bool triggered = (*reinterpret_cast<const int*>(sideMesh + 0x1c) != 5)
+                          && (*reinterpret_cast<const int*>(sideMesh + 0x08) != 0);
+            if (renderer != nullptr) {
+                reinterpret_cast<SetLightingFn>(0x405e40)(renderer, triggered ? 1 : 0);
+            }
             Hook_SetHeightUV(sideMesh, param);
             reinterpret_cast<DrawMeshFn>(0x421460)(sideMesh, 0);
         }
@@ -490,14 +853,116 @@ static void __fastcall Hook_BumperRender(uint8_t* bumper) {
 
     void* roofMesh = *reinterpret_cast<void**>(bumper + 0x74);
     if (roofMesh != nullptr) {
+        if (renderer != nullptr) {
+            reinterpret_cast<SetLightingFn>(0x405e40)(renderer, 0);
+        }
         Hook_SetHeightUV(roofMesh, param);
         reinterpret_cast<DrawMeshFn>(0x421460)(roofMesh, 0);
     }
-    g_inMobileBumperRender = false;
+
+    g_inJavaBumperRender = false;
+    if (isJava) {
+        OnColorThemeChanged();
+    }
 
     if (renderer != nullptr) {
         reinterpret_cast<SetLightingFn>(0x405e40)(renderer, 1);
     }
+}
+
+static void __fastcall Hook_MovingPlatformRender(uint8_t* plat) {
+    using OrigFn = void(__thiscall*)(void*);
+    auto orig = reinterpret_cast<OrigFn>(0x483fd0);
+    if (g_colorTheme != 2u || plat == nullptr) {
+        orig(plat);
+        return;
+    }
+
+    OnColorThemeChanged();
+    g_inJavaMovingPlatformRender = true;
+    orig(plat);
+    g_inJavaMovingPlatformRender = false;
+    OnColorThemeChanged();
+}
+
+static void __fastcall Hook_SetMeshLightingState(
+    void* renderer, void*, uint32_t enableLighting, uint32_t useVertexColor
+) {
+    if (g_prismMatOverride) {
+        useVertexColor = 0; // D3DMCS_MATERIAL so D3DMATERIAL9::Diffuse drives lighting instead of D3DFVF_DIFFUSE
+    }
+    reinterpret_cast<void(__thiscall*)(void*, uint32_t, uint32_t)>(0x405c20)(
+        renderer, enableLighting, useVertexColor
+    );
+}
+
+static void __declspec(naked) Hook_LitMeshColorOp() {
+    // Replaces `push 5; push 1; push 0; push eax; call edx` at 0x406565..0x40656d (9B -> call + 4x nop).
+    // Preserves ebx, esi, edi, ebp.
+    __asm {
+        cmp byte ptr [g_prismMatOverride], 0
+        jne use_select_arg2
+        push 5 // D3DTOP_MODULATE2X
+        jmp do_call
+    use_select_arg2:
+        push 3 // D3DTOP_SELECTARG2
+    do_call:
+        push 1 // D3DTSS_COLOROP
+        push 0 // stage 0
+        push eax
+        call edx
+        ret
+    }
+}
+
+struct ScopedJavaCubeLight {
+    IDirect3DDevice9* dev = nullptr;
+    D3DLIGHT9 saved{};
+    bool active = false;
+
+    explicit ScopedJavaCubeLight(bool enable) {
+        if (!enable) return;
+        dev = reinterpret_cast<IDirect3DDevice9*(__cdecl*)()>(0x40e6c0)();
+        if (dev != nullptr && SUCCEEDED(dev->GetLight(0, &saved))) {
+            D3DLIGHT9 cubeLight = saved;
+            cubeLight.Diffuse   = {1.0f, 1.0f, 1.0f, 1.0f};
+            cubeLight.Direction = {0.0f, -0.8819171f, -0.4714045f};
+            dev->SetLight(0, &cubeLight);
+            active = true;
+        }
+    }
+
+    ~ScopedJavaCubeLight() {
+        if (active && dev != nullptr) {
+            dev->SetLight(0, &saved);
+        }
+    }
+};
+
+static void __fastcall Hook_GhostCubeTransparents(void* renderer) {
+    using OrigFn = void(__thiscall*)(void*);
+    uint8_t* ws = *reinterpret_cast<uint8_t**>(0x5f9064);
+    bool isGhostDarkCube = (ws != nullptr && ws[0x48] == 0);
+    ScopedJavaCubeLight cubeLight(g_colorTheme == 2u && isGhostDarkCube);
+    reinterpret_cast<OrigFn>(0x407410)(renderer);
+}
+
+static void* __cdecl Hook_ComputeCubeDiffuse(
+    uint8_t* out, const uint8_t* baseColor,
+    int multR, int multG, int multB,
+    int addR, int addG, int addB
+) {
+    if (g_colorTheme == 2u) {
+        constexpr float kInvDenom = 1.0f / (2.0f * 0.8819171f);
+        for (int c = 0; c < 3; ++c) {
+            int v = static_cast<int>(std::lround(static_cast<float>(g_javaCubeDeltaTopRight[c]) * kInvDenom));
+            out[c] = static_cast<uint8_t>(std::clamp(v, 0, 255));
+        }
+        out[3] = baseColor[3];
+        return out;
+    }
+    using OrigFn = void*(__cdecl*)(uint8_t*, const uint8_t*, int, int, int, int, int, int);
+    return reinterpret_cast<OrigFn>(0x490e30)(out, baseColor, multR, multG, multB, addR, addG, addB);
 }
 
 static void* __cdecl Hook_ComputeCubeMatColor(
@@ -506,9 +971,10 @@ static void* __cdecl Hook_ComputeCubeMatColor(
     int addR, int addG, int addB
 ) {
     if (g_colorTheme != 0) {
-        auto scaleMult = [](int m) -> int {
+        int targetScale = (g_colorTheme == 2u) ? 254 : 255;
+        auto scaleMult = [targetScale](int m) -> int {
             if (m <= 0) return 0;
-            return (std::min)(255, (m * 255 + 111) / 223);
+            return (std::min)(255, (m * targetScale + 111) / 223);
         };
         multR = scaleMult(multR);
         multG = scaleMult(multG);
@@ -519,6 +985,20 @@ static void* __cdecl Hook_ComputeCubeMatColor(
 }
 
 } // namespace
+
+namespace edgemod {
+
+uint32_t __fastcall RenderPlayerCubeWithColorTheme(void* cube) {
+    using OrigFn = uint32_t(__thiscall*)(void*);
+    uint32_t ret = 0;
+    {
+        ScopedJavaCubeLight cubeLight(g_colorTheme == 2u);
+        ret = reinterpret_cast<OrigFn>(0x48c630)(cube);
+    }
+    return ret;
+}
+
+} // namespace edgemod
 
 void RegisterColorTheme() {
     // 1. Texture::apply D3D texture lookup (0x40d02a..0x40d031, 8B)
@@ -548,4 +1028,48 @@ void RegisterColorTheme() {
     // 7. Material::apply D3DTSS_COLOROP (0x4372d9..0x4372df, 7B -> call + nop)
     static const uint8_t exMatColorOp[7] = {0x8b, 0x56, 0x1c, 0x8b, 0x54, 0xfa, 0x08};
     RegRelCall(0x4372d9, exMatColorOp, 7, 7, &Hook_MaterialColorOp, 0x90);
+
+    // 8. WorldScreen::render Prism::render (0x47b3b9, 5B)
+    static const uint8_t exPrismRender[5] = {0xe8, 0x42, 0xc4, 0x00, 0x00};
+    RegRelCall(0x47b3b9, exPrismRender, 5, 5, &Hook_PrismRender);
+
+    // 9. WorldScreen::render post-prism Renderer::renderTransparents (0x47b3d5, 5B)
+    static const uint8_t exPrismTransparents[5] = {0xe8, 0x36, 0xc0, 0xf8, 0xff};
+    RegRelCall(0x47b3d5, exPrismTransparents, 5, 5, &Hook_PrismRenderTransparents);
+
+    // 10. Material::apply D3DMATERIAL9 load (0x437289..0x437292, 10B -> call + nop)
+    static const uint8_t exMatLoadD3DMat[10] = {0xe8, 0x32, 0x74, 0xfd, 0xff, 0x8b, 0x08, 0x8d, 0x56, 0x60};
+    RegRelCall(0x437289, exMatLoadD3DMat, 10, 10, &Hook_MaterialLoadD3DMat, 0x90);
+
+    // 11. Cube::ComputePalette palette table select (0x48b98c..0x48b99e, 19B -> call + nop)
+    static const uint8_t exSelectCubePal[19] = {
+        0xc7, 0x45, 0xf0, 0x84, 0x9b, 0x58, 0x00,
+        0x83, 0xfb, 0x03, 0x74, 0x07,
+        0xc7, 0x45, 0xf0, 0x50, 0x9b, 0x58, 0x00
+    };
+    RegRelCall(0x48b98c, exSelectCubePal, 19, 19, &Hook_SelectCubePaletteTable, 0x90);
+
+    // 12. Cube::update Cube::ComputePalette call (0x490ccf, 5B)
+    static const uint8_t exComputeCubePal[5] = {0xe8, 0xac, 0xac, 0xff, 0xff};
+    RegRelCall(0x490ccf, exComputeCubePal, 5, 5, &Hook_ComputeCubePalette);
+
+    // 13. WorldScreen::render MovingPlatform::render (0x47b2aa, 5B)
+    static const uint8_t exMovingPlatRender[5] = {0xe8, 0x21, 0x8d, 0x00, 0x00};
+    RegRelCall(0x47b2aa, exMovingPlatRender, 5, 5, &Hook_MovingPlatformRender);
+
+    // 14. Renderer::setVertexFormat lighting/color-vertex call (0x40654f, 5B)
+    static const uint8_t exSetMeshLightState[5] = {0xe8, 0xcc, 0xf6, 0xff, 0xff};
+    RegRelCall(0x40654f, exSetMeshLightState, 5, 5, &Hook_SetMeshLightingState);
+
+    // 15. Renderer::setVertexFormat lit D3DTSS_COLOROP (0x406565..0x40656d, 9B -> call + nop)
+    static const uint8_t exLitMeshColorOp[9] = {0x6a, 0x05, 0x6a, 0x01, 0x6a, 0x00, 0x50, 0xff, 0xd2};
+    RegRelCall(0x406565, exLitMeshColorOp, 9, 9, &Hook_LitMeshColorOp, 0x90);
+
+    // 16. Cube::update Diffuse computeMaterialColor (0x490bd5, 5B)
+    static const uint8_t exCubeDiff[5] = {0xe8, 0x56, 0x02, 0x00, 0x00};
+    RegRelCall(0x490bd5, exCubeDiff, 5, 5, &Hook_ComputeCubeDiffuse);
+
+    // 17. WorldScreen::render Ghost Cube::render Transparents (0x47b406, 5B)
+    static const uint8_t exGhostCubeTransp[5] = {0xe8, 0x05, 0xc0, 0xf8, 0xff};
+    RegRelCall(0x47b406, exGhostCubeTransp, 5, 5, &Hook_GhostCubeTransparents);
 }

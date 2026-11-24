@@ -725,7 +725,7 @@ static uint8_t __cdecl LoadTtsav_Impl(void* saveObj, uint8_t* userSettings, cons
     g_colorTheme = 0;
     if (ReadTtsavDouble(saveObj, "colorTheme", &dv)) {
         int iv = static_cast<int>(std::lrint(dv));
-        g_colorTheme = (iv != 0) ? 1u : 0u;
+        if (iv >= 0 && iv <= 2) g_colorTheme = static_cast<uint8_t>(iv);
     }
     OnColorThemeChanged();
 
@@ -1195,7 +1195,10 @@ static void FinishPlatformAction_Impl(int sfxId) {
 
 static void ColorThemeAction_Impl(int sfxId) {
     uint8_t* sm = GetScreenMgr();
-    g_colorTheme ^= 1u;
+    bool left = (sm != nullptr && sm[0xb3] != 0);
+    g_colorTheme = left
+        ? static_cast<uint8_t>((g_colorTheme + 2u) % 3u)
+        : static_cast<uint8_t>((g_colorTheme + 1u) % 3u);
     OnColorThemeChanged();
     if (sm != nullptr) {
         if (sfxId > 0) Game_PlaySfx(sm, sfxId);
@@ -1478,7 +1481,6 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_CHROMA_AB:
     case OPT_AUTO_SCALE:
     case OPT_FINISH_PLATFORM:
-    case OPT_COLOR_THEME:
     case OPT_MUSIC_START:
     case OPT_MUSIC_PLAYLIST:
     case OPT_UP_KEY:
@@ -1488,6 +1490,7 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_AA:
     case OPT_CAM_DIST:
     case OPT_DOLLY_ZOOM:
+    case OPT_COLOR_THEME:
     case OPT_FINISH_EFFECT:
     case OPT_EDGE_TIMER:
     case OPT_TIMER:
@@ -1569,7 +1572,6 @@ static int GetToggleState(OptItem item) {
     case OPT_CHROMA_AB:       return g_chromaAb ? 1 : 0;
     case OPT_AUTO_SCALE:      return g_autoScale ? 1 : 0;
     case OPT_FINISH_PLATFORM: return g_finishPlatform ? 1 : 0;
-    case OPT_COLOR_THEME:     return g_colorTheme ? 1 : 0;
     case OPT_MUSIC_START:     return g_musicStart ? 1 : 0;
     case OPT_MUSIC_PLAYLIST:  return g_musicPlaylist ? 1 : 0;
     case OPT_UP_KEY:      return (sm != nullptr && sm[0x2b4] != 0) ? 1 : 0;
@@ -1586,6 +1588,7 @@ static int GetPopupChoiceCount(OptItem item) {
         return (g_aaLevelCount > 0) ? g_aaLevelCount : 1;
     case OPT_CAM_DIST:     return 8;
     case OPT_DOLLY_ZOOM:   return 11;
+    case OPT_COLOR_THEME:  return 3;
     case OPT_FINISH_EFFECT: return 3;
     case OPT_EDGE_TIMER:    return 3;
     case OPT_TIMER:        return 4;
@@ -1627,6 +1630,7 @@ static int GetPopupCurrentChoice(OptItem item) {
         }
         return best;
     }
+    case OPT_COLOR_THEME:   return (g_colorTheme <= 2u) ? static_cast<int>(g_colorTheme) : 0;
     case OPT_FINISH_EFFECT: return (g_finishEffect <= 2u) ? static_cast<int>(g_finishEffect) : 0;
     case OPT_EDGE_TIMER:    return (g_edgeTimerMode <= 2u) ? static_cast<int>(g_edgeTimerMode) : 0;
     case OPT_TIMER:         return std::clamp<int>(g_timerMode, 0, 3);
@@ -1650,6 +1654,7 @@ static int GetPopupDefaultChoice(OptItem item) {
     }
     case OPT_CAM_DIST:      return 4; // 1
     case OPT_DOLLY_ZOOM:    return 0; // pc (-1)
+    case OPT_COLOR_THEME:   return 0; // pc
     case OPT_FINISH_EFFECT: return 0; // pc
     case OPT_EDGE_TIMER:    return 0; // 2D
     case OPT_TIMER:         return 3; // both
@@ -1690,6 +1695,7 @@ static const EdgeWString* GetPopupChoiceWstr(OptItem item, int idx, EdgeWString*
         if (g_fovPresets[idx] == -1.0f) return &g_wstrPc;
         if (g_fovPresets[idx] == -2.0f) return &g_wstrMobile;
         return FmtFloatWstr(g_fovPresets[idx], tmp);
+    case OPT_COLOR_THEME:
     case OPT_FINISH_EFFECT:
         idx = std::clamp(idx, 0, 2);
         if (idx == 1) return &g_wstrMobile;
@@ -1775,6 +1781,12 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
     case OPT_DOLLY_ZOOM:
         g_camFov = g_fovPresets[idx];
         ApplyOptionScaleChange(sfxId);
+        break;
+    case OPT_COLOR_THEME:
+        g_colorTheme = static_cast<uint8_t>(idx);
+        OnColorThemeChanged();
+        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
+        if (sm != nullptr) Game_SaveUserSettings(sm + 0x298);
         break;
     case OPT_FINISH_EFFECT:
         g_finishEffect = static_cast<uint8_t>(idx);
@@ -2079,7 +2091,9 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_FINISH_PLATFORM:
         return (g_finishPlatform != 0) ? &g_wstrMobile : &g_wstrPc;
     case OPT_COLOR_THEME:
-        return (g_colorTheme != 0) ? &g_wstrMobile : &g_wstrPc;
+        if (g_colorTheme == 1) return &g_wstrMobile;
+        if (g_colorTheme == 2) return &g_wstrJava;
+        return &g_wstrPc;
     case OPT_SOUNDS:
         FmtInt0to100Wstr((sm != nullptr) ? *reinterpret_cast<int*>(sm + 0x2b0) : 100, tmp);
         return tmp;

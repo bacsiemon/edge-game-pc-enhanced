@@ -468,8 +468,7 @@ static void __declspec(naked) hk_playerCubeRender() {
         mov DWORD PTR [ecx + 0x16c], 0
         ret
     pcr_orig:
-        mov eax, 0x48c630
-        jmp eax
+        jmp RenderPlayerCubeWithColorTheme
     }
 }
 

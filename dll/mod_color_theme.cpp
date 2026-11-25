@@ -1,4 +1,5 @@
 #include "mod_state.h"
+#include "mod_smooth_shared.h"
 #include <d3d9.h>
 #include <algorithm>
 #include <cmath>
@@ -235,7 +236,21 @@ static const Rgb8 kJavaShrinkerColors[12] = {
     {0x1c, 0x42, 0x76}, {0x37, 0x62, 0x8b}, {0x52, 0x81, 0x9f}, {0x6d, 0x98, 0xaf}
 };
 
-// Exact Java holo_switch.spr 4-color cycle
+// Exact PC rainbowcube.img bottom pastel band (rows 43..63) 13-color cycle
+static const Rgb8 kPcHoloSwitchColors[13] = {
+    {0xfe, 0xa9, 0xb6}, {0xfe, 0x9f, 0xeb}, {0xee, 0x9d, 0xfe}, {0xd3, 0xa9, 0xfe},
+    {0xb5, 0xbe, 0xfe}, {0xa1, 0xcf, 0xfe}, {0x96, 0xda, 0xfe}, {0x3d, 0xf8, 0x9d},
+    {0x80, 0xff, 0x85}, {0xad, 0xff, 0x5a}, {0xee, 0xf2, 0x1c}, {0xff, 0xd2, 0x75},
+    {0xff, 0xbd, 0x84}
+};
+
+// Exact Android holo_switch.spr 8-color cycle (frames 0..7)
+static const Rgb8 kAndroidHoloSwitchColors[8] = {
+    {0x78, 0xa8, 0xe8}, {0x5c, 0xd2, 0xba}, {0x40, 0xfc, 0x8c}, {0xa8, 0xf5, 0x78},
+    {0xfc, 0xc0, 0x60}, {0xfc, 0xa4, 0x98}, {0xfc, 0x88, 0xd0}, {0xba, 0x98, 0xdc}
+};
+
+// Exact Java holo_switch.spr 4-color cycle (frames 0..3)
 static const Rgb8 kJavaHoloSwitchColors[4] = {
     {0x78, 0xa8, 0xe8}, {0x40, 0xfc, 0x8c}, {0xfc, 0xc0, 0x60}, {0xfc, 0x88, 0xd0}
 };
@@ -285,7 +300,7 @@ static IDirect3DTexture9* g_javaBumperTex[4] = {};
 static IDirect3DTexture9* g_platEdgeTex[2][4] = {};
 static IDirect3DTexture9* g_javaShrinkerTex = nullptr;
 static IDirect3DTexture9* g_androidShrinkerTex[4] = {};
-static IDirect3DTexture9* g_javaHoloSwitchTex = nullptr;
+static IDirect3DTexture9* g_holoSwitchTex[3] = {};
 static IDirect3DTexture9* g_javaStarTex[2] = {};
 static IDirect3DTexture9* g_mobileFallingTex[4][16] = {};
 static int                g_mobileFallingBucket = -1;
@@ -293,7 +308,7 @@ static bool               g_inJavaBumperRender = false;
 static bool               g_inJavaMovingPlatformRender = false;
 static bool               g_inMovingPlatEdgeRender = false;
 static bool               g_inShrinkerRender = false;
-static bool               g_inJavaHoloSwitchRender = false;
+static bool               g_inHoloSwitchRender = false;
 
 static inline uint32_t PackArgb(uint8_t a, Rgb8 c) {
     return (static_cast<uint32_t>(a) << 24)
@@ -589,17 +604,19 @@ static IDirect3DTexture9* CreateMobileFallingTexture(IDirect3DDevice9* dev, uint
 static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DDevice9* d3dDev) {
     if (texObj == nullptr) return nullptr;
     void* defaultTex = *reinterpret_cast<void* const*>(texObj + 0x2c);
-    if (g_colorTheme == 0 || d3dDev == nullptr) return defaultTex;
+    if (d3dDev == nullptr) return defaultTex;
     if (*reinterpret_cast<const uint32_t*>(texObj + 0x08) != kTexturesFolderHash) return defaultTex;
 
     uint32_t hash0 = *reinterpret_cast<const uint32_t*>(texObj + 0x04);
+    bool isHolo = (g_inHoloSwitchRender && hash0 == kRainbowCubeHash);
+    if (g_colorTheme == 0 && !isHolo) return defaultTex;
+
     bool isJava = (g_colorTheme == 2u);
     uint8_t* lvl = GetLevel();
     bool isPlatEdge = (g_inMovingPlatEdgeRender && hash0 == kRainbowCubeHash);
-    bool isJavaHolo = (isJava && g_inJavaHoloSwitchRender && hash0 == kRainbowCubeHash);
     bool isShrinker = (g_inShrinkerRender && hash0 == kShrinkerTexHash);
     bool isJavaStar = (isJava && hash0 == kFlickeringStarHash && lvl != nullptr);
-    bool isCustom = isPlatEdge || isJavaHolo || isShrinker || isJavaStar;
+    bool isCustom = isPlatEdge || isHolo || isShrinker || isJavaStar;
 
     int slot = -1;
     if (!isCustom) {
@@ -651,9 +668,11 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
             g_javaShrinkerTex->Release();
             g_javaShrinkerTex = nullptr;
         }
-        if (g_javaHoloSwitchTex != nullptr) {
-            g_javaHoloSwitchTex->Release();
-            g_javaHoloSwitchTex = nullptr;
+        for (int i = 0; i < 3; ++i) {
+            if (g_holoSwitchTex[i] != nullptr) {
+                g_holoSwitchTex[i]->Release();
+                g_holoSwitchTex[i] = nullptr;
+            }
         }
         for (int i = 0; i < 2; ++i) {
             if (g_javaStarTex[i] != nullptr) {
@@ -676,11 +695,18 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
         return g_platEdgeTex[modeSlot][themeIdx] != nullptr
             ? static_cast<void*>(g_platEdgeTex[modeSlot][themeIdx])
             : defaultTex;
-    } else if (isJavaHolo) {
-        if (g_javaHoloSwitchTex == nullptr) {
-            g_javaHoloSwitchTex = CreateHorizontalCycleTexture(d3dDev, kJavaHoloSwitchColors, 4, false);
+    } else if (isHolo) {
+        uint8_t mode = (g_colorTheme <= 2u) ? g_colorTheme : 0u;
+        if (g_holoSwitchTex[mode] == nullptr) {
+            if (mode == 0u) {
+                g_holoSwitchTex[mode] = CreateHorizontalCycleTexture(d3dDev, kPcHoloSwitchColors, 13, false);
+            } else if (mode == 1u) {
+                g_holoSwitchTex[mode] = CreateHorizontalCycleTexture(d3dDev, kAndroidHoloSwitchColors, 8, false);
+            } else {
+                g_holoSwitchTex[mode] = CreateHorizontalCycleTexture(d3dDev, kJavaHoloSwitchColors, 4, false);
+            }
         }
-        return g_javaHoloSwitchTex != nullptr ? static_cast<void*>(g_javaHoloSwitchTex) : defaultTex;
+        return g_holoSwitchTex[mode] != nullptr ? static_cast<void*>(g_holoSwitchTex[mode]) : defaultTex;
     } else if (isShrinker) {
         if (isJava) {
             if (g_javaShrinkerTex == nullptr) {
@@ -1887,19 +1913,111 @@ static void __fastcall Hook_SwitchRender(uint8_t* sw) {
     orig(sw);
 }
 
+struct SavedHoloTexMatAnim {
+    uint8_t* entry;
+    void*    savedAnim;
+};
+
+static void ApplyHoloSwitchSmoothUV(
+    uint8_t* nodePtr, float phase,
+    SavedHoloTexMatAnim* saved, int& savedCount, int maxSaved
+) {
+    if (nodePtr == nullptr) return;
+    uint8_t* node = *reinterpret_cast<uint8_t**>(nodePtr);
+    while (node != nullptr) {
+        using GetMeshFn = uint8_t*(__thiscall*)(void*);
+        uint8_t* meshObj = (*reinterpret_cast<GetMeshFn**>(node))[1](node);
+        if (meshObj != nullptr) {
+            uint8_t* sm = *reinterpret_cast<uint8_t**>(meshObj + 0x1d0);
+            uint8_t* smEnd = *reinterpret_cast<uint8_t**>(meshObj + 0x1d4);
+            while (sm != nullptr && sm < smEnd) {
+                uint8_t* mat = *reinterpret_cast<uint8_t**>(sm + 0x04);
+                if (mat != nullptr) {
+                    uint8_t** texBegin = *reinterpret_cast<uint8_t***>(mat + 0x0c);
+                    uint8_t** texEnd   = *reinterpret_cast<uint8_t***>(mat + 0x10);
+                    if (texBegin != nullptr && texBegin < texEnd && texBegin[0] != nullptr) {
+                        const uint8_t* tex = texBegin[0];
+                        uint32_t h1 = *reinterpret_cast<const uint32_t*>(tex + 0x08);
+                        uint32_t h0 = *reinterpret_cast<const uint32_t*>(tex + 0x04);
+                        if (h1 == kTexturesFolderHash && h0 == kRainbowCubeHash) {
+                            uint8_t* tm = *reinterpret_cast<uint8_t**>(mat + 0x2c);
+                            uint8_t* tmEnd = *reinterpret_cast<uint8_t**>(mat + 0x30);
+                            while (tm != nullptr && tm < tmEnd) {
+                                if (savedCount < maxSaved) {
+                                    saved[savedCount++] = {
+                                        tm,
+                                        *reinterpret_cast<void**>(tm + 0x40)
+                                    };
+                                }
+                                *reinterpret_cast<void**>(tm + 0x40) = nullptr;
+                                float uvMat[16] = {
+                                    1.0f, 0.0f, 0.0f, 0.0f,
+                                    0.0f, 1.0f, 0.0f, 0.0f,
+                                    phase, 0.0f, 1.0f, 0.0f,
+                                    phase, 0.0f, 0.0f, 1.0f
+                                };
+                                std::memcpy(tm, uvMat, sizeof(uvMat));
+                                tm += 0x48;
+                            }
+                        }
+                    }
+                }
+                sm += 0xa8;
+            }
+        }
+        ApplyHoloSwitchSmoothUV(node + 0xec, phase, saved, savedCount, maxSaved);
+        node = *reinterpret_cast<uint8_t**>(node + 0xf4);
+    }
+}
+
 static void __fastcall Hook_HoloSwitchRender(uint8_t* holo) {
     using OrigFn = void(__thiscall*)(void*);
     auto orig = reinterpret_cast<OrigFn>(0x486150);
-    if (g_colorTheme != 2u || holo == nullptr) {
+    if (holo == nullptr) {
         orig(holo);
         return;
     }
 
+    uint8_t* ws = *reinterpret_cast<uint8_t**>(0x5f9064);
+    float smoothFrame = (ws != nullptr) ? GetSmoothWsFrame(ws) : 0.0f;
+    float phase = 0.0f;
+    if (g_colorTheme == 0u) {
+        // PC: 13 pastel colors over 65 ticks (5 ticks/color, matching holoswitch.ema)
+        phase = std::fmod(smoothFrame / 65.0f, 1.0f);
+        if (phase < 0.0f) phase += 1.0f;
+    } else if (g_colorTheme == 1u) {
+        // Android: max(0, ((tick / 2) % (8 + 2)) - 2) @ 30 Hz (20 ticks total: 4-tick #78a8e8 hold + 16-tick 8-color sweep)
+        float step = std::fmod(smoothFrame / 2.0f, 10.0f);
+        if (step < 0.0f) step += 10.0f;
+        phase = (step > 2.0f) ? ((step - 2.0f) / 8.0f) : 0.0f;
+    } else {
+        // Java: max(0, ((as / 2) % (4 + 2)) - 2) @ 22 Hz (12 Java ticks = 16.36 PC ticks: 2-step #78a8e8 hold + 4-step 4-color sweep)
+        constexpr float kJavaStepTicks = 2.0f * 30.0f / 22.0f;
+        float step = std::fmod(smoothFrame / kJavaStepTicks, 6.0f);
+        if (step < 0.0f) step += 6.0f;
+        phase = (step > 2.0f) ? ((step - 2.0f) / 4.0f) : 0.0f;
+    }
+    // Compensate for holoswitch.rmdl vertex U midpoint (~0.0342) so phase=0 samples exact color[0]
+    constexpr float kHoloSwitchBaseU = 0.0342f;
+    phase = std::fmod(phase - kHoloSwitchBaseU, 1.0f);
+    if (phase < 0.0f) phase += 1.0f;
+
+    SavedHoloTexMatAnim saved[16]{};
+    int savedCount = 0;
+    uint8_t* model = *reinterpret_cast<uint8_t**>(holo + 0x28);
+    if (model != nullptr) {
+        ApplyHoloSwitchSmoothUV(model, phase, saved, savedCount, 16);
+    }
+
     OnColorThemeChanged();
-    g_inJavaHoloSwitchRender = true;
+    g_inHoloSwitchRender = true;
     orig(holo);
-    g_inJavaHoloSwitchRender = false;
+    g_inHoloSwitchRender = false;
     OnColorThemeChanged();
+
+    for (int i = 0; i < savedCount; ++i) {
+        *reinterpret_cast<void**>(saved[i].entry + 0x40) = saved[i].savedAnim;
+    }
 }
 
 static void __fastcall Hook_ShrinkerRender(uint8_t* shrinker) {

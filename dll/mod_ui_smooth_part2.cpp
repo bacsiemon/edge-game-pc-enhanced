@@ -2053,45 +2053,112 @@ static uint8_t CalcHudShadowAlpha(int32_t shadowOpacityPct, uint8_t fgAlpha) {
     return static_cast<uint8_t>(std::lround(255.0 * shScale * fgScale));
 }
 
+constexpr int kRankD  = 0;
+constexpr int kRankC  = 1;
+constexpr int kRankB  = 2;
+constexpr int kRankA  = 3;
+constexpr int kRankS  = 4;
+constexpr int kRankSP = 5;
+constexpr int kRankPB = 6;
+
+static uint32_t GetCurrentLevelPbTicks() {
+    uint8_t* sm = GetScreenMgr();
+    if (sm == nullptr) return 0u;
+
+    int32_t levelType = *reinterpret_cast<const int32_t*>(sm + 0x1e0);
+    int32_t levelIdx  = *reinterpret_cast<const int32_t*>(sm + 0x1c0);
+    if (levelType < 0 || levelType > 2 || levelIdx < 0) return 0u;
+
+    void* levelList = sm + 0x24c;
+    using HasLevelFn = bool(__thiscall*)(void*, int32_t, int32_t);
+    if (!reinterpret_cast<HasLevelFn>(0x4a45d0)(levelList, levelType, levelIdx)) return 0u;
+
+    using GetLevelInfoFn = uint8_t*(__thiscall*)(void*, int32_t, int32_t);
+    uint8_t* info = reinterpret_cast<GetLevelInfoFn>(0x4a4620)(levelList, levelType, levelIdx);
+    if (info == nullptr) return 0u;
+
+    int32_t levelId = *reinterpret_cast<const int32_t*>(info + 0x3c);
+    using GetLevelSaveInfoFn = uint8_t*(__thiscall*)(void*, int32_t);
+    uint8_t* save = reinterpret_cast<GetLevelSaveInfoFn>(0x4920e0)(sm + 0x298, levelId);
+    if (save == nullptr || save[0] == 0) return 0u;
+
+    return *reinterpret_cast<const uint32_t*>(save + 0x4);
+}
+
+static void SetTimerRankTextWstr(int rank, EdgeWString* out) {
+    static const wchar_t* const kRankTexts[7] = {L"D", L"C", L"B", L"A", L"S", L"S+", L"PB"};
+    int idx = std::clamp(rank, 0, 6);
+    out->set_literal(kRankTexts[idx], (idx >= 5) ? 2u : 1u);
+}
+
 static uint32_t GetTimerRankRgb(int rank) {
-    if (rank >= 4) {
+    if (rank == kRankPB) {
+        double s = 0.5 + 0.5 * std::sin(GetHudTimerClockSec() * 2.0 * 3.14159265358979323846 * 1.15);
+        uint32_t g = static_cast<uint32_t>(std::lround(215.0 + (242.0 - 215.0) * s));
+        uint32_t b = static_cast<uint32_t>(std::lround(168.0 * s));
+        return (0xffu << 16) | ((g & 0xffu) << 8) | (b & 0xffu);
+    }
+    if (rank >= kRankS) {
         return CalcSmoothRainbow(static_cast<float>(GetHudTimerClockSec() * 22.0), 1.0f);
     }
-    if (rank == 3) return 0x55ff77u; // A
-    if (rank == 2) return 0x55ccffu; // B
-    if (rank == 1) return 0xffaa33u; // C
-    return 0xff5555u;                // D
+    if (rank == kRankA) return 0x55ff77u; // A
+    if (rank == kRankB) return 0x55ccffu; // B
+    if (rank == kRankC) return 0xffaa33u; // C
+    return 0xff5555u;                     // D
 }
 
 static void ComputeTimerStats(
-    const uint8_t* level, double effEl, double effEd,
-    int* outRank, double* outRemTicks, double* outBarFrac, uint32_t* outRankRgb
+    const uint8_t* level, uint32_t pbTicks, double effEl, double effEd,
+    int* outRank, int* outUnderRank, double* outRemTicks, double* outBarFrac, uint32_t* outRankRgb
 ) {
-    double effNet = effEl - effEd;
-    if (effNet < 0.0) effNet = 0.0;
+    double effNet = (std::max)(0.0, effEl - effEd);
 
-    uint32_t th[5];
+    struct RankStep {
+        double thresh;
+        int    rank;
+    };
+    RankStep steps[6]{};
+    int count = 0;
+    bool pbInserted = false;
+    double pbThresh = static_cast<double>(pbTicks);
+
     for (int i = 0; i < 5; ++i) {
-        th[i] = *reinterpret_cast<const uint32_t*>(level + 0x80 + i * 4);
+        double th = static_cast<double>(*reinterpret_cast<const uint32_t*>(level + 0x80 + i * 4));
+        if (pbTicks > 0u && !pbInserted && pbThresh <= th) {
+            steps[count++] = {pbThresh, kRankPB};
+            pbInserted = true;
+        }
+        steps[count++] = {th, kRankSP - i};
+    }
+    if (pbTicks > 0u && !pbInserted) {
+        steps[count++] = {pbThresh, kRankPB};
     }
 
-    int rank = 0;
+    int rank = kRankD;
+    int underRank = -1;
     double remTicks = 0.0;
     double barFrac = 0.0;
-    for (int i = 0; i < 5; ++i) {
-        double hi = static_cast<double>(th[i]);
+    for (int idx = 0; idx < count; ++idx) {
+        double hi = steps[idx].thresh;
         if (effNet <= hi) {
-            rank = 5 - i;
+            rank = steps[idx].rank;
             remTicks = hi - effNet;
-            double lo = (i == 0) ? 0.0 : static_cast<double>(th[i - 1]);
-            double span = hi - lo;
-            if (span <= 0.0) span = hi;
+            double lo = (idx == 0) ? 0.0 : steps[idx - 1].thresh;
+            double span = (hi > lo) ? (hi - lo) : hi;
             barFrac = (span > 0.0) ? std::clamp(remTicks / span, 0.0, 1.0) : 0.0;
+            underRank = kRankD;
+            for (int k = idx + 1; k < count; ++k) {
+                if (steps[k].thresh > hi) {
+                    underRank = steps[k].rank;
+                    break;
+                }
+            }
             break;
         }
     }
 
     *outRank = rank;
+    *outUnderRank = underRank;
     *outRemTicks = remTicks;
     *outBarFrac = barFrac;
     *outRankRgb = GetTimerRankRgb(rank);
@@ -2114,13 +2181,41 @@ static void ComputeMenuPreviewBesidePos(
     *outY = std::clamp(targetY, 0.0f, maxY);
 }
 
+static bool DrawSPlusBarSprite(
+    uint8_t* renderer, uint8_t* sm, int x, int y, int w, int h, uint8_t fgAlpha
+) {
+    if (renderer == nullptr || sm == nullptr || w <= 0 || h <= 0) return false;
+    uint8_t* hGrp = *reinterpret_cast<uint8_t* const*>(sm + 0x58);
+    if (hGrp == nullptr) return false;
+    int16_t cnt = *reinterpret_cast<const int16_t*>(hGrp + 8);
+    uint8_t** hSprites = *reinterpret_cast<uint8_t** const*>(hGrp + 0x20);
+    if (cnt <= 0 || hSprites == nullptr) return false;
+
+    int32_t savedSrc = *reinterpret_cast<const int32_t*>(renderer + 0x18);
+    int32_t savedDst = *reinterpret_cast<const int32_t*>(renderer + 0x1c);
+    uint8_t* mstack = GetMatrixStack();
+    uint32_t savedMode = (mstack != nullptr) ? *reinterpret_cast<const uint32_t*>(mstack + 0x4) : 1u;
+    Game_SetBlend(renderer, 0);
+    DrawSmoothRainbowSpriteAtFrac(
+        hSprites, static_cast<uint32_t>(cnt), GetHudTimerClockSec() * 30.0,
+        w, h, x, y, fgAlpha
+    );
+    if (mstack != nullptr) {
+        *reinterpret_cast<uint32_t*>(mstack + 0x4) = 1u;
+        reinterpret_cast<void(__thiscall*)(void*)>(0x41f660)(mstack);
+        *reinterpret_cast<uint32_t*>(mstack + 0x4) = savedMode;
+    }
+    Game_SetD3DBlend(renderer, savedSrc, savedDst);
+    return true;
+}
+
 static void DrawTimerRankBar(
-    uint8_t* renderer, uint8_t* sm, int rank, double barFrac,
+    uint8_t* renderer, uint8_t* sm, int rank, int underRank, double barFrac,
     int x, int y, int barW, int barH, uint32_t rankRgba, uint8_t fgAlpha
 ) {
     if (barW <= 0 || barH <= 0 || fgAlpha == 0) return;
 
-    if (rank <= 0) {
+    if (underRank < 0) {
         // Bottom rank (D): no lower rank underneath; fills bar with solid D color.
         Game_DrawQuad(x, y, barW, barH, &rankRgba);
         return;
@@ -2130,41 +2225,22 @@ static void DrawTimerRankBar(
 
     // Underlying next-rank layer (dimmed to 65% while the current rank layer is active,
     // matching the speedometer's 2-layer buff bar stacking rule).
-    uint32_t underRgb = GetTimerRankRgb(rank - 1);
-    if (fillW > 0) {
-        underRgb = ScaleRgb(underRgb, 0.65f);
+    if (underRank == kRankSP && DrawSPlusBarSprite(renderer, sm, x, y, barW, barH, fgAlpha)) {
+        if (fillW > 0) {
+            uint32_t dimRgba = MakeRgba(0, 0, 0, static_cast<uint8_t>(std::lround(0.35 * static_cast<double>(fgAlpha))));
+            Game_DrawQuad(x, y, barW, barH, &dimRgba);
+        }
+    } else {
+        uint32_t underRgb = GetTimerRankRgb(underRank);
+        if (fillW > 0) {
+            underRgb = ScaleRgb(underRgb, 0.65f);
+        }
+        uint32_t underRgba = RgbToRgba(underRgb, fgAlpha);
+        Game_DrawQuad(x, y, barW, barH, &underRgba);
     }
-    uint32_t underRgba = RgbToRgba(underRgb, fgAlpha);
-    Game_DrawQuad(x, y, barW, barH, &underRgba);
 
     if (fillW > 0) {
-        bool drewSprite = false;
-        if (rank == 5 && renderer != nullptr && sm != nullptr) {
-            uint8_t* hGrp = *reinterpret_cast<uint8_t* const*>(sm + 0x58);
-            if (hGrp != nullptr) {
-                int16_t cnt = *reinterpret_cast<const int16_t*>(hGrp + 8);
-                uint8_t** hSprites = *reinterpret_cast<uint8_t** const*>(hGrp + 0x20);
-                if (cnt > 0 && hSprites != nullptr) {
-                    int32_t savedSrc = *reinterpret_cast<const int32_t*>(renderer + 0x18);
-                    int32_t savedDst = *reinterpret_cast<const int32_t*>(renderer + 0x1c);
-                    uint8_t* mstack = GetMatrixStack();
-                    uint32_t savedMode = (mstack != nullptr) ? *reinterpret_cast<const uint32_t*>(mstack + 0x4) : 1u;
-                    Game_SetBlend(renderer, 0);
-                    DrawSmoothRainbowSpriteAtFrac(
-                        hSprites, static_cast<uint32_t>(cnt), GetHudTimerClockSec() * 30.0,
-                        fillW, barH, x, y, fgAlpha
-                    );
-                    if (mstack != nullptr) {
-                        *reinterpret_cast<uint32_t*>(mstack + 0x4) = 1u;
-                        reinterpret_cast<void(__thiscall*)(void*)>(0x41f660)(mstack);
-                        *reinterpret_cast<uint32_t*>(mstack + 0x4) = savedMode;
-                    }
-                    Game_SetD3DBlend(renderer, savedSrc, savedDst);
-                    drewSprite = true;
-                }
-            }
-        }
-        if (!drewSprite) {
+        if (!(rank == kRankSP && DrawSPlusBarSprite(renderer, sm, x, y, fillW, barH, fgAlpha))) {
             Game_DrawQuad(x, y, fillW, barH, &rankRgba);
         }
         if (fillW > 1 && fillW < barW) {
@@ -2199,8 +2275,9 @@ static void __cdecl RenderHudTimerOverlay(
     double effEl = 415.0;
     double remTicks = 185.0;
     double barFrac = 0.62;
-    int rank = 5;
-    uint32_t rankRgb = CalcSmoothRainbow(static_cast<float>(GetHudTimerClockSec() * 22.0), 1.0f);
+    int rank = kRankSP;
+    int underRank = kRankS;
+    uint32_t rankRgb = GetTimerRankRgb(kRankSP);
 
     if (!forceSample) {
         uint8_t* level = GetLevel();
@@ -2222,7 +2299,7 @@ static void __cdecl RenderHudTimerOverlay(
                 effEd = static_cast<double>(g_wsPrevTotalEdge) + static_cast<double>(dEd) * static_cast<double>(g_uiAlpha);
             }
         }
-        ComputeTimerStats(level, effEl, effEd, &rank, &remTicks, &barFrac, &rankRgb);
+        ComputeTimerStats(level, GetCurrentLevelPbTicks(), effEl, effEd, &rank, &underRank, &remTicks, &barFrac, &rankRgb);
     }
 
     uint8_t fgAlpha = ((expectedState == 9u || expectedState == 0x12u) && !dockBesideMenu) ? 140u : 255u;
@@ -2314,9 +2391,8 @@ static void __cdecl RenderHudTimerOverlay(
     }
 
     {
-        static const wchar_t* const kRankTexts[6] = {L"D", L"C", L"B", L"A", L"S", L"S+"};
         EdgeWString rankWs;
-        rankWs.set_literal(kRankTexts[rank], (rank == 5) ? 2u : 1u);
+        SetTimerRankTextWstr(rank, &rankWs);
         int rankTextY = showRank ? rkY : elY;
         if (shAlpha > 0) {
             *pTextCol = shadowRgba;
@@ -2330,7 +2406,7 @@ static void __cdecl RenderHudTimerOverlay(
         Game_DrawQuad(kPadX + 2, barY + 2, kBarW, kBarH, &shadowRgba);
     }
     Game_DrawQuad(kPadX, barY, kBarW, kBarH, &trackRgba);
-    DrawTimerRankBar(renderer, sm, rank, barFrac, kPadX, barY, kBarW, kBarH, rankRgba, fgAlpha);
+    DrawTimerRankBar(renderer, sm, rank, underRank, barFrac, kPadX, barY, kBarW, kBarH, rankRgba, fgAlpha);
 
     *pTextCol = savedTextCol;
     Game_SetBlend(renderer, 0);
@@ -2773,11 +2849,12 @@ void __cdecl RenderPauseHeaderTimer(int x, int y, int width) {
     int32_t curEd = *reinterpret_cast<const int32_t*>(ws + 0x108)
                   + ((ws[0x6c] != 0) ? *reinterpret_cast<const int32_t*>(ws + 0x78) : 0);
 
-    int rank = 5;
+    int rank = kRankSP;
+    int underRank = kRankS;
     double remTicks = 0.0;
     double barFrac = 0.0;
     uint32_t rankRgb = 0xffffffu;
-    ComputeTimerStats(level, static_cast<double>(curEl), static_cast<double>(curEd), &rank, &remTicks, &barFrac, &rankRgb);
+    ComputeTimerStats(level, GetCurrentLevelPbTicks(), static_cast<double>(curEl), static_cast<double>(curEd), &rank, &underRank, &remTicks, &barFrac, &rankRgb);
 
     uint32_t rankRgba = RgbToRgba(rankRgb, 255u);
     uint32_t* pTextCol = reinterpret_cast<uint32_t*>(0x5f4268);
@@ -2795,15 +2872,14 @@ void __cdecl RenderPauseHeaderTimer(int x, int y, int width) {
     *pTextCol = rankRgba;
     Game_DrawText(&remWs, x, y + 18, 0x2000, 0x2000, 1, 0, 0x14);
 
-    static const wchar_t* const kRankTexts[6] = {L"D", L"C", L"B", L"A", L"S", L"S+"};
     EdgeWString rankWs;
-    rankWs.set_literal(kRankTexts[rank], (rank == 5) ? 2u : 1u);
+    SetTimerRankTextWstr(rank, &rankWs);
     *pTextCol = rankRgba;
     Game_DrawText(&rankWs, x + width, y + 18, 0x2000, 0x2000, 1, 0, 0x18);
 
     uint32_t trackRgba = MakeRgba(255, 255, 255, 42);
     Game_DrawQuad(x, y + 38, width, 5, &trackRgba);
-    DrawTimerRankBar(GetRenderer(), GetScreenMgr(), rank, barFrac, x, y + 38, width, 5, rankRgba, 255u);
+    DrawTimerRankBar(GetRenderer(), GetScreenMgr(), rank, underRank, barFrac, x, y + 38, width, 5, rankRgba, 255u);
 
     *pTextCol = savedTextCol;
 }

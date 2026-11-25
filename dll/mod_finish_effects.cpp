@@ -430,6 +430,7 @@ static void __declspec(naked) hk_unloadLevelClear() {
         push ecx
         push edx
         call ResetCubeDistortionState
+        call ResetMinimapCache
         pop edx
         pop ecx
         pop eax

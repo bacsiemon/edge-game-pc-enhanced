@@ -27,6 +27,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 | **UI**                   | `edge timer`           | `2D`, `2D scaled`, `3D`                                                          | popup             | `2D` (default), `2D scaled` (scales to camera zoom level), or `3D` (Android world-space 3D edge timer)             |
 | **UI**                   | `timer`                | *(opens **Timer** submenu)*                                                      | submenu (`>`)     | Nested 3rd-level category                                                                                          |
 | **UI**                   | `prism counter`        | *(opens **Prism Counter** submenu)*                                              | submenu (`>`)     | Nested 3rd-level category                                                                                          |
+| **UI**                   | `minimap`              | *(opens **Minimap** submenu)*                                                    | submenu (`>`)     | Nested 3rd-level category                                                                                          |
 | **UI -> Timer**          | `type`                 | `off`, `level`, `rank`, `both`                                                   | popup             | 4 named choices; docked live/sample preview beside menu (default `both`)                                           |
 | **UI -> Timer**          | `size`                 | `0.25`, `0.5`, `0.75`, `1`, `1.25`, `1.5`, `1.75`, `2`                           | slider            | Live full-opacity resize preview beside menu while dragging (sample in Main Options; default `1`)                  |
 | **UI -> Timer**          | `background`           | `0`..`100`                                                                       | slider            | Background & border opacity in steps of `10` (default `70`); `0` hides the background box                          |
@@ -37,6 +38,12 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 | **UI -> Prism Counter**  | `background`           | `0`..`100`                                                                       | slider            | Background & border opacity in steps of `10` (default `70`); `0` hides the background box                          |
 | **UI -> Prism Counter**  | `drop shadow`          | `0`..`100`                                                                       | slider            | Drop shadow opacity for prism dots/icon and numbers in steps of `10` (default `0`)                                 |
 | **UI -> Prism Counter**  | `position`             | `TL`, `TR`, `BL`, `BR`                                                           | popup             | 4 named choices; dims & snaps preview (with companion timer) to chosen corner, dodges minimap (default `TR`)       |
+| **UI -> Minimap**        | `enable`               | `off`, `on`                                                                      | toggle            | Instant 2-state switch; preserves `[minimap] visible` from `settings.ini` until set in menu (default `on`)        |
+| **UI -> Minimap**        | `width`                | `0.5`..`2.5` (steps of `0.25`)                                                   | slider            | Multiplies default `160px` width when set in menu; otherwise preserves `[minimap] width` from `settings.ini`      |
+| **UI -> Minimap**        | `height`               | `0.5`..`2.5` (steps of `0.25`)                                                   | slider            | Multiplies default `160px` height when set in menu; otherwise preserves `[minimap] height` from `settings.ini`    |
+| **UI -> Minimap**        | `range`                | `0.5`..`2.5` (steps of `0.25`)                                                   | slider            | Scales coverage relative to default `19.5` cell size (`19.5 / range`); preserves `settings.ini` until set in menu  |
+| **UI -> Minimap**        | `background`           | `0`..`100`                                                                       | slider            | Background opacity in steps of `10` (default `70`); `0` hides the minimap background quad                          |
+| **UI -> Minimap**        | `position`             | `TL`, `TR`, `BL`, `BR`                                                           | popup             | 4 named choices; preserves `settings.ini` alignment until set in menu, dims & snaps preview behind popup (`TL`)    |
 | **Gameplay**    | `up key`               | 2 localized key modes                                                            | toggle            | Instant 2-state switch                                                                                             |
 | **Gameplay**    | `skip intro`           | `off`, `on`                                                                      | toggle            | Instant 2-state switch                                                                                             |
 | **Gameplay**    | `cam distance`         | `mobile` (`-1`), `0.5`, `0.65`, `0.75`, `1`, `1.25`, `1.5`, `2`                  | popup             | Named `mobile` mode + numeric multipliers (default `1`)                                                            |
@@ -47,20 +54,20 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 
 ## Layout & Consistency
 
-- **Submenu Navigation & `>` Indicators:** All rows opening nested submenus display a right-aligned `>` arrow (`Main Menu` rows `edge challenge`, `scores`, `options`; `edge challenge` rows `normal`, `extended levels`, `bonus levels`; `scores` rows `normal`, `extended`, `bonus`; Pause root row `options` at index `3`; Options root rows `display`, `graphics`, `audio`, `ui`, `gameplay`; `UI` rows `timer`, `prism counter`). `instructions` sits on `Main Menu` below `options` (removed from `edge challenge`).
+- **Submenu Navigation & `>` Indicators:** All rows opening nested submenus display a right-aligned `>` arrow (`Main Menu` rows `edge challenge`, `scores`, `options`; `edge challenge` rows `normal`, `extended levels`, `bonus levels`; `scores` rows `normal`, `extended`, `bonus`; Pause root row `options` at index `3`; Options root rows `display`, `graphics`, `audio`, `ui`, `gameplay`; `UI` rows `timer`, `prism counter`, `minimap`). `instructions` sits on `Main Menu` below `options` (removed from `edge challenge`).
 - **Uniform Row Sizing & Widened Menus:** Widens menus to `368px` (`0x170`) with Pause root slots (`0x26` stride) matched to Pause Options, and shifts row text slightly up so under-value dots and slider bars fit cleanly above dividers. `ComputeMainOptLayout` and `ComputePauseOptRowH` dynamically compact row height when a category has many rows so rows never clip even at small virtual heights (`virtH = 512`).
-- **Sample & Live Corner Timer / Prism Counter Previews:** Corner HUD Timer & Prism Counter render during gameplay and stay hidden while paused—except when inside **UI -> Timer** or **UI -> Prism Counter** (in either Main Options or Pause Options), where they render a sample (Main Options) or live (Pause Options) preview. When adjusting `type`, `size`, `background`, or `drop shadow`, the preview always renders at full opacity and docks to the right of the menu strip so it never overlaps menu text (even if `type` is currently `off`); when focusing or opening `position`, it dims and snaps to the actual target corner (alongside the companion counter if enabled). During Pause, the Pause menu header directly embeds the full 2-row timer + progress bar above the prism strip.
+- **Sample & Live HUD / Minimap Previews:** Corner HUD Timer & Prism Counter render during gameplay and stay hidden while paused—except when inside **UI -> Timer** or **UI -> Prism Counter** (in either Main Options or Pause Options), where they render a sample (Main Options) or live (Pause Options) preview. Inside **UI -> Minimap**, the customized minimap renders a live (Pause Options) or animated sample (Main Options) preview docked beside the menu strip (or dimmed in its target corner when focusing/opening `position`, alongside any enabled Timer / Prism Counter). When adjusting `type`, `size`, `background`, or `drop shadow` on Timer / Prism Counter, the preview always renders at full opacity and docks to the right of the menu strip so it never overlaps menu text (even if `type` is currently `off`); when focusing or opening `position`, it dims and snaps to the actual target corner (alongside the companion counter/minimap if enabled). During Pause, the Pause menu header directly embeds the full 2-row timer + progress bar above the prism strip.
 
 ---
 
 ## Control Behavior Guidelines
 
-### 1. Toggles (11 items)
+### 1. Toggles (12 items)
 
 - **Display:** 2 dots under the value. Lighter dot indicates the selected option.
 - **Interaction:** Click / Enter / Left / Right toggles immediately and saves, playing hover SFX (`2`).
 
-### 2. Popups (10 setting popups + 1 confirm popup)
+### 2. Popups (11 setting popups + 1 confirm popup)
 
 - **Display:**
   - Setting popups show multiple horizontal dots under the value (lighter dot indicates the selected option). Action confirm popups (`reset score`) show no dots under the row.
@@ -72,13 +79,14 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
   - **Esc / Cancel / Click outside** closes without changing the value / without resetting, playing back SFX (`0xb`).
   - **Left / Right** on the row (when popup is closed) quick-cycles setting popups as a shortcut (disabled on `reset score`), playing hover SFX (`2`).
 
-### 3. Sliders (10 items)
+### 3. Sliders (14 items)
 
 - **Display:**
   - A bar under the value. Lighter portion indicates progress.
   - A **dot/tick marker** on the track highlights the default value.
 - **Interaction:**
   - **Mouse:** Click anywhere on the track to jump, drag thumb to scrub (pointer stays captured and row stays strong rainbow even if cursor leaves the row vertically), and release to save. Value changes during scrubbing play hover SFX (`2`).
-  - **Keyboard / Gamepad:** Left / Right steps by preset or fixed increment (`5` for `sounds`/`music`, `10` for `background`/`drop shadow`, preset index for `prism vfx`/`ui scale`/`size`), playing hover SFX (`2`).
+  - **Keyboard / Gamepad:** Left / Right steps by preset or fixed increment (`5` for `sounds`/`music`, `10` for `background`/`drop shadow`, preset index for `prism vfx`/`ui scale`/`size`/`width`/`height`/`range`), playing hover SFX (`2`).
   - **Reset to default:** Press `R` / `Backspace` / `Delete` while a slider row is focused to snap back to the default value, playing hover SFX (`2`).
   - **Special case (`ui scale`):** Update the displayed slider value while dragging/stepping, and call `ApplyUiScale` + `SaveModSettings` on mouse-up / Left-Right release (or cursor/focus change) without reverting `auto scale` to `off` (all mod options save atomically to `%LocalAppData%\Two Tribes\EDGE\edgemod_settings.ini`; vanilla options `fullscreen`, `sounds`, `music`, `up key`, and `reset score` continue using `Game_SaveUserSettings`).
+  - **Special case (`minimap` `enable` / `width` / `height` / `range` / `position`):** Read-only against `%LocalAppData%\Two Tribes\EDGE\settings.ini`: until adjusted in the menu (`minimap_*_override = 0`), the game uses `settings.ini` values directly; once changed in Options (`minimap_*_override = 1`), the chosen option takes effect (with `width`/`height`/`range` scaling the `160px` / `19.5` baseline), unless `settings.ini` is later edited on disk.

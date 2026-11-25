@@ -40,6 +40,41 @@ int32_t g_timerBgOpacity   = 70; // 0..100, step 10
 int32_t g_prismBgOpacity   = 70; // 0..100, step 10
 int32_t g_timerShadowOpacity = 0;  // 0..100, step 10
 int32_t g_prismShadowOpacity = 0;  // 0..100, step 10
+
+uint8_t g_minimapEnable         = 1;
+uint8_t g_minimapEnableOverride = 0;
+float   g_minimapWidth          = 1.0f;
+float   g_minimapHeight         = 1.0f;
+float   g_minimapRange          = 1.0f;
+uint8_t g_minimapWidthOverride  = 0;
+uint8_t g_minimapHeightOverride = 0;
+uint8_t g_minimapRangeOverride  = 0;
+int32_t g_minimapBgOpacity      = 70;
+uint8_t g_minimapPos            = 0; // 0=TL, 1=TR, 2=BL, 3=BR
+uint8_t g_minimapPosOverride    = 0;
+
+constexpr int32_t kDefMinimapWidth  = 160;
+constexpr int32_t kDefMinimapHeight = 160;
+constexpr float   kDefMinimapCellW  = 19.5f;
+constexpr float   kDefMinimapCellH  = 19.5f;
+
+static int8_t  g_iniMinimapVisible      = 1;
+static int8_t  g_lastIniMinimapVisible  = -1;
+static int32_t g_iniMinimapWidth        = kDefMinimapWidth;
+static int32_t g_iniMinimapHeight       = kDefMinimapHeight;
+static float   g_iniMinimapCellW        = kDefMinimapCellW;
+static float   g_iniMinimapCellH        = kDefMinimapCellH;
+static int32_t g_iniMinimapAlignX       = 0;
+static int32_t g_iniMinimapAlignY       = 0;
+static int32_t g_iniMinimapOffX         = 0;
+static int32_t g_iniMinimapOffY         = 0;
+static int32_t g_lastIniMinimapWidth    = 0;
+static int32_t g_lastIniMinimapHeight   = 0;
+static float   g_lastIniMinimapCellW    = 0.0f;
+static float   g_lastIniMinimapCellH    = 0.0f;
+static int32_t g_lastIniMinimapAlignX   = -1;
+static int32_t g_lastIniMinimapAlignY   = -1;
+
 int32_t g_pauseSubSwipeX     = 0;
 int32_t g_pauseSubSwipePrevX = 0;
 
@@ -343,6 +378,24 @@ EDGE_STATIC_WSTR(g_wstrPrismCounter,      "prism counter");
 EDGE_STATIC_WSTR(g_wstrFull,              "full");
 EDGE_STATIC_WSTR(g_wstrBgOpacity,         "background");
 EDGE_STATIC_WSTR(g_wstrShadowOpacity,     "drop shadow");
+EDGE_STATIC_WSTR(g_wstrMinimap,           "minimap");
+EDGE_STATIC_WSTR(g_wstrMinimapEnable,     "enable");
+EDGE_STATIC_WSTR(g_wstrMinimapWidth,      "width");
+EDGE_STATIC_WSTR(g_wstrMinimapHeight,     "height");
+EDGE_STATIC_WSTR(g_wstrMinimapRange,      "range");
+
+static int NearestMinimapPresetIdx(float v) {
+    int best = 2; // 1.0x
+    float bestDiff = std::fabs(v - g_uiScalePresets[2]);
+    for (int i = 0; i < 9; ++i) {
+        float d = std::fabs(v - g_uiScalePresets[i]);
+        if (d < bestDiff) {
+            bestDiff = d;
+            best = i;
+        }
+    }
+    return best;
+}
 
 static int NearestTimerSizeIdx(float v) {
     int best = 3; // 1.0x
@@ -380,6 +433,7 @@ enum OptCategory : int {
     OPT_CAT_UI,
     OPT_CAT_TIMER,
     OPT_CAT_PRISM_COUNTER,
+    OPT_CAT_MINIMAP,
     OPT_CAT_GAMEPLAY
 };
 
@@ -391,6 +445,7 @@ enum OptItem : int {
     OPT_CAT_BTN_UI,
     OPT_CAT_BTN_TIMER,
     OPT_CAT_BTN_PRISM_COUNTER,
+    OPT_CAT_BTN_MINIMAP,
     OPT_CAT_BTN_GAMEPLAY,
     OPT_FULLSCREEN,
     OPT_PRISM_VFX,
@@ -423,6 +478,12 @@ enum OptItem : int {
     OPT_PRISM_COUNTER_POS,
     OPT_PRISM_BG_OPACITY,
     OPT_PRISM_SHADOW_OPACITY,
+    OPT_MINIMAP_ENABLE,
+    OPT_MINIMAP_WIDTH,
+    OPT_MINIMAP_HEIGHT,
+    OPT_MINIMAP_RANGE,
+    OPT_MINIMAP_BG_OPACITY,
+    OPT_MINIMAP_POS,
     OPT_RESET_SCORE,
     OPT_BACK
 };
@@ -861,6 +922,25 @@ static void SaveModSettings() {
     int32_t prismBgOpacity = std::clamp(g_prismBgOpacity, 0, 100);
     int32_t timerShadowOpacity = std::clamp(g_timerShadowOpacity, 0, 100);
     int32_t prismShadowOpacity = std::clamp(g_prismShadowOpacity, 0, 100);
+    uint8_t minimapEnable = (g_minimapEnable != 0) ? 1u : 0u;
+    uint8_t minimapEnableOverride = (g_minimapEnableOverride != 0) ? 1u : 0u;
+    int32_t minimapVisibleIni = (g_lastIniMinimapVisible == 0 || g_lastIniMinimapVisible == 1)
+        ? static_cast<int32_t>(g_lastIniMinimapVisible) : -1;
+    float   minimapWidth = g_uiScalePresets[NearestMinimapPresetIdx(g_minimapWidth)];
+    float   minimapHeight = g_uiScalePresets[NearestMinimapPresetIdx(g_minimapHeight)];
+    float   minimapRange = g_uiScalePresets[NearestMinimapPresetIdx(g_minimapRange)];
+    uint8_t minimapWidthOverride = (g_minimapWidthOverride != 0) ? 1u : 0u;
+    uint8_t minimapHeightOverride = (g_minimapHeightOverride != 0) ? 1u : 0u;
+    uint8_t minimapRangeOverride = (g_minimapRangeOverride != 0) ? 1u : 0u;
+    int32_t minimapWidthIni = (g_lastIniMinimapWidth > 0) ? g_lastIniMinimapWidth : g_iniMinimapWidth;
+    int32_t minimapHeightIni = (g_lastIniMinimapHeight > 0) ? g_lastIniMinimapHeight : g_iniMinimapHeight;
+    float   minimapCellWIni = (g_lastIniMinimapCellW > 0.0f) ? g_lastIniMinimapCellW : g_iniMinimapCellW;
+    float   minimapCellHIni = (g_lastIniMinimapCellH > 0.0f) ? g_lastIniMinimapCellH : g_iniMinimapCellH;
+    int32_t minimapBgOpacity = std::clamp(g_minimapBgOpacity, 0, 100);
+    uint8_t minimapPos = (g_minimapPos <= 3u) ? g_minimapPos : 0u;
+    uint8_t minimapPosOverride = (g_minimapPosOverride != 0) ? 1u : 0u;
+    int32_t minimapAlignXIni = (g_lastIniMinimapAlignX >= 0 && g_lastIniMinimapAlignX <= 2) ? g_lastIniMinimapAlignX : -1;
+    int32_t minimapAlignYIni = (g_lastIniMinimapAlignY >= 0 && g_lastIniMinimapAlignY <= 2) ? g_lastIniMinimapAlignY : -1;
 
     std::string out;
     out.reserve(768);
@@ -913,6 +993,24 @@ static void SaveModSettings() {
     writeInt("prism_bg_opacity", prismBgOpacity);
     writeInt("timer_shadow_opacity", timerShadowOpacity);
     writeInt("prism_shadow_opacity", prismShadowOpacity);
+    writeFloat("minimap_width", minimapWidth);
+    writeInt("minimap_width_override", minimapWidthOverride);
+    writeInt("minimap_width_ini", minimapWidthIni);
+    writeFloat("minimap_height", minimapHeight);
+    writeInt("minimap_height_override", minimapHeightOverride);
+    writeInt("minimap_height_ini", minimapHeightIni);
+    writeFloat("minimap_range", minimapRange);
+    writeInt("minimap_range_override", minimapRangeOverride);
+    writeFloat("minimap_cell_w_ini", minimapCellWIni);
+    writeFloat("minimap_cell_h_ini", minimapCellHIni);
+    writeInt("minimap_bg_opacity", minimapBgOpacity);
+    writeInt("minimap_enable", minimapEnable);
+    writeInt("minimap_enable_override", minimapEnableOverride);
+    writeInt("minimap_visible_ini", minimapVisibleIni);
+    writeInt("minimap_pos", minimapPos);
+    writeInt("minimap_pos_override", minimapPosOverride);
+    writeInt("minimap_align_x_ini", minimapAlignXIni);
+    writeInt("minimap_align_y_ini", minimapAlignYIni);
 
     wchar_t tmpPath[MAX_PATH + 16]{};
     if (std::swprintf(tmpPath, MAX_PATH + 16, L"%ls.tmp", iniPath) <= 0) return;
@@ -1026,8 +1124,8 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
 
     bool inEdgeModSec = false;
     int32_t schemaVer = 0;
-    uint32_t seenMask = 0;
-    constexpr uint32_t kAllModKeysMask = (1u << 31) - 1u;
+    uint64_t seenMask = 0;
+    constexpr uint64_t kAllModKeysMask = (1ull << 49) - 1ull;
 
     while (pos < data.size()) {
         size_t nl = data.find('\n', pos);
@@ -1233,7 +1331,100 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
         } else if (AsciiEqIc(kP, kE, "cube_distortion")) {
             if (ParseAsciiInt(vP, vE, &iv)) {
                 g_cubeDistortion = (iv != 0) ? 1u : 0u;
-                seenMask |= (1u << 30);
+                seenMask |= (1ull << 30);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_width")) {
+            if (ParseAsciiDouble(vP, vE, &dv)) {
+                float fv = std::clamp(static_cast<float>(dv), 0.5f, 2.5f);
+                g_minimapWidth = g_uiScalePresets[NearestMinimapPresetIdx(fv)];
+                seenMask |= (1ull << 31);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_width_override")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_minimapWidthOverride = (iv != 0) ? 1u : 0u;
+                seenMask |= (1ull << 32);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_width_ini")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv > 0) {
+                g_lastIniMinimapWidth = iv;
+                seenMask |= (1ull << 33);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_height")) {
+            if (ParseAsciiDouble(vP, vE, &dv)) {
+                float fv = std::clamp(static_cast<float>(dv), 0.5f, 2.5f);
+                g_minimapHeight = g_uiScalePresets[NearestMinimapPresetIdx(fv)];
+                seenMask |= (1ull << 34);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_height_override")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_minimapHeightOverride = (iv != 0) ? 1u : 0u;
+                seenMask |= (1ull << 35);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_height_ini")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv > 0) {
+                g_lastIniMinimapHeight = iv;
+                seenMask |= (1ull << 36);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_range")) {
+            if (ParseAsciiDouble(vP, vE, &dv)) {
+                float fv = std::clamp(static_cast<float>(dv), 0.5f, 2.5f);
+                g_minimapRange = g_uiScalePresets[NearestMinimapPresetIdx(fv)];
+                seenMask |= (1ull << 37);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_range_override")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_minimapRangeOverride = (iv != 0) ? 1u : 0u;
+                seenMask |= (1ull << 38);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_cell_w_ini")) {
+            if (ParseAsciiDouble(vP, vE, &dv) && dv > 0.0) {
+                g_lastIniMinimapCellW = static_cast<float>(dv);
+                seenMask |= (1ull << 39);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_cell_h_ini")) {
+            if (ParseAsciiDouble(vP, vE, &dv) && dv > 0.0) {
+                g_lastIniMinimapCellH = static_cast<float>(dv);
+                seenMask |= (1ull << 40);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_bg_opacity")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 100) {
+                g_minimapBgOpacity = std::clamp(((iv + 5) / 10) * 10, 0, 100);
+                seenMask |= (1ull << 41);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_enable")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_minimapEnable = (iv != 0) ? 1u : 0u;
+                seenMask |= (1ull << 42);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_enable_override")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_minimapEnableOverride = (iv != 0) ? 1u : 0u;
+                seenMask |= (1ull << 43);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_visible_ini")) {
+            if (ParseAsciiInt(vP, vE, &iv) && (iv == -1 || iv == 0 || iv == 1)) {
+                g_lastIniMinimapVisible = static_cast<int8_t>(iv);
+                seenMask |= (1ull << 44);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_pos")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 3) {
+                g_minimapPos = static_cast<uint8_t>(iv);
+                seenMask |= (1ull << 45);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_pos_override")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_minimapPosOverride = (iv != 0) ? 1u : 0u;
+                seenMask |= (1ull << 46);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_align_x_ini")) {
+            if (ParseAsciiInt(vP, vE, &iv) && (iv == -1 || (iv >= 0 && iv <= 2))) {
+                g_lastIniMinimapAlignX = iv;
+                seenMask |= (1ull << 47);
+            }
+        } else if (AsciiEqIc(kP, kE, "minimap_align_y_ini")) {
+            if (ParseAsciiInt(vP, vE, &iv) && (iv == -1 || (iv >= 0 && iv <= 2))) {
+                g_lastIniMinimapAlignY = iv;
+                seenMask |= (1ull << 48);
             }
         }
     }
@@ -1429,6 +1620,24 @@ static void LoadModSettingsOnStartup_Impl(uint8_t* userSettings) {
     g_prismBgOpacity     = 70;
     g_timerShadowOpacity = 0;
     g_prismShadowOpacity = 0;
+    g_minimapEnable         = 1;
+    g_minimapEnableOverride = 0;
+    g_minimapWidth          = 1.0f;
+    g_minimapHeight         = 1.0f;
+    g_minimapRange          = 1.0f;
+    g_minimapWidthOverride  = 0;
+    g_minimapHeightOverride = 0;
+    g_minimapRangeOverride  = 0;
+    g_minimapBgOpacity      = 70;
+    g_minimapPos            = 0;
+    g_minimapPosOverride    = 0;
+    g_lastIniMinimapVisible = -1;
+    g_lastIniMinimapWidth   = 0;
+    g_lastIniMinimapHeight  = 0;
+    g_lastIniMinimapCellW   = 0.0f;
+    g_lastIniMinimapCellH   = 0.0f;
+    g_lastIniMinimapAlignX  = -1;
+    g_lastIniMinimapAlignY  = -1;
 
     bool needsResave = true;
     bool fileExisted = LoadModSettingsFromIni(&needsResave);
@@ -1463,6 +1672,79 @@ static void LoadModSettingsOnStartup_Impl(uint8_t* userSettings) {
 
     if (ReconcileCamIniOverride(kDistDesc)) dirty = true;
     if (ReconcileCamIniOverride(kFovDesc))  dirty = true;
+
+    {
+        const uint8_t* st = *reinterpret_cast<const uint8_t* const*>(0x5f9058);
+        float stCellW  = (st != nullptr) ? *reinterpret_cast<const float*>(st + 0x24) : 0.0f;
+        float stCellH  = (st != nullptr) ? *reinterpret_cast<const float*>(st + 0x28) : 0.0f;
+        int32_t stW    = (st != nullptr) ? *reinterpret_cast<const int32_t*>(st + 0x2c) : 0;
+        int32_t stH    = (st != nullptr) ? *reinterpret_cast<const int32_t*>(st + 0x30) : 0;
+        int32_t stOffX = (st != nullptr) ? *reinterpret_cast<const int32_t*>(st + 0x34) : 0;
+        int32_t stOffY = (st != nullptr) ? *reinterpret_cast<const int32_t*>(st + 0x38) : 0;
+        int32_t stAlX  = (st != nullptr) ? *reinterpret_cast<const int32_t*>(st + 0x3c) : 0;
+        int32_t stAlY  = (st != nullptr) ? *reinterpret_cast<const int32_t*>(st + 0x40) : 0;
+        int8_t  stVis  = (st != nullptr) ? (st[0x45] != 0 ? 1 : 0) : 1;
+
+        g_iniMinimapCellW  = (std::isfinite(stCellW) && stCellW > 0.001f) ? stCellW : kDefMinimapCellW;
+        g_iniMinimapCellH  = (std::isfinite(stCellH) && stCellH > 0.001f) ? stCellH : kDefMinimapCellH;
+        g_iniMinimapWidth  = (stW > 0) ? stW : kDefMinimapWidth;
+        g_iniMinimapHeight = (stH > 0) ? stH : kDefMinimapHeight;
+        g_iniMinimapOffX   = stOffX;
+        g_iniMinimapOffY   = stOffY;
+        g_iniMinimapAlignX = (stAlX >= 0 && stAlX <= 2) ? stAlX : 0;
+        g_iniMinimapAlignY = (stAlY >= 0 && stAlY <= 2) ? stAlY : 0;
+        g_iniMinimapVisible = stVis;
+
+        if (g_lastIniMinimapVisible < 0) {
+            g_lastIniMinimapVisible = g_iniMinimapVisible;
+            dirty = true;
+        } else if (g_iniMinimapVisible != g_lastIniMinimapVisible) {
+            g_minimapEnableOverride = 0;
+            g_lastIniMinimapVisible = g_iniMinimapVisible;
+            dirty = true;
+        }
+
+        if (g_lastIniMinimapWidth <= 0) {
+            g_lastIniMinimapWidth = g_iniMinimapWidth;
+            dirty = true;
+        } else if (g_iniMinimapWidth != g_lastIniMinimapWidth) {
+            g_minimapWidthOverride = 0;
+            g_lastIniMinimapWidth = g_iniMinimapWidth;
+            dirty = true;
+        }
+
+        if (g_lastIniMinimapHeight <= 0) {
+            g_lastIniMinimapHeight = g_iniMinimapHeight;
+            dirty = true;
+        } else if (g_iniMinimapHeight != g_lastIniMinimapHeight) {
+            g_minimapHeightOverride = 0;
+            g_lastIniMinimapHeight = g_iniMinimapHeight;
+            dirty = true;
+        }
+
+        if (g_lastIniMinimapCellW <= 0.0f || g_lastIniMinimapCellH <= 0.0f) {
+            g_lastIniMinimapCellW = g_iniMinimapCellW;
+            g_lastIniMinimapCellH = g_iniMinimapCellH;
+            dirty = true;
+        } else if (std::fabs(g_iniMinimapCellW - g_lastIniMinimapCellW) > 0.0005f ||
+                   std::fabs(g_iniMinimapCellH - g_lastIniMinimapCellH) > 0.0005f) {
+            g_minimapRangeOverride = 0;
+            g_lastIniMinimapCellW = g_iniMinimapCellW;
+            g_lastIniMinimapCellH = g_iniMinimapCellH;
+            dirty = true;
+        }
+
+        if (g_lastIniMinimapAlignX < 0 || g_lastIniMinimapAlignY < 0) {
+            g_lastIniMinimapAlignX = g_iniMinimapAlignX;
+            g_lastIniMinimapAlignY = g_iniMinimapAlignY;
+            dirty = true;
+        } else if (g_iniMinimapAlignX != g_lastIniMinimapAlignX || g_iniMinimapAlignY != g_lastIniMinimapAlignY) {
+            g_minimapPosOverride = 0;
+            g_lastIniMinimapAlignX = g_iniMinimapAlignX;
+            g_lastIniMinimapAlignY = g_iniMinimapAlignY;
+            dirty = true;
+        }
+    }
 
     g_graphicsLoaded = 1;
 
@@ -1832,6 +2114,7 @@ static int GetOptTargetCategory(OptItem item) {
     case OPT_CAT_BTN_UI:            return OPT_CAT_UI;
     case OPT_CAT_BTN_TIMER:         return OPT_CAT_TIMER;
     case OPT_CAT_BTN_PRISM_COUNTER: return OPT_CAT_PRISM_COUNTER;
+    case OPT_CAT_BTN_MINIMAP:       return OPT_CAT_MINIMAP;
     case OPT_CAT_BTN_GAMEPLAY:      return OPT_CAT_GAMEPLAY;
     default:                        return -1;
     }
@@ -1845,6 +2128,7 @@ static int GetOptParentCategory(int cat) {
     switch (cat) {
     case OPT_CAT_TIMER:
     case OPT_CAT_PRISM_COUNTER:
+    case OPT_CAT_MINIMAP:
         return OPT_CAT_UI;
     case OPT_CAT_DISPLAY:
     case OPT_CAT_GRAPHICS:
@@ -1860,7 +2144,7 @@ static int GetOptParentCategory(int cat) {
 
 static int GetOptCategoryDepth(int cat) {
     if (cat == OPT_CAT_ROOT)  return 0;
-    if (cat == OPT_CAT_TIMER || cat == OPT_CAT_PRISM_COUNTER) return 2;
+    if (cat == OPT_CAT_TIMER || cat == OPT_CAT_PRISM_COUNTER || cat == OPT_CAT_MINIMAP) return 2;
     return 1;
 }
 
@@ -1873,6 +2157,7 @@ static int GetOptParentRowForCategory(int cat) {
     case OPT_CAT_GAMEPLAY:      return 4;
     case OPT_CAT_TIMER:         return 2; // row 2 in OPT_CAT_UI (below time format & edge timer)
     case OPT_CAT_PRISM_COUNTER: return 3; // row 3 in OPT_CAT_UI (below timer)
+    case OPT_CAT_MINIMAP:       return 4; // row 4 in OPT_CAT_UI (below prism counter)
     default:                    return 0;
     }
 }
@@ -1908,8 +2193,9 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         outItems[1] = OPT_EDGE_TIMER;
         outItems[2] = OPT_CAT_BTN_TIMER;
         outItems[3] = OPT_CAT_BTN_PRISM_COUNTER;
-        outItems[4] = OPT_BACK;
-        return 5;
+        outItems[4] = OPT_CAT_BTN_MINIMAP;
+        outItems[5] = OPT_BACK;
+        return 6;
     case OPT_CAT_TIMER:
         outItems[0] = OPT_TIMER;
         outItems[1] = OPT_TIMER_SIZE;
@@ -1926,6 +2212,15 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         outItems[4] = OPT_PRISM_COUNTER_POS;
         outItems[5] = OPT_BACK;
         return 6;
+    case OPT_CAT_MINIMAP:
+        outItems[0] = OPT_MINIMAP_ENABLE;
+        outItems[1] = OPT_MINIMAP_WIDTH;
+        outItems[2] = OPT_MINIMAP_HEIGHT;
+        outItems[3] = OPT_MINIMAP_RANGE;
+        outItems[4] = OPT_MINIMAP_BG_OPACITY;
+        outItems[5] = OPT_MINIMAP_POS;
+        outItems[6] = OPT_BACK;
+        return 7;
     case OPT_CAT_GAMEPLAY: {
         int n = 0;
         outItems[n++] = OPT_UP_KEY;
@@ -1992,6 +2287,12 @@ static bool IsOptItemAdjustable(OptItem item) {
     case OPT_PRISM_COUNTER_POS:
     case OPT_PRISM_BG_OPACITY:
     case OPT_PRISM_SHADOW_OPACITY:
+    case OPT_MINIMAP_ENABLE:
+    case OPT_MINIMAP_WIDTH:
+    case OPT_MINIMAP_HEIGHT:
+    case OPT_MINIMAP_RANGE:
+    case OPT_MINIMAP_BG_OPACITY:
+    case OPT_MINIMAP_POS:
         return true;
     default:
         return false;
@@ -2007,6 +2308,7 @@ static const EdgeWString* GetOptHeaderWstr(int cat, EdgeWString* tmp, bool* outF
     case OPT_CAT_UI:            return &g_wstrCatUi;
     case OPT_CAT_TIMER:         return &g_wstrTimer;
     case OPT_CAT_PRISM_COUNTER: return &g_wstrPrismCounter;
+    case OPT_CAT_MINIMAP:       return &g_wstrMinimap;
     case OPT_CAT_GAMEPLAY:      return &g_wstrCatGameplay;
     case OPT_CAT_ROOT:
     default:
@@ -2025,6 +2327,7 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_CAT_BTN_UI:            return &g_wstrCatUi;
     case OPT_CAT_BTN_TIMER:         return &g_wstrTimer;
     case OPT_CAT_BTN_PRISM_COUNTER: return &g_wstrPrismCounter;
+    case OPT_CAT_BTN_MINIMAP:       return &g_wstrMinimap;
     case OPT_CAT_BTN_GAMEPLAY:      return &g_wstrCatGameplay;
     case OPT_PRISM_VFX:        return &g_wstrPrismVfx;
     case OPT_CHROMA_AB:        return &g_wstrChromaAb;
@@ -2050,9 +2353,15 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_PRISM_COUNTER_SIZE: return &g_wstrTimerSizeLbl;
     case OPT_PRISM_COUNTER_POS:  return &g_wstrTimerPosLbl;
     case OPT_TIMER_BG_OPACITY:
-    case OPT_PRISM_BG_OPACITY:     return &g_wstrBgOpacity;
+    case OPT_PRISM_BG_OPACITY:
+    case OPT_MINIMAP_BG_OPACITY:   return &g_wstrBgOpacity;
     case OPT_TIMER_SHADOW_OPACITY:
     case OPT_PRISM_SHADOW_OPACITY: return &g_wstrShadowOpacity;
+    case OPT_MINIMAP_ENABLE:       return &g_wstrMinimapEnable;
+    case OPT_MINIMAP_WIDTH:        return &g_wstrMinimapWidth;
+    case OPT_MINIMAP_HEIGHT:       return &g_wstrMinimapHeight;
+    case OPT_MINIMAP_RANGE:        return &g_wstrMinimapRange;
+    case OPT_MINIMAP_POS:          return &g_wstrTimerPosLbl;
     case OPT_RESET_SCORE:      return &g_wstrResetScore;
     case OPT_FULLSCREEN:
         Game_GetLocalizedWString(tmp, 0x34);
@@ -2091,6 +2400,7 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_UP_KEY:
     case OPT_SKIP_INTRO:
     case OPT_TIME_FMT:
+    case OPT_MINIMAP_ENABLE:
         return CTRL_TOGGLE;
     case OPT_AA:
     case OPT_CAM_DIST:
@@ -2102,6 +2412,7 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_TIMER_POS:
     case OPT_PRISM_COUNTER_TYPE:
     case OPT_PRISM_COUNTER_POS:
+    case OPT_MINIMAP_POS:
         return CTRL_POPUP;
     case OPT_RESET_SCORE:
         return CTRL_CONFIRM_POPUP;
@@ -2115,6 +2426,10 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_PRISM_BG_OPACITY:
     case OPT_TIMER_SHADOW_OPACITY:
     case OPT_PRISM_SHADOW_OPACITY:
+    case OPT_MINIMAP_WIDTH:
+    case OPT_MINIMAP_HEIGHT:
+    case OPT_MINIMAP_RANGE:
+    case OPT_MINIMAP_BG_OPACITY:
         return CTRL_SLIDER;
     default:
         return CTRL_NAV;
@@ -2172,6 +2487,19 @@ static void ResetOptUiState(bool commitUiScale) {
     }
 }
 
+static bool GetMinimapDisplayEnabled() {
+    return (g_minimapEnableOverride != 0) ? (g_minimapEnable != 0) : (g_iniMinimapVisible != 0);
+}
+
+static uint8_t GetMinimapDisplayPos() {
+    if (g_minimapPosOverride != 0) {
+        return (g_minimapPos <= 3u) ? g_minimapPos : 0u;
+    }
+    uint8_t cx = (g_iniMinimapAlignX == 2) ? 1u : 0u;
+    uint8_t cy = (g_iniMinimapAlignY == 2) ? 2u : 0u;
+    return static_cast<uint8_t>(cx | cy);
+}
+
 static int GetToggleState(OptItem item) {
     uint8_t* sm = GetScreenMgr();
     switch (item) {
@@ -2191,6 +2519,7 @@ static int GetToggleState(OptItem item) {
     case OPT_UP_KEY:      return (sm != nullptr && sm[0x2b4] != 0) ? 1 : 0;
     case OPT_SKIP_INTRO:  return g_skipIntro ? 1 : 0;
     case OPT_TIME_FMT:    return g_timeFmt ? 1 : 0;
+    case OPT_MINIMAP_ENABLE: return GetMinimapDisplayEnabled() ? 1 : 0;
     default:              return 0;
     }
 }
@@ -2209,6 +2538,7 @@ static int GetPopupChoiceCount(OptItem item) {
     case OPT_TIMER_POS:          return 4;
     case OPT_PRISM_COUNTER_TYPE: return 3;
     case OPT_PRISM_COUNTER_POS:  return 4;
+    case OPT_MINIMAP_POS:        return 4;
     case OPT_RESET_SCORE:        return 2;
     default:                     return 0;
     }
@@ -2253,6 +2583,7 @@ static int GetPopupCurrentChoice(OptItem item) {
     case OPT_TIMER_POS:          return std::clamp<int>(g_timerPos, 0, 3);
     case OPT_PRISM_COUNTER_TYPE: return std::clamp<int>(g_prismCounterType, 0, 2);
     case OPT_PRISM_COUNTER_POS:  return std::clamp<int>(g_prismCounterPos, 0, 3);
+    case OPT_MINIMAP_POS:        return std::clamp<int>(GetMinimapDisplayPos(), 0, 3);
     case OPT_RESET_SCORE:        return 0; // default highlight on "no"
     default:                     return 0;
     }
@@ -2279,6 +2610,7 @@ static int GetPopupDefaultChoice(OptItem item) {
     case OPT_TIMER_POS:          return 1; // TR
     case OPT_PRISM_COUNTER_TYPE: return 2; // full
     case OPT_PRISM_COUNTER_POS:  return 1; // TR
+    case OPT_MINIMAP_POS:        return 0; // TL
     case OPT_RESET_SCORE:        return 0; // no
     default:                     return 0;
     }
@@ -2347,6 +2679,7 @@ static const EdgeWString* GetPopupChoiceWstr(OptItem item, int idx, EdgeWString*
         return &g_wstrFull;
     case OPT_TIMER_POS:
     case OPT_PRISM_COUNTER_POS:
+    case OPT_MINIMAP_POS:
         idx = std::clamp(idx, 0, 3);
         if (idx == 0) return &g_wstrTimerPosTL;
         if (idx == 1) return &g_wstrTimerPosTR;
@@ -2450,6 +2783,15 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
         if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
         SaveModSettings();
         break;
+    case OPT_MINIMAP_POS:
+        g_minimapPos = static_cast<uint8_t>(idx);
+        g_minimapPosOverride = 1;
+        g_lastIniMinimapAlignX = g_iniMinimapAlignX;
+        g_lastIniMinimapAlignY = g_iniMinimapAlignY;
+        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SyncLiveWorldMinimapFields();
+        SaveModSettings();
+        break;
     default:
         break;
     }
@@ -2462,6 +2804,30 @@ static void StepPopupQuick(OptItem item, bool left, int sfxId) {
     int cur = GetPopupCurrentChoice(item);
     int next = left ? ((cur + cnt - 1) % cnt) : ((cur + 1) % cnt);
     ApplyPopupChoice(item, next, sfxId);
+}
+
+static float GetMinimapDisplayMultiplier(OptItem item) {
+    switch (item) {
+    case OPT_MINIMAP_WIDTH: {
+        if (g_minimapWidthOverride != 0) return g_minimapWidth;
+        int32_t iniW = (g_iniMinimapWidth > 0) ? g_iniMinimapWidth : kDefMinimapWidth;
+        return static_cast<float>(iniW) / static_cast<float>(kDefMinimapWidth);
+    }
+    case OPT_MINIMAP_HEIGHT: {
+        if (g_minimapHeightOverride != 0) return g_minimapHeight;
+        int32_t iniH = (g_iniMinimapHeight > 0) ? g_iniMinimapHeight : kDefMinimapHeight;
+        return static_cast<float>(iniH) / static_cast<float>(kDefMinimapHeight);
+    }
+    case OPT_MINIMAP_RANGE: {
+        if (g_minimapRangeOverride != 0) return g_minimapRange;
+        float cw = (g_iniMinimapCellW > 0.001f) ? g_iniMinimapCellW : kDefMinimapCellW;
+        float ch = (g_iniMinimapCellH > 0.001f) ? g_iniMinimapCellH : kDefMinimapCellH;
+        float avg = 0.5f * (cw + ch);
+        return (avg > 0.001f) ? (kDefMinimapCellW / avg) : 1.0f;
+    }
+    default:
+        return 1.0f;
+    }
 }
 
 static float GetSliderNormalized(OptItem item) {
@@ -2501,6 +2867,14 @@ static float GetSliderNormalized(OptItem item) {
         return static_cast<float>(std::clamp(g_timerShadowOpacity, 0, 100)) / 100.0f;
     case OPT_PRISM_SHADOW_OPACITY:
         return static_cast<float>(std::clamp(g_prismShadowOpacity, 0, 100)) / 100.0f;
+    case OPT_MINIMAP_WIDTH:
+    case OPT_MINIMAP_HEIGHT:
+    case OPT_MINIMAP_RANGE: {
+        float cur = std::clamp(GetMinimapDisplayMultiplier(item), 0.5f, 2.5f);
+        return (cur - 0.5f) / 2.0f;
+    }
+    case OPT_MINIMAP_BG_OPACITY:
+        return static_cast<float>(std::clamp(g_minimapBgOpacity, 0, 100)) / 100.0f;
     default:
         return 0.0f;
     }
@@ -2518,6 +2892,10 @@ static float GetSliderDefaultNormalized(OptItem item) {
     case OPT_PRISM_BG_OPACITY:     return 0.7f;        // 70
     case OPT_TIMER_SHADOW_OPACITY: return 0.0f;        // 0
     case OPT_PRISM_SHADOW_OPACITY: return 0.0f;        // 0
+    case OPT_MINIMAP_WIDTH:        return 2.0f / 8.0f; // 1.0
+    case OPT_MINIMAP_HEIGHT:       return 2.0f / 8.0f; // 1.0
+    case OPT_MINIMAP_RANGE:        return 2.0f / 8.0f; // 1.0
+    case OPT_MINIMAP_BG_OPACITY:   return 0.7f;        // 70
     default:                       return 0.0f;
     }
 }
@@ -2609,10 +2987,12 @@ static void StepSlider(OptItem item, int dir, int sfxId) {
     }
     case OPT_TIMER_BG_OPACITY:
     case OPT_PRISM_BG_OPACITY:
+    case OPT_MINIMAP_BG_OPACITY:
     case OPT_TIMER_SHADOW_OPACITY:
     case OPT_PRISM_SHADOW_OPACITY: {
         int32_t& valRef = (item == OPT_TIMER_BG_OPACITY)     ? g_timerBgOpacity
                         : (item == OPT_PRISM_BG_OPACITY)     ? g_prismBgOpacity
+                        : (item == OPT_MINIMAP_BG_OPACITY)   ? g_minimapBgOpacity
                         : (item == OPT_TIMER_SHADOW_OPACITY) ? g_timerShadowOpacity
                                                              : g_prismShadowOpacity;
         int cur = std::clamp<int>(valRef, 0, 100);
@@ -2622,6 +3002,34 @@ static void StepSlider(OptItem item, int dir, int sfxId) {
         if (next != cur) {
             valRef = next;
             if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+            SaveModSettings();
+        }
+        break;
+    }
+    case OPT_MINIMAP_WIDTH:
+    case OPT_MINIMAP_HEIGHT:
+    case OPT_MINIMAP_RANGE: {
+        float& valRef = (item == OPT_MINIMAP_WIDTH)  ? g_minimapWidth
+                      : (item == OPT_MINIMAP_HEIGHT) ? g_minimapHeight
+                                                     : g_minimapRange;
+        uint8_t& ovrRef = (item == OPT_MINIMAP_WIDTH)  ? g_minimapWidthOverride
+                        : (item == OPT_MINIMAP_HEIGHT) ? g_minimapHeightOverride
+                                                       : g_minimapRangeOverride;
+        float cur = GetMinimapDisplayMultiplier(item);
+        int curIdx = NearestMinimapPresetIdx(cur);
+        int nextIdx = std::clamp(curIdx + dir, 0, 8);
+        float newVal = g_uiScalePresets[nextIdx];
+        if (nextIdx != curIdx || std::fabs(newVal - cur) > 0.001f) {
+            valRef = newVal;
+            ovrRef = 1;
+            if (item == OPT_MINIMAP_WIDTH)  g_lastIniMinimapWidth  = g_iniMinimapWidth;
+            else if (item == OPT_MINIMAP_HEIGHT) g_lastIniMinimapHeight = g_iniMinimapHeight;
+            else {
+                g_lastIniMinimapCellW = g_iniMinimapCellW;
+                g_lastIniMinimapCellH = g_iniMinimapCellH;
+            }
+            if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+            SyncLiveWorldMinimapFields();
             SaveModSettings();
         }
         break;
@@ -2677,16 +3085,47 @@ static void SetSliderFromNormalized(OptItem item, float norm, bool isDrag) {
     }
     case OPT_TIMER_BG_OPACITY:
     case OPT_PRISM_BG_OPACITY:
+    case OPT_MINIMAP_BG_OPACITY:
     case OPT_TIMER_SHADOW_OPACITY:
     case OPT_PRISM_SHADOW_OPACITY: {
         int32_t& valRef = (item == OPT_TIMER_BG_OPACITY)     ? g_timerBgOpacity
                         : (item == OPT_PRISM_BG_OPACITY)     ? g_prismBgOpacity
+                        : (item == OPT_MINIMAP_BG_OPACITY)   ? g_minimapBgOpacity
                         : (item == OPT_TIMER_SHADOW_OPACITY) ? g_timerShadowOpacity
                                                              : g_prismShadowOpacity;
         int v = std::clamp(static_cast<int>(std::lround((norm * 100.0f) / 10.0f)) * 10, 0, 100);
         if (v != valRef) {
             valRef = v;
             if (sm != nullptr) Game_PlaySfx(sm, 2);
+        }
+        if (!isDrag) {
+            SaveModSettings();
+        }
+        break;
+    }
+    case OPT_MINIMAP_WIDTH:
+    case OPT_MINIMAP_HEIGHT:
+    case OPT_MINIMAP_RANGE: {
+        float& valRef = (item == OPT_MINIMAP_WIDTH)  ? g_minimapWidth
+                      : (item == OPT_MINIMAP_HEIGHT) ? g_minimapHeight
+                                                     : g_minimapRange;
+        uint8_t& ovrRef = (item == OPT_MINIMAP_WIDTH)  ? g_minimapWidthOverride
+                        : (item == OPT_MINIMAP_HEIGHT) ? g_minimapHeightOverride
+                                                       : g_minimapRangeOverride;
+        int idx = std::clamp(static_cast<int>(std::lround(norm * 8.0f)), 0, 8);
+        float newVal = g_uiScalePresets[idx];
+        float cur = GetMinimapDisplayMultiplier(item);
+        if (ovrRef == 0 || std::fabs(newVal - cur) > 0.001f || std::fabs(newVal - valRef) > 0.001f) {
+            valRef = newVal;
+            ovrRef = 1;
+            if (item == OPT_MINIMAP_WIDTH)  g_lastIniMinimapWidth  = g_iniMinimapWidth;
+            else if (item == OPT_MINIMAP_HEIGHT) g_lastIniMinimapHeight = g_iniMinimapHeight;
+            else {
+                g_lastIniMinimapCellW = g_iniMinimapCellW;
+                g_lastIniMinimapCellH = g_iniMinimapCellH;
+            }
+            if (sm != nullptr && std::fabs(newVal - cur) > 0.001f) Game_PlaySfx(sm, 2);
+            SyncLiveWorldMinimapFields();
         }
         if (!isDrag) {
             SaveModSettings();
@@ -2729,16 +3168,44 @@ static void ResetSliderToDefault(OptItem item, int sfxId) {
     }
     case OPT_TIMER_BG_OPACITY:
     case OPT_PRISM_BG_OPACITY:
+    case OPT_MINIMAP_BG_OPACITY:
     case OPT_TIMER_SHADOW_OPACITY:
     case OPT_PRISM_SHADOW_OPACITY: {
-        int defVal = (item == OPT_TIMER_BG_OPACITY || item == OPT_PRISM_BG_OPACITY) ? 70 : 0;
+        int defVal = (item == OPT_TIMER_BG_OPACITY || item == OPT_PRISM_BG_OPACITY || item == OPT_MINIMAP_BG_OPACITY) ? 70 : 0;
         int32_t& valRef = (item == OPT_TIMER_BG_OPACITY)     ? g_timerBgOpacity
                         : (item == OPT_PRISM_BG_OPACITY)     ? g_prismBgOpacity
+                        : (item == OPT_MINIMAP_BG_OPACITY)   ? g_minimapBgOpacity
                         : (item == OPT_TIMER_SHADOW_OPACITY) ? g_timerShadowOpacity
                                                              : g_prismShadowOpacity;
         if (valRef != defVal) {
             valRef = defVal;
             if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+            SaveModSettings();
+        }
+        break;
+    }
+    case OPT_MINIMAP_WIDTH:
+    case OPT_MINIMAP_HEIGHT:
+    case OPT_MINIMAP_RANGE: {
+        float& valRef = (item == OPT_MINIMAP_WIDTH)  ? g_minimapWidth
+                      : (item == OPT_MINIMAP_HEIGHT) ? g_minimapHeight
+                                                     : g_minimapRange;
+        uint8_t& ovrRef = (item == OPT_MINIMAP_WIDTH)  ? g_minimapWidthOverride
+                        : (item == OPT_MINIMAP_HEIGHT) ? g_minimapHeightOverride
+                                                       : g_minimapRangeOverride;
+        float cur = GetMinimapDisplayMultiplier(item);
+        if (ovrRef == 0 || std::fabs(valRef - 1.0f) > 0.001f) {
+            bool changed = (std::fabs(cur - 1.0f) > 0.001f);
+            valRef = 1.0f;
+            ovrRef = 1;
+            if (item == OPT_MINIMAP_WIDTH)  g_lastIniMinimapWidth  = g_iniMinimapWidth;
+            else if (item == OPT_MINIMAP_HEIGHT) g_lastIniMinimapHeight = g_iniMinimapHeight;
+            else {
+                g_lastIniMinimapCellW = g_iniMinimapCellW;
+                g_lastIniMinimapCellH = g_iniMinimapCellH;
+            }
+            if (changed && sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+            SyncLiveWorldMinimapFields();
             SaveModSettings();
         }
         break;
@@ -2889,6 +3356,24 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_PRISM_SHADOW_OPACITY:
         FmtInt0to100Wstr(std::clamp(g_prismShadowOpacity, 0, 100), tmp);
         return tmp;
+    case OPT_MINIMAP_ENABLE:
+        Game_GetLocalizedWString(tmp, GetMinimapDisplayEnabled() ? 0xb : 0xc);
+        *outFreeHeap = true;
+        return tmp;
+    case OPT_MINIMAP_WIDTH:
+    case OPT_MINIMAP_HEIGHT:
+    case OPT_MINIMAP_RANGE:
+        return FmtFloatWstr(GetMinimapDisplayMultiplier(item), tmp);
+    case OPT_MINIMAP_BG_OPACITY:
+        FmtInt0to100Wstr(std::clamp(g_minimapBgOpacity, 0, 100), tmp);
+        return tmp;
+    case OPT_MINIMAP_POS: {
+        uint8_t pos = GetMinimapDisplayPos();
+        if (pos == 0) return &g_wstrTimerPosTL;
+        if (pos == 1) return &g_wstrTimerPosTR;
+        if (pos == 2) return &g_wstrTimerPosBL;
+        return &g_wstrTimerPosBR;
+    }
     default:
         return nullptr;
     }
@@ -2917,6 +3402,17 @@ static void ToggleUpKeyWithSfx(int sfxId) {
     Game_SaveUserSettings(sm + 0x298);
 }
 
+static void MinimapEnableAction_Impl(int sfxId) {
+    bool next = !GetMinimapDisplayEnabled();
+    g_minimapEnable = next ? 1u : 0u;
+    g_minimapEnableOverride = 1;
+    g_lastIniMinimapVisible = g_iniMinimapVisible;
+    uint8_t* sm = GetScreenMgr();
+    if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+    SyncLiveWorldMinimapFields();
+    SaveModSettings();
+}
+
 static void ExecuteOptToggle(OptItem item, int sfxId) {
     switch (item) {
     case OPT_FULLSCREEN:      ToggleFullscreenWithSfx(sfxId); break;
@@ -2930,6 +3426,7 @@ static void ExecuteOptToggle(OptItem item, int sfxId) {
     case OPT_UP_KEY:          ToggleUpKeyWithSfx(sfxId); break;
     case OPT_SKIP_INTRO:      SkipIntroAction_Impl(sfxId); break;
     case OPT_TIME_FMT:        TimeFmtAction_Impl(sfxId); break;
+    case OPT_MINIMAP_ENABLE:  MinimapEnableAction_Impl(sfxId); break;
     default: break;
     }
 }
@@ -5799,8 +6296,9 @@ bool GetHudTimerMenuPreview(
             return (*outMode != 0);
         }
 
-        // Companion corner preview when positioning Prism Counter
-        if (cat == OPT_CAT_PRISM_COUNTER && activeItem == OPT_PRISM_COUNTER_POS) {
+        // Companion corner preview when positioning Prism Counter or Minimap
+        if ((cat == OPT_CAT_PRISM_COUNTER && activeItem == OPT_PRISM_COUNTER_POS) ||
+            (cat == OPT_CAT_MINIMAP && activeItem == OPT_MINIMAP_POS)) {
             *outForceSample = !inPause;
             *outDockBesideMenu = false;
             *outMode = g_timerMode;
@@ -5863,8 +6361,9 @@ bool GetHudPrismCounterMenuPreview(
             return (*outType != 0);
         }
 
-        // Companion corner preview when positioning Timer
-        if (cat == OPT_CAT_TIMER && activeItem == OPT_TIMER_POS) {
+        // Companion corner preview when positioning Timer or Minimap
+        if ((cat == OPT_CAT_TIMER && activeItem == OPT_TIMER_POS) ||
+            (cat == OPT_CAT_MINIMAP && activeItem == OPT_MINIMAP_POS)) {
             *outForceSample = !inPause;
             *outDockBesideMenu = false;
             *outType = g_prismCounterType;
@@ -5875,6 +6374,112 @@ bool GetHudPrismCounterMenuPreview(
     }
 
     return (*outType != 0);
+}
+
+bool __cdecl GetMinimapMenuPreview(
+    uint32_t state, uint8_t* outPos, bool* outForceSample, bool* outDockBesideMenu
+) {
+    if (outPos == nullptr || outForceSample == nullptr || outDockBesideMenu == nullptr) {
+        return false;
+    }
+    *outPos = GetMinimapDisplayPos();
+    *outForceSample = false;
+    *outDockBesideMenu = false;
+    if (state != 9u && state != 0x12u) return false;
+    const bool inPause = (state == 0x12u);
+    uint8_t* sub = inPause
+        ? GetMenuSubForState(0x12u, 0x58cf44u)
+        : GetMenuSubForState(9u, 0x58d24cu);
+    if (sub == nullptr || *reinterpret_cast<const int*>(sub + 8) >= 0) {
+        return false;
+    }
+    if (inPause && *reinterpret_cast<const int*>(sub + 0x44) != 1) {
+        return false;
+    }
+
+    const int cat = inPause ? g_pauseOptCat : g_mainOptCat;
+    const int selRow = inPause
+        ? *reinterpret_cast<const int*>(sub + 0x50)
+        : *reinterpret_cast<const int*>(sub + 0x10);
+    OptItem activeItem = GetActiveOptItemInCat(cat, inPause, selRow);
+
+    if (cat == OPT_CAT_MINIMAP) {
+        *outForceSample = !inPause;
+        const bool isPos = (activeItem == OPT_MINIMAP_POS);
+        *outDockBesideMenu = !isPos;
+        if (g_optUi.popupOpen && g_optUi.popupInPause == inPause && g_optUi.popupItem == OPT_MINIMAP_POS) {
+            *outPos = static_cast<uint8_t>(std::clamp(g_optUi.popupHighlight, 0, 3));
+            return true;
+        }
+        if (activeItem == OPT_MINIMAP_ENABLE || activeItem == OPT_BACK) {
+            return GetMinimapDisplayEnabled();
+        }
+        return true;
+    }
+
+    // Companion corner preview when positioning Timer or Prism Counter
+    if ((cat == OPT_CAT_TIMER && activeItem == OPT_TIMER_POS) ||
+        (cat == OPT_CAT_PRISM_COUNTER && activeItem == OPT_PRISM_COUNTER_POS)) {
+        *outForceSample = !inPause;
+        *outDockBesideMenu = false;
+        return GetMinimapDisplayEnabled();
+    }
+
+    return false;
+}
+
+void __cdecl GetEffectiveMinimapMetrics(EffectiveMinimapMetrics* out) {
+    if (out == nullptr) return;
+    int32_t iniW = (g_iniMinimapWidth > 0) ? g_iniMinimapWidth : kDefMinimapWidth;
+    int32_t iniH = (g_iniMinimapHeight > 0) ? g_iniMinimapHeight : kDefMinimapHeight;
+    float   iniCW = (g_iniMinimapCellW > 0.001f) ? g_iniMinimapCellW : kDefMinimapCellW;
+    float   iniCH = (g_iniMinimapCellH > 0.001f) ? g_iniMinimapCellH : kDefMinimapCellH;
+
+    out->enabled = GetMinimapDisplayEnabled();
+    out->width  = (g_minimapWidthOverride != 0)
+        ? std::round(static_cast<float>(kDefMinimapWidth) * g_minimapWidth)
+        : static_cast<float>(iniW);
+    out->height = (g_minimapHeightOverride != 0)
+        ? std::round(static_cast<float>(kDefMinimapHeight) * g_minimapHeight)
+        : static_cast<float>(iniH);
+    out->cellW  = (g_minimapRangeOverride != 0)
+        ? (kDefMinimapCellW / g_minimapRange)
+        : iniCW;
+    out->cellH  = (g_minimapRangeOverride != 0)
+        ? (kDefMinimapCellH / g_minimapRange)
+        : iniCH;
+    out->posCorner = GetMinimapDisplayPos();
+    if (g_minimapPosOverride != 0) {
+        out->alignX = (out->posCorner == 1u || out->posCorner == 3u) ? 2 : 0;
+        out->alignY = (out->posCorner == 2u || out->posCorner == 3u) ? 2 : 0;
+        out->offX = 0;
+        out->offY = 0;
+    } else {
+        out->alignX = g_iniMinimapAlignX;
+        out->alignY = g_iniMinimapAlignY;
+        out->offX = g_iniMinimapOffX;
+        out->offY = g_iniMinimapOffY;
+    }
+}
+
+void __cdecl SyncLiveWorldMinimapFields() {
+    EffectiveMinimapMetrics eff{};
+    GetEffectiveMinimapMetrics(&eff);
+    uint8_t* ws = GetWorldScreen();
+    if (ws != nullptr && ws[0x2120] != 0) {
+        ws[0x2110] = eff.enabled ? 1u : 0u;
+        if (!eff.enabled) {
+            *reinterpret_cast<int32_t*>(ws + 0x2108) = 0;
+        }
+        *reinterpret_cast<int32_t*>(ws + 0x1a0) = eff.offX;
+        *reinterpret_cast<int32_t*>(ws + 0x1a4) = eff.offY;
+        *reinterpret_cast<int32_t*>(ws + 0x1a8) = eff.alignX;
+        *reinterpret_cast<int32_t*>(ws + 0x1ac) = eff.alignY;
+        *reinterpret_cast<float*>(ws + 0x2114) = eff.width;
+        *reinterpret_cast<float*>(ws + 0x2118) = eff.height;
+        *reinterpret_cast<float*>(ws + 0x1b0)  = eff.cellW;
+        *reinterpret_cast<float*>(ws + 0x1b4)  = eff.cellH;
+    }
 }
 
 int __cdecl GetActiveOptionsCategory(bool inPause) {

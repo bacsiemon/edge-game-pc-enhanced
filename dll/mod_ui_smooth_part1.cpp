@@ -24,8 +24,6 @@ static int32_t        g_subPrev4c         = 0;
 static int32_t        g_endPrev3c         = 0;
 static int32_t        g_endPrev40         = 0;
 static int32_t        g_wsPrev4           = 0;
-static int32_t        g_wsBuilt2108       = -1;
-static uint8_t        g_wsMmInterp        = 0;
 static uint32_t       g_wsPrevTst2b       = 0;
 static int32_t        g_wsPrevTst34       = 0;
 static int32_t        g_wsPrevTstX        = 0;
@@ -33,13 +31,6 @@ static int32_t        g_wsPrevTstY        = 0;
 static int32_t        g_msPrevC           = 0;
 static int32_t        g_subPrev50         = 0;
 static MsModelTracker g_mmTrackers[4]{};
-static uint8_t*       g_mmPrevCubePtr     = nullptr;
-static int32_t        g_mmPrevCube4c      = 0;
-static int32_t        g_mmPrevCube50      = 0;
-static int32_t        g_mmPrevCube28      = 0;
-static int32_t        g_mmPrevCube2c      = 0;
-static uint8_t        g_wsMmForceTerrain  = 0;
-static float          g_mmPlayerPulseF    = 0.0f;
 static float          g_msFooterFracX     = 0.0f;
 static bool           g_msFooterMatPushed = false;
 static uint32_t       g_msFooterSavedMode = 0;
@@ -385,7 +376,6 @@ static void __cdecl OnSavePrev_Impl(uint8_t* sm) {
     if (ws != nullptr && ws[0x2120] != 0) {
         if (g_wsPtr != ws) {
             g_wsPtr = ws;
-            g_wsBuilt2108 = -1;
         }
         g_wsPrev4 = *reinterpret_cast<int32_t*>(ws + 0x4);
         g_wsPrev2108 = *reinterpret_cast<int32_t*>(ws + 0x2108);
@@ -394,19 +384,8 @@ static void __cdecl OnSavePrev_Impl(uint8_t* sm) {
         g_wsPrevTst34 = *reinterpret_cast<int32_t*>(ws + 0x2158 + 0x34);
         g_wsPrevTstX  = *reinterpret_cast<int32_t*>(ws + 0x2158 + 0x1c);
         g_wsPrevTstY  = *reinterpret_cast<int32_t*>(ws + 0x2158 + 0x20);
-        uint8_t* cube = *reinterpret_cast<uint8_t**>(ws + 0x34);
-        if (cube != nullptr) {
-            g_mmPrevCubePtr = cube;
-            g_mmPrevCube4c  = *reinterpret_cast<int32_t*>(cube + 0x4c);
-            g_mmPrevCube50  = *reinterpret_cast<int32_t*>(cube + 0x50);
-            g_mmPrevCube28  = *reinterpret_cast<int32_t*>(cube + 0x28);
-            g_mmPrevCube2c  = *reinterpret_cast<int32_t*>(cube + 0x2c);
-        } else {
-            g_mmPrevCubePtr = nullptr;
-        }
     } else {
         g_wsPtr = nullptr;
-        g_mmPrevCubePtr = nullptr;
     }
 
     uint8_t* sub = nullptr;
@@ -1227,212 +1206,6 @@ static void __declspec(naked) hk_toastRenderSmooth() {
     }
 }
 
-static int32_t InterpGridAxis(int32_t prevPos, int32_t curPos, int32_t prevTile, int32_t curTile, int32_t* outTile) {
-    int32_t d = curPos - prevPos;
-    if (d == 0 || d < -30 || d > 30) {
-        *outTile = curTile;
-        return curPos;
-    }
-    bool sameTile = (prevTile == curTile && std::abs(d) <= 15);
-    bool alignedGrid = (prevPos >= 0 && curPos >= 0 && (prevPos / 30) == prevTile && (curPos / 30) == curTile);
-    if (!sameTile && !alignedGrid) {
-        *outTile = curTile;
-        return curPos;
-    }
-    int32_t eff = static_cast<int32_t>(std::lrint(
-        static_cast<float>(prevPos) + static_cast<float>(d) * g_uiAlpha
-    ));
-    *outTile = alignedGrid ? (eff / 30) : curTile;
-    return eff;
-}
-
-static void __cdecl MinimapSmoothDraw_Impl(uint8_t* ws) {
-    int32_t cur2108 = *reinterpret_cast<int32_t*>(ws + 0x2108);
-    if (g_wsPtr != ws || cur2108 != g_wsTgt2108) {
-        g_wsPtr = ws;
-        g_wsTgt2108 = cur2108;
-        g_wsPrev2108 = cur2108;
-    }
-    int32_t drawAlpha = g_wsTgt2108;
-    if (drawAlpha != g_wsPrev2108) {
-        float aF = static_cast<float>(g_wsPrev2108) + static_cast<float>(drawAlpha - g_wsPrev2108) * g_uiAlpha;
-        if (aF < 0.0f) aF = 0.0f;
-        if (aF > 255.0f) aF = 255.0f;
-        drawAlpha = static_cast<int32_t>(std::lrint(aF));
-    }
-    if (drawAlpha <= 0) return;
-
-    uint8_t* sm = GetScreenMgr();
-    int32_t sm34 = *reinterpret_cast<int32_t*>(sm + 0x34);
-    bool needTerrain = (drawAlpha != g_wsBuilt2108 || *reinterpret_cast<int32_t*>(ws + 0x1c0) != sm34);
-    bool activeGameplay = (sm != nullptr && *reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x11u);
-
-    if (needTerrain || activeGameplay) {
-        uint8_t* cube = *reinterpret_cast<uint8_t**>(ws + 0x34);
-        bool savedCube = false;
-        int32_t orig4c = 0, orig50 = 0, orig28 = 0, orig2c = 0;
-        if (activeGameplay && cube != nullptr && cube == g_mmPrevCubePtr) {
-            orig4c = *reinterpret_cast<int32_t*>(cube + 0x4c);
-            orig50 = *reinterpret_cast<int32_t*>(cube + 0x50);
-            orig28 = *reinterpret_cast<int32_t*>(cube + 0x28);
-            orig2c = *reinterpret_cast<int32_t*>(cube + 0x2c);
-            int32_t new28 = orig28;
-            int32_t new2c = orig2c;
-            int32_t new4c = InterpGridAxis(g_mmPrevCube4c, orig4c, g_mmPrevCube28, orig28, &new28);
-            int32_t new50 = InterpGridAxis(g_mmPrevCube50, orig50, g_mmPrevCube2c, orig2c, &new2c);
-            if (new4c != orig4c || new50 != orig50 || new28 != orig28 || new2c != orig2c) {
-                *reinterpret_cast<int32_t*>(cube + 0x4c) = new4c;
-                *reinterpret_cast<int32_t*>(cube + 0x50) = new50;
-                *reinterpret_cast<int32_t*>(cube + 0x28) = new28;
-                *reinterpret_cast<int32_t*>(cube + 0x2c) = new2c;
-                savedCube = true;
-            }
-        }
-
-        g_wsMmInterp = 1;
-        g_wsMmForceTerrain = needTerrain ? 1 : 0;
-        *reinterpret_cast<int32_t*>(ws + 0x2108) = drawAlpha;
-        reinterpret_cast<void(__thiscall*)(void*, int)>(0x47e620)(ws, 0);
-        g_wsMmForceTerrain = 0;
-        g_wsMmInterp = 0;
-
-        if (savedCube) {
-            *reinterpret_cast<int32_t*>(cube + 0x4c) = orig4c;
-            *reinterpret_cast<int32_t*>(cube + 0x50) = orig50;
-            *reinterpret_cast<int32_t*>(cube + 0x28) = orig28;
-            *reinterpret_cast<int32_t*>(cube + 0x2c) = orig2c;
-        }
-    }
-    *reinterpret_cast<int32_t*>(ws + 0x2108) = drawAlpha;
-    reinterpret_cast<void(__thiscall*)(void*)>(0x47a960)(ws);
-    *reinterpret_cast<int32_t*>(ws + 0x2108) = g_wsTgt2108;
-}
-
-static void __declspec(naked) hk_minimapSmoothDraw_bridge() {
-    __asm {
-        push edx
-        push edi
-        call MinimapSmoothDraw_Impl
-        add esp, 4
-        pop edx
-        ret
-    }
-}
-
-static void __declspec(naked) hk_mmSkipIn() {
-    __asm {
-        cmp BYTE PTR g_wsMmInterp, 0
-        jne mmsi_skip
-        mov edx, DWORD PTR [ebx + 0x2108]
-        mov eax, 0x47e670
-        jmp eax
-    mmsi_skip:
-        mov eax, 0x47e6a9
-        jmp eax
-    }
-}
-
-static void __declspec(naked) hk_mmSkipOut() {
-    __asm {
-        cmp BYTE PTR g_wsMmInterp, 0
-        jne mmso_skip
-        mov eax, DWORD PTR [ebx + 0x2108]
-        mov edx, 0x47e69a
-        jmp edx
-    mmso_skip:
-        mov eax, 0x47e6a9
-        jmp eax
-    }
-}
-
-static void __declspec(naked) hk_mmForceVb() {
-    __asm {
-        cmp BYTE PTR g_wsMmForceTerrain, 0
-        je mmfv_chk
-        mov cl, 1
-    mmfv_chk:
-        test cl, cl
-        je mmfv_done
-        mov eax, DWORD PTR [ebx + 0x2108]
-        mov g_wsBuilt2108, eax
-    mmfv_done:
-        mov edi, DWORD PTR ds:[0x5f9040]
-        ret
-    }
-}
-
-static uint32_t __cdecl MmPrismRainbow_Impl(const uint8_t* ws) {
-    return CalcSmoothRainbow(GetSmoothWsFrame(ws), 1.0f);
-}
-
-static void __declspec(naked) hk_mmPrismRainbow() {
-    __asm {
-        push eax
-        push ecx
-        push edx
-        sub esp, 112
-        movdqu XMMWORD PTR [esp + 0x00], xmm0
-        movdqu XMMWORD PTR [esp + 0x10], xmm1
-        movdqu XMMWORD PTR [esp + 0x20], xmm2
-        movdqu XMMWORD PTR [esp + 0x30], xmm3
-        movdqu XMMWORD PTR [esp + 0x40], xmm4
-        movdqu XMMWORD PTR [esp + 0x50], xmm5
-        movdqu XMMWORD PTR [esp + 0x60], xmm6
-        push DWORD PTR [ebp - 0x78]
-        call MmPrismRainbow_Impl
-        add esp, 4
-        mov ebx, eax
-        movdqu xmm0, XMMWORD PTR [esp + 0x00]
-        movdqu xmm1, XMMWORD PTR [esp + 0x10]
-        movdqu xmm2, XMMWORD PTR [esp + 0x20]
-        movdqu xmm3, XMMWORD PTR [esp + 0x30]
-        movdqu xmm4, XMMWORD PTR [esp + 0x40]
-        movdqu xmm5, XMMWORD PTR [esp + 0x50]
-        movdqu xmm6, XMMWORD PTR [esp + 0x60]
-        add esp, 112
-        pop edx
-        pop ecx
-        pop eax
-        ret
-    }
-}
-
-static uint32_t __cdecl MmPlayerDot_Impl(const uint8_t* ws) {
-    float f = std::fmod(GetSmoothWsFrame(ws), 16.0f);
-    if (f < 0.0f) f += 16.0f;
-    float pulse = 0.0f;
-    if (f < 1.0f) pulse = 2.0f + 2.0f * f;
-    else if (f < 2.0f) pulse = 4.0f * (2.0f - f);
-    else if (f >= 15.0f) pulse = 2.0f * (f - 15.0f);
-    g_mmPlayerPulseF = pulse;
-
-    const uint32_t* pal = reinterpret_cast<const uint32_t*>(0x5f9110);
-    uint32_t idx = static_cast<uint32_t>(static_cast<int32_t>(std::floor(f))) & 15u;
-    uint32_t nextIdx = (idx + 1u) & 15u;
-    float frac = f - std::floor(f);
-    int32_t pct = ClampPct0_100(frac * 100.0f);
-    return Game_ColorLerp(pal[idx], pal[nextIdx], pct);
-}
-
-static void __declspec(naked) hk_mmPlayerDot() {
-    __asm {
-        push DWORD PTR [ebp - 0x78]
-        call MmPlayerDot_Impl
-        add esp, 4
-        xorps xmm0, xmm0
-        mov edx, 0x47f289
-        jmp edx
-    }
-}
-
-static void __declspec(naked) hk_mmPlayerPulseLoad() {
-    __asm {
-        movss xmm2, DWORD PTR g_mmPlayerPulseF
-        xorps xmm4, xmm4
-        ret
-    }
-}
-
 // ------------------------------------------------------------------
 // Rainbow Rect Border, PauseConfirm fade2/bars, State 0x17 Loading, OptionsMenu RB
 // ------------------------------------------------------------------
@@ -2097,7 +1870,7 @@ void RegisterUiSmoothPart1() {
         RegRelJmp(0x4a9a5f, exEfd, 8, 5, &hk_endFadePct, 0x90, 0x4a9a86);
     }
 
-    // WorldScreen flash, rainbow triangle, Toast, Minimap
+    // WorldScreen flash, rainbow triangle, Toast
     {
         const uint8_t exHf[9] = {0x83, 0xbf, 0x1c, 0x21, 0x00, 0x00, 0x00, 0x0f, 0x8e};
         RegRelJmp(0x47b45c, exHf, 9, 5, &hk_hudFlashSmooth, 0x90, 0x47b4ea);
@@ -2107,26 +1880,5 @@ void RegisterUiSmoothPart1() {
 
         const uint8_t exTst[8] = {0x83, 0x7e, 0x34, 0x00, 0x0f, 0x8e, 0x89, 0x00};
         RegRelJmp(0x495377, exTst, 8, 5, &hk_toastRenderSmooth, 0x90, 0x4953c1);
-
-        const uint8_t exMm[7] = {0x8b, 0xcf, 0xe8, 0x48, 0xf4, 0xff, 0xff};
-        RegRelCall(0x47b511, exMm, 7, 7, &hk_minimapSmoothDraw_bridge);
-
-        const uint8_t exMmIn[6] = {0x8b, 0x93, 0x08, 0x21, 0x00, 0x00};
-        RegRelJmp(0x47e66a, exMmIn, 6, 6, &hk_mmSkipIn, 0x90);
-
-        const uint8_t exMmOut[6] = {0x8b, 0x83, 0x08, 0x21, 0x00, 0x00};
-        RegRelJmp(0x47e694, exMmOut, 6, 6, &hk_mmSkipOut, 0x90);
-
-        const uint8_t exMmVb[6] = {0x8b, 0x3d, 0x40, 0x90, 0x5f, 0x00};
-        RegRelCall(0x47e8d0, exMmVb, 6, 6, &hk_mmForceVb);
-
-        const uint8_t exMmPrb[7] = {0x8b, 0x1c, 0x95, 0xb8, 0x9b, 0x58, 0x00};
-        RegRelCall(0x47ef15, exMmPrb, 7, 7, &hk_mmPrismRainbow);
-
-        const uint8_t exMmPdot[12] = {0x8b, 0x55, 0x88, 0x8b, 0x42, 0x04, 0x83, 0xe0, 0x0f, 0xc7, 0x45, 0x94};
-        RegRelJmp(0x47f25b, exMmPdot, 12, 5, &hk_mmPlayerDot, 0x90, 0x47f289);
-
-        const uint8_t exMmPulse[6] = {0x0f, 0x5b, 0xd2, 0x0f, 0x57, 0xe4};
-        RegRelCall(0x47f2e8, exMmPulse, 6, 6, &hk_mmPlayerPulseLoad);
     }
 }

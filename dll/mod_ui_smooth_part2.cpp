@@ -1625,9 +1625,61 @@ struct MinimapHudBox {
     float h;
 };
 
-static MinimapHudBox ComputeMinimapHudBox(uint8_t* sm, uint8_t* ws, int32_t virtW, int32_t virtH) {
+static MinimapHudBox ComputeMinimapHudBox(
+    uint8_t* sm, uint8_t* ws, int32_t virtW, int32_t virtH, uint32_t expectedState
+) {
     MinimapHudBox box{false, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    if (sm == nullptr || ws == nullptr || ws[0x2120] == 0) return box;
+    if (sm == nullptr) return box;
+
+    EffectiveMinimapMetrics eff{};
+    GetEffectiveMinimapMetrics(&eff);
+    int32_t mmW = static_cast<int32_t>(std::lround(eff.width));
+    int32_t mmH = static_cast<int32_t>(std::lround(eff.height));
+    if (mmW <= 0 || mmH <= 0) return box;
+
+    if (expectedState == 9u || expectedState == 0x12u) {
+        uint8_t previewPos = 0;
+        bool mmSample = false;
+        bool mmDockBeside = false;
+        if (!GetMinimapMenuPreview(expectedState, &previewPos, &mmSample, &mmDockBeside) || mmDockBeside) {
+            return box;
+        }
+        if (!mmSample && ws != nullptr && ws[0x2120] != 0) {
+            double camAngle = reinterpret_cast<double(__thiscall*)(void*)>(0x478950)(sm + 0xa0);
+            double diffDeg = *reinterpret_cast<const double*>(0x586ae0) - camAngle;
+            int rot = static_cast<int>(diffDeg) / 90;
+            rot &= 0x80000003;
+            if (rot < 0) rot = ((rot - 1) | ~3) + 1;
+            if (rot == 1 || rot == 3) {
+                std::swap(mmW, mmH);
+            }
+        }
+        bool useCorner = (g_minimapPosOverride != 0) || IsOptionsPopupOpen(expectedState == 0x12u);
+        int32_t alignX = useCorner ? ((previewPos == 1u || previewPos == 3u) ? 2 : 0) : eff.alignX;
+        int32_t alignY = useCorner ? ((previewPos == 2u || previewPos == 3u) ? 2 : 0) : eff.alignY;
+        int32_t offX   = useCorner ? 0 : eff.offX;
+        int32_t offY   = useCorner ? 0 : eff.offY;
+
+        int32_t mmX = 0;
+        if (alignX == 1) mmX = (virtW - mmW) / 2;
+        else if (alignX == 2) mmX = virtW - mmW;
+        mmX = std::clamp(mmX + offX, 0, (std::max)(0, virtW - mmW));
+
+        int32_t mmY = 0;
+        if (alignY == 1) mmY = (virtH - mmH) / 2;
+        else if (alignY == 2) mmY = virtH - mmH;
+        mmY = std::clamp(mmY + offY, 0, (std::max)(0, virtH - mmH));
+
+        box.active = true;
+        box.vis = 1.0f;
+        box.x = static_cast<float>(mmX);
+        box.y = static_cast<float>(mmY);
+        box.w = static_cast<float>(mmW);
+        box.h = static_cast<float>(mmH);
+        return box;
+    }
+
+    if (!eff.enabled || ws == nullptr || ws[0x2120] == 0) return box;
 
     int32_t curAlpha = *reinterpret_cast<const int32_t*>(ws + 0x2108);
     float effAlpha = static_cast<float>(curAlpha);
@@ -1642,11 +1694,7 @@ static MinimapHudBox ComputeMinimapHudBox(uint8_t* sm, uint8_t* ws, int32_t virt
     float vis = std::clamp(effAlpha / static_cast<float>(mmMaxAlpha), 0.0f, 1.0f);
     if (vis <= 0.0f) return box;
 
-    int32_t mmW = static_cast<int32_t>(*reinterpret_cast<const float*>(ws + 0x2114));
-    int32_t mmH = static_cast<int32_t>(*reinterpret_cast<const float*>(ws + 0x2118));
-    if (mmW <= 0 || mmH <= 0) return box;
-
-    double camAngle = reinterpret_cast<double(__cdecl*)()>(0x478950)();
+    double camAngle = reinterpret_cast<double(__thiscall*)(void*)>(0x478950)(sm + 0xa0);
     double diffDeg = *reinterpret_cast<const double*>(0x586ae0) - camAngle;
     int rot = static_cast<int>(diffDeg) / 90;
     rot &= 0x80000003;
@@ -1655,18 +1703,18 @@ static MinimapHudBox ComputeMinimapHudBox(uint8_t* sm, uint8_t* ws, int32_t virt
         std::swap(mmW, mmH);
     }
 
-    int32_t alignX = *reinterpret_cast<const int32_t*>(ws + 0x1a8);
+    int32_t alignX = eff.alignX;
     int32_t mmX = 0;
     if (alignX == 1) mmX = (virtW - mmW) / 2;
     else if (alignX == 2) mmX = virtW - mmW;
-    mmX += *reinterpret_cast<const int32_t*>(ws + 0x1a0);
+    mmX += eff.offX;
     mmX = std::clamp(mmX, 0, (std::max)(0, virtW - mmW));
 
-    int32_t alignY = *reinterpret_cast<const int32_t*>(ws + 0x1ac);
+    int32_t alignY = eff.alignY;
     int32_t mmY = 0;
     if (alignY == 1) mmY = (virtH - mmH) / 2;
     else if (alignY == 2) mmY = virtH - mmH;
-    mmY += *reinterpret_cast<const int32_t*>(ws + 0x1a4);
+    mmY += eff.offY;
     mmY = std::clamp(mmY, 0, (std::max)(0, virtH - mmH));
 
     box.active = true;
@@ -1893,10 +1941,8 @@ static void __cdecl RenderHudTimerOverlay(
         if (pos == 2 || pos == 3) {
             oy = static_cast<float>(virtH) - kMargin - scaledH;
         }
-        if (!forceSample) {
-            MinimapHudBox mm = ComputeMinimapHudBox(sm, ws, virtW, virtH);
-            AvoidMinimapOverlap(mm, pos, scaledW, scaledH, virtW, virtH, &ox, &oy);
-        }
+        MinimapHudBox mm = ComputeMinimapHudBox(sm, ws, virtW, virtH, expectedState);
+        AvoidMinimapOverlap(mm, pos, scaledW, scaledH, virtW, virtH, &ox, &oy);
     }
     float maxX = (std::max)(0.0f, static_cast<float>(virtW) - scaledW);
     float maxY = (std::max)(0.0f, static_cast<float>(virtH) - scaledH);
@@ -2075,10 +2121,8 @@ static void __cdecl RenderHudPrismCounterOverlay(
             ox = (pos == 1 || pos == 3) ? (timerRect->rightX - scaledW) : timerRect->leftX;
             oy = (pos == 0 || pos == 1) ? (timerRect->bottomY + 4.0f) : (timerRect->topY - 4.0f - scaledH);
         }
-        if (!forceSample) {
-            MinimapHudBox mm = ComputeMinimapHudBox(sm, ws, virtW, virtH);
-            AvoidMinimapOverlap(mm, pos, scaledW, scaledH, virtW, virtH, &ox, &oy);
-        }
+        MinimapHudBox mm = ComputeMinimapHudBox(sm, ws, virtW, virtH, expectedState);
+        AvoidMinimapOverlap(mm, pos, scaledW, scaledH, virtW, virtH, &ox, &oy);
     }
     float maxX = (std::max)(0.0f, static_cast<float>(virtW) - scaledW);
     float maxY = (std::max)(0.0f, static_cast<float>(virtH) - scaledH);
@@ -2176,9 +2220,11 @@ static void __declspec(naked) hk_worldEnd2DHudTimer() {
 
 static void __cdecl RenderHudTimerPause_Impl(uint8_t* renderer) {
     uint8_t* ws = GetWorldScreen();
+    RenderMinimapMenuPreview(renderer, ws, 0x12u);
     HudCornerRect tr12{};
     RenderHudTimerOverlay(renderer, ws, 0x12u, &tr12);
     RenderHudPrismCounterOverlay(renderer, ws, 0x12u, &tr12);
+    RenderMinimapMenuPreview(renderer, ws, 9u);
     HudCornerRect tr9{};
     RenderHudTimerOverlay(renderer, ws, 9u, &tr9);
     RenderHudPrismCounterOverlay(renderer, ws, 9u, &tr9);

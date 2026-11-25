@@ -57,6 +57,31 @@ extern int32_t g_prismBgOpacity;   // 0..100, step 10 (default 70)
 extern int32_t g_timerShadowOpacity; // 0..100, step 10 (default 0)
 extern int32_t g_prismShadowOpacity; // 0..100, step 10 (default 0)
 
+extern uint8_t g_minimapEnable;         // 0=off, 1=on, default 1
+extern uint8_t g_minimapEnableOverride; // 0=use settings.ini visible, 1=set in options menu
+extern float   g_minimapWidth;          // 0.5..2.5, step 0.25, default 1.0
+extern float   g_minimapHeight;         // 0.5..2.5, step 0.25, default 1.0
+extern float   g_minimapRange;          // 0.5..2.5, step 0.25, default 1.0
+extern uint8_t g_minimapWidthOverride;  // 0 = use settings.ini, 1 = set in options menu
+extern uint8_t g_minimapHeightOverride; // 0 = use settings.ini, 1 = set in options menu
+extern uint8_t g_minimapRangeOverride;  // 0 = use settings.ini, 1 = set in options menu
+extern int32_t g_minimapBgOpacity;      // 0..100, step 10, default 70
+extern uint8_t g_minimapPos;            // 0=TL, 1=TR, 2=BL, 3=BR, default 0 (TL)
+extern uint8_t g_minimapPosOverride;    // 0=use settings.ini align, 1=set in options menu
+
+struct EffectiveMinimapMetrics {
+    bool    enabled;
+    float   width;
+    float   height;
+    float   cellW;
+    float   cellH;
+    int32_t alignX;    // 0=left, 1=center, 2=right
+    int32_t alignY;    // 0=top, 1=center, 2=bottom
+    int32_t offX;
+    int32_t offY;
+    uint8_t posCorner; // 0=TL, 1=TR, 2=BL, 3=BR (resolved corner for UI/preview)
+};
+
 // Shared smoothing state used across UI smooth modules & time format (mod_ui_smooth_part1/2.cpp)
 extern float   g_uiAlpha;
 extern uint8_t g_justTicked;
@@ -165,6 +190,11 @@ void SetMusicVolume(int newVol, int sfxId, bool save);
 void SyncFocusAudioMute();
 bool GetHudTimerMenuPreview(uint32_t state, uint8_t* outMode, float* outSize, uint8_t* outPos, bool* outForceSample, bool* outDockBesideMenu);
 bool GetHudPrismCounterMenuPreview(uint32_t state, uint8_t* outType, float* outSize, uint8_t* outPos, bool* outForceSample, bool* outDockBesideMenu);
+void __cdecl GetEffectiveMinimapMetrics(EffectiveMinimapMetrics* out);
+void __cdecl SyncLiveWorldMinimapFields();
+bool __cdecl GetMinimapMenuPreview(uint32_t state, uint8_t* outPos, bool* outForceSample, bool* outDockBesideMenu);
+void __cdecl ResetMinimapCache();
+void __cdecl RenderMinimapMenuPreview(uint8_t* renderer, uint8_t* ws, uint32_t expectedState);
 void __cdecl RenderPauseHeaderTimer(int x, int y, int width);
 void OnColorThemeChanged();
 uint32_t __fastcall RenderPlayerCubeWithColorTheme(void* cube);

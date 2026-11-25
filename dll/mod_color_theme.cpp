@@ -1183,10 +1183,256 @@ static void __declspec(naked) Hook_MaterialColorOp() {
     }
 }
 
+struct BumperFlashVert {
+    float x, y, z;
+    D3DCOLOR color;
+};
+constexpr DWORD kBumperFlashFvf = D3DFVF_XYZ | D3DFVF_DIFFUSE;
+
+struct ScopedBumperFlashD3DState {
+    IDirect3DDevice9* dev = nullptr;
+    D3DMATRIX savedWorld{};
+    DWORD rsLighting = 0, rsCull = 0, rsZEnable = 0, rsZWrite = 0;
+    DWORD rsAlphaBlend = 0, rsSrcBlend = 0, rsDstBlend = 0, rsAlphaTest = 0;
+    DWORD rsFog = 0, rsSpecular = 0, rsColorVert = 0, rsDiffuseSrc = 0, rsShadeMode = 0;
+    DWORD tss0ColorOp = 0, tss0ColorArg1 = 0, tss0AlphaOp = 0, tss0AlphaArg1 = 0;
+    DWORD tss1ColorOp = 0, tss1AlphaOp = 0;
+    DWORD savedFvf = 0;
+    IDirect3DBaseTexture9* savedTex0 = nullptr;
+    IDirect3DVertexShader9* savedVs = nullptr;
+    IDirect3DPixelShader9* savedPs = nullptr;
+    bool valid = false;
+
+    explicit ScopedBumperFlashD3DState(IDirect3DDevice9* d) : dev(d) {
+        if (dev == nullptr) return;
+        dev->GetTransform(D3DTS_WORLD, &savedWorld);
+        dev->GetRenderState(D3DRS_LIGHTING, &rsLighting);
+        dev->GetRenderState(D3DRS_CULLMODE, &rsCull);
+        dev->GetRenderState(D3DRS_ZENABLE, &rsZEnable);
+        dev->GetRenderState(D3DRS_ZWRITEENABLE, &rsZWrite);
+        dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &rsAlphaBlend);
+        dev->GetRenderState(D3DRS_SRCBLEND, &rsSrcBlend);
+        dev->GetRenderState(D3DRS_DESTBLEND, &rsDstBlend);
+        dev->GetRenderState(D3DRS_ALPHATESTENABLE, &rsAlphaTest);
+        dev->GetRenderState(D3DRS_FOGENABLE, &rsFog);
+        dev->GetRenderState(D3DRS_SPECULARENABLE, &rsSpecular);
+        dev->GetRenderState(D3DRS_COLORVERTEX, &rsColorVert);
+        dev->GetRenderState(D3DRS_DIFFUSEMATERIALSOURCE, &rsDiffuseSrc);
+        dev->GetRenderState(D3DRS_SHADEMODE, &rsShadeMode);
+        dev->GetTextureStageState(0, D3DTSS_COLOROP, &tss0ColorOp);
+        dev->GetTextureStageState(0, D3DTSS_COLORARG1, &tss0ColorArg1);
+        dev->GetTextureStageState(0, D3DTSS_ALPHAOP, &tss0AlphaOp);
+        dev->GetTextureStageState(0, D3DTSS_ALPHAARG1, &tss0AlphaArg1);
+        dev->GetTextureStageState(1, D3DTSS_COLOROP, &tss1ColorOp);
+        dev->GetTextureStageState(1, D3DTSS_ALPHAOP, &tss1AlphaOp);
+        dev->GetFVF(&savedFvf);
+        dev->GetTexture(0, &savedTex0);
+        dev->GetVertexShader(&savedVs);
+        dev->GetPixelShader(&savedPs);
+        valid = true;
+
+        D3DMATRIX ident{};
+        ident._11 = ident._22 = ident._33 = ident._44 = 1.0f;
+        dev->SetTransform(D3DTS_WORLD, &ident);
+        dev->SetVertexShader(nullptr);
+        dev->SetPixelShader(nullptr);
+        dev->SetTexture(0, nullptr);
+        dev->SetFVF(kBumperFlashFvf);
+        dev->SetRenderState(D3DRS_LIGHTING, FALSE);
+        dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+        dev->SetRenderState(D3DRS_ZENABLE, TRUE);
+        dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+        dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+        dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+        dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+        dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+        dev->SetRenderState(D3DRS_FOGENABLE, FALSE);
+        dev->SetRenderState(D3DRS_SPECULARENABLE, FALSE);
+        dev->SetRenderState(D3DRS_COLORVERTEX, TRUE);
+        dev->SetRenderState(D3DRS_DIFFUSEMATERIALSOURCE, D3DMCS_COLOR1);
+        dev->SetRenderState(D3DRS_SHADEMODE, D3DSHADE_GOURAUD);
+        dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+        dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
+        dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+        dev->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_DIFFUSE);
+        dev->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+        dev->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+    }
+
+    ~ScopedBumperFlashD3DState() {
+        if (!valid || dev == nullptr) return;
+        dev->SetTransform(D3DTS_WORLD, &savedWorld);
+        dev->SetRenderState(D3DRS_LIGHTING, rsLighting);
+        dev->SetRenderState(D3DRS_CULLMODE, rsCull);
+        dev->SetRenderState(D3DRS_ZENABLE, rsZEnable);
+        dev->SetRenderState(D3DRS_ZWRITEENABLE, rsZWrite);
+        dev->SetRenderState(D3DRS_ALPHABLENDENABLE, rsAlphaBlend);
+        dev->SetRenderState(D3DRS_SRCBLEND, rsSrcBlend);
+        dev->SetRenderState(D3DRS_DESTBLEND, rsDstBlend);
+        dev->SetRenderState(D3DRS_ALPHATESTENABLE, rsAlphaTest);
+        dev->SetRenderState(D3DRS_FOGENABLE, rsFog);
+        dev->SetRenderState(D3DRS_SPECULARENABLE, rsSpecular);
+        dev->SetRenderState(D3DRS_COLORVERTEX, rsColorVert);
+        dev->SetRenderState(D3DRS_DIFFUSEMATERIALSOURCE, rsDiffuseSrc);
+        dev->SetRenderState(D3DRS_SHADEMODE, rsShadeMode);
+        dev->SetTextureStageState(0, D3DTSS_COLOROP, tss0ColorOp);
+        dev->SetTextureStageState(0, D3DTSS_COLORARG1, tss0ColorArg1);
+        dev->SetTextureStageState(0, D3DTSS_ALPHAOP, tss0AlphaOp);
+        dev->SetTextureStageState(0, D3DTSS_ALPHAARG1, tss0AlphaArg1);
+        dev->SetTextureStageState(1, D3DTSS_COLOROP, tss1ColorOp);
+        dev->SetTextureStageState(1, D3DTSS_ALPHAOP, tss1AlphaOp);
+        dev->SetFVF(savedFvf);
+        dev->SetTexture(0, savedTex0);
+        if (savedTex0 != nullptr) savedTex0->Release();
+        dev->SetVertexShader(savedVs);
+        if (savedVs != nullptr) savedVs->Release();
+        dev->SetPixelShader(savedPs);
+        if (savedPs != nullptr) savedPs->Release();
+
+        uint32_t* tcache = *reinterpret_cast<uint32_t**>(0x5f87cc);
+        if (tcache != nullptr) *tcache = 0;
+    }
+};
+
+struct BumperRoofFlashState {
+    bool active = false;
+    float elapsed = 0.0f;
+    uint32_t lastTriggerFrame = 0xffffffffu;
+};
+
+static const uint8_t*                  g_bumperFlashLevel = nullptr;
+static uint32_t                        g_bumperFlashLastWsFrame = 0;
+static std::vector<BumperRoofFlashState> g_bumperFlashStates;
+
+constexpr float kBumperFlashAttackSec = 0.033f;
+constexpr float kBumperFlashDecaySec  = 0.167f;
+constexpr float kBumperFlashTotalSec  = kBumperFlashAttackSec + kBumperFlashDecaySec;
+constexpr float kBumperFlashMaxAlpha  = 138.0f; // 255 - 0x75, matching 0xff757575 peak darkening
+
+static uint8_t* GetBumperRoofFlashNode(const uint8_t* roofMesh) {
+    if (roofMesh == nullptr) return nullptr;
+    const uint8_t* root = *reinterpret_cast<const uint8_t* const*>(roofMesh + 0x00);
+    if (root == nullptr) return nullptr;
+    const uint8_t* staticRoof = *reinterpret_cast<const uint8_t* const*>(root + 0xec);
+    if (staticRoof == nullptr) return nullptr;
+    return *reinterpret_cast<uint8_t* const*>(staticRoof + 0xf4);
+}
+
+static float EvalBumperFlashIntensity(float elapsed) {
+    if (elapsed <= 0.0f || elapsed >= kBumperFlashTotalSec) return 0.0f;
+    if (elapsed < kBumperFlashAttackSec) {
+        float u = elapsed / kBumperFlashAttackSec;
+        return u * u * (3.0f - 2.0f * u);
+    }
+    float inv = (kBumperFlashTotalSec - elapsed) / kBumperFlashDecaySec;
+    return inv * inv * (3.0f - 2.0f * inv);
+}
+
+static void RenderSmoothBumperRoofFlash(const uint8_t* bumper) {
+    uint8_t* lvl      = GetLevel();
+    uint8_t* ws       = GetWorldScreen();
+    uint8_t* sm       = GetScreenMgr();
+    uint8_t* renderer = GetRenderer();
+    if (bumper == nullptr || lvl == nullptr || ws == nullptr || renderer == nullptr) return;
+
+    const uint8_t* roofMesh = *reinterpret_cast<const uint8_t* const*>(bumper + 0x74);
+    if (roofMesh == nullptr) return;
+
+    int16_t bumperId = *reinterpret_cast<const int16_t*>(bumper + 0x00);
+    const uint8_t* interpState = *reinterpret_cast<const uint8_t* const*>(lvl + 0xb0);
+    if (interpState == nullptr) return;
+
+    int32_t count = *reinterpret_cast<const int32_t*>(interpState + 0x04);
+    const int32_t* cmds = *reinterpret_cast<const int32_t* const*>(interpState + 0x08);
+    if (count <= 0 || cmds == nullptr || bumperId < 0 || bumperId >= count) return;
+
+    uint32_t wsFrame = *reinterpret_cast<const uint32_t*>(ws + 0x04);
+    if (lvl != g_bumperFlashLevel || g_bumperFlashStates.size() != static_cast<size_t>(count) ||
+        wsFrame < g_bumperFlashLastWsFrame) {
+        g_bumperFlashStates.assign(static_cast<size_t>(count), BumperRoofFlashState{});
+    }
+    g_bumperFlashLevel = lvl;
+    g_bumperFlashLastWsFrame = wsFrame;
+
+    int32_t roofCmd = cmds[bumperId * 5 + 4];
+    bool paused = (sm != nullptr && *reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x12u);
+    float dt = paused ? 0.0f : std::clamp(*reinterpret_cast<const float*>(renderer + 0x08), 0.0f, 0.1f);
+
+    BumperRoofFlashState& st = g_bumperFlashStates[static_cast<size_t>(bumperId)];
+    if (roofCmd == 1) {
+        st.active = false;
+        st.elapsed = 0.0f;
+    } else if (roofCmd == 0 && st.lastTriggerFrame != wsFrame) {
+        float curI = st.active ? EvalBumperFlashIntensity(st.elapsed) : 0.0f;
+        st.active = true;
+        st.elapsed = kBumperFlashAttackSec * std::clamp(curI, 0.0f, 1.0f);
+        st.lastTriggerFrame = wsFrame;
+    }
+
+    if (st.active) {
+        st.elapsed += dt;
+        if (st.elapsed >= kBumperFlashTotalSec) {
+            st.active = false;
+            st.elapsed = 0.0f;
+        }
+    }
+    if (!st.active) return;
+
+    float intensity = EvalBumperFlashIntensity(st.elapsed);
+    int alpha = std::clamp(static_cast<int>(std::lround(intensity * kBumperFlashMaxAlpha)), 0, 255);
+    if (alpha <= 0) return;
+
+    auto* dev = *reinterpret_cast<IDirect3DDevice9* const*>(renderer + 0xcc);
+    if (dev == nullptr) return;
+
+    float cx = *reinterpret_cast<const float*>(roofMesh + 0x30);
+    float cy = *reinterpret_cast<const float*>(roofMesh + 0x34);
+    float cz = *reinterpret_cast<const float*>(roofMesh + 0x38);
+    float sx = *reinterpret_cast<const float*>(roofMesh + 0x48);
+    float sy = *reinterpret_cast<const float*>(roofMesh + 0x4c);
+    float sz = *reinterpret_cast<const float*>(roofMesh + 0x50);
+
+    float halfX = 0.40f * sx;
+    float halfZ = 0.40f * sz;
+    float topY  = cy + 0.50f * sy + 0.05f;
+    float x0 = cx - halfX, x1 = cx + halfX;
+    float z0 = cz - halfZ, z1 = cz + halfZ;
+    D3DCOLOR col = (static_cast<D3DCOLOR>(alpha) << 24);
+
+    BumperFlashVert verts[6] = {
+        {x0, topY, z0, col},
+        {x1, topY, z0, col},
+        {x1, topY, z1, col},
+        {x0, topY, z0, col},
+        {x1, topY, z1, col},
+        {x0, topY, z1, col},
+    };
+
+    ScopedBumperFlashD3DState guard(dev);
+    dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, 2, verts, sizeof(BumperFlashVert));
+}
+
 static void __fastcall Hook_BumperRender(uint8_t* bumper) {
     using OrigFn = void(__thiscall*)(void*);
-    if (g_colorTheme == 0 || bumper == nullptr) {
+    if (bumper == nullptr) {
         reinterpret_cast<OrigFn>(0x484fa0)(bumper);
+        return;
+    }
+
+    uint8_t* roofMesh  = *reinterpret_cast<uint8_t**>(bumper + 0x74);
+    uint8_t* flashNode = GetBumperRoofFlashNode(roofMesh);
+
+    if (g_colorTheme == 0) {
+        uint8_t savedVis = 0;
+        if (flashNode != nullptr) {
+            savedVis = flashNode[0x1a1];
+            flashNode[0x1a1] = 0;
+        }
+        reinterpret_cast<OrigFn>(0x484fa0)(bumper);
+        if (flashNode != nullptr) {
+            flashNode[0x1a1] = savedVis;
+        }
+        RenderSmoothBumperRoofFlash(bumper);
         return;
     }
 
@@ -1214,13 +1460,20 @@ static void __fastcall Hook_BumperRender(uint8_t* bumper) {
         }
     }
 
-    void* roofMesh = *reinterpret_cast<void**>(bumper + 0x74);
     if (roofMesh != nullptr) {
         if (renderer != nullptr) {
             reinterpret_cast<SetLightingFn>(0x405e40)(renderer, 0);
         }
         Hook_SetHeightUV(roofMesh, param);
+        uint8_t savedVis = 0;
+        if (flashNode != nullptr) {
+            savedVis = flashNode[0x1a1];
+            flashNode[0x1a1] = 0;
+        }
         reinterpret_cast<DrawMeshFn>(0x421460)(roofMesh, 0);
+        if (flashNode != nullptr) {
+            flashNode[0x1a1] = savedVis;
+        }
     }
 
     g_inJavaBumperRender = false;
@@ -1231,6 +1484,8 @@ static void __fastcall Hook_BumperRender(uint8_t* bumper) {
     if (renderer != nullptr) {
         reinterpret_cast<SetLightingFn>(0x405e40)(renderer, 1);
     }
+
+    RenderSmoothBumperRoofFlash(bumper);
 }
 
 struct CachedPlatEdgeSubMesh {

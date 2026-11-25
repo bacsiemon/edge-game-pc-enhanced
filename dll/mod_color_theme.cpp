@@ -1516,7 +1516,6 @@ static void __fastcall Hook_BumperRender(uint8_t* bumper) {
 
 struct CachedPlatEdgeSubMesh {
     IDirect3DVertexBuffer9* vb = nullptr;
-    uint8_t* lastVerifiedLevel = nullptr;
     uint32_t numVerts = 0;
     uint32_t stride = 0;
     uint32_t uvOff = 0;
@@ -1561,7 +1560,6 @@ static void ReadPlatEdgeSubMeshData(CachedPlatEdgeSubMesh& info, const uint8_t* 
 
 static void SyncMovingPlatEdgeUVs(uint8_t* nodePtr, bool customTheme) {
     if (nodePtr == nullptr) return;
-    uint8_t* curLevel = GetLevel();
     uint8_t* node = *reinterpret_cast<uint8_t**>(nodePtr);
     while (node != nullptr) {
         using GetMeshFn = uint8_t*(__thiscall*)(void*);
@@ -1599,7 +1597,6 @@ static void SyncMovingPlatEdgeUVs(uint8_t* nodePtr, bool customTheme) {
                                     if (SUCCEEDED(vb->Lock(0, 0, &ptr, D3DLOCK_READONLY)) && ptr != nullptr) {
                                         CachedPlatEdgeSubMesh info;
                                         info.vb = vb;
-                                        info.lastVerifiedLevel = curLevel;
                                         info.numVerts = numVerts;
                                         info.stride = stride;
                                         info.uvOff = uvOff;
@@ -1611,23 +1608,6 @@ static void SyncMovingPlatEdgeUVs(uint8_t* nodePtr, bool customTheme) {
                                         vb->Unlock();
                                         s_platEdgeSubMeshes.push_back(std::move(info));
                                         entry = &s_platEdgeSubMeshes.back();
-                                    }
-                                } else if (entry->lastVerifiedLevel != curLevel) {
-                                    void* ptr = nullptr;
-                                    if (SUCCEEDED(entry->vb->Lock(0, 0, &ptr, D3DLOCK_READONLY)) && ptr != nullptr) {
-                                        const uint8_t* basePtr = static_cast<const uint8_t*>(ptr);
-                                        float firstU = *reinterpret_cast<const float*>(basePtr + entry->uvOff);
-                                        if (firstU < 0.005f) {
-                                            entry->appliedCustom = true;
-                                            s_anyPlatEdgeVbModified = true;
-                                        } else {
-                                            entry->stride = stride;
-                                            entry->uvOff = uvOff;
-                                            ReadPlatEdgeSubMeshData(*entry, basePtr);
-                                            entry->appliedCustom = false;
-                                        }
-                                        entry->vb->Unlock();
-                                        entry->lastVerifiedLevel = curLevel;
                                     }
                                 }
                                 if (entry != nullptr && entry->appliedCustom != customTheme) {
@@ -1758,7 +1738,6 @@ struct CachedSwitchSubMesh {
     std::vector<uint32_t> origColors;
 };
 
-static uint8_t* s_switchCacheLevel = nullptr;
 static IDirect3DDevice9* s_switchCacheDev = nullptr;
 static bool s_anySwitchVbModified = false;
 static std::vector<CachedSwitchSubMesh> s_switchSubMeshes;
@@ -1892,12 +1871,11 @@ static void __fastcall Hook_SwitchRender(uint8_t* sw) {
         return;
     }
 
-    uint8_t* curLevel = GetLevel();
     IDirect3DDevice9* curDev = g_cachedDev;
-    if (curLevel != s_switchCacheLevel || curDev != s_switchCacheDev) {
+    if (curDev != s_switchCacheDev) {
         s_switchSubMeshes.clear();
-        s_switchCacheLevel = curLevel;
         s_switchCacheDev = curDev;
+        s_anySwitchVbModified = false;
     }
 
     uint8_t targetTheme = g_colorTheme;
@@ -2217,6 +2195,23 @@ static void* __cdecl Hook_ComputeCubeMatColor(
 } // namespace
 
 namespace edgemod {
+
+void __cdecl ResetColorThemeLevelCaches() {
+    s_wallSubMeshes.clear();
+    s_cachedLevelModel = nullptr;
+    s_cachedHeightTiles = 0;
+    s_appliedLevelTheme = 0;
+
+    g_bumperFlashStates.clear();
+    g_bumperFlashLevel = nullptr;
+    g_bumperFlashLastWsFrame = 0;
+
+    s_platEdgeSubMeshes.clear();
+    s_anyPlatEdgeVbModified = false;
+
+    s_switchSubMeshes.clear();
+    s_anySwitchVbModified = false;
+}
 
 uint32_t __fastcall RenderPlayerCubeWithColorTheme(void* cube) {
     using OrigFn = uint32_t(__thiscall*)(void*);

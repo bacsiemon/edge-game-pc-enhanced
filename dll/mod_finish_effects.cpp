@@ -432,6 +432,7 @@ static void __declspec(naked) hk_unloadLevelClear() {
         call ResetCubeDistortionState
         call ResetMinimapCache
         call ResetSpeedometerState
+        call ResetColorThemeLevelCaches
         pop edx
         pop ecx
         pop eax

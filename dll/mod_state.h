@@ -204,6 +204,7 @@ void __cdecl ResetSpeedometerState();
 void __cdecl RenderMinimapMenuPreview(uint8_t* renderer, uint8_t* ws, uint32_t expectedState);
 void __cdecl RenderPauseHeaderTimer(int x, int y, int width);
 void OnColorThemeChanged();
+void __cdecl ResetColorThemeLevelCaches();
 uint32_t __fastcall RenderPlayerCubeWithColorTheme(void* cube);
 void __cdecl BeginPlayerCubeDistortion(void* cube);
 void __cdecl EndCubeDistortion();

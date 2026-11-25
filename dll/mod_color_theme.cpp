@@ -1644,6 +1644,185 @@ static void SyncMovingPlatEdgeUVs(uint8_t* nodePtr, bool customTheme) {
     }
 }
 
+static IDirect3DDevice9* GetD3DDevice() {
+    uint8_t* renderer = GetRenderer();
+    return (renderer != nullptr) ? *reinterpret_cast<IDirect3DDevice9**>(renderer + 0xcc) : nullptr;
+}
+
+constexpr float   kPlatformDepthBiasStep    = 1.5e-6f;
+constexpr float   kFallingPlatformDepthBias = 0.75e-6f;
+constexpr uint8_t kMaxOverlapLayer          = 6u;
+
+struct ScopedDepthBias {
+    IDirect3DDevice9* dev = nullptr;
+    DWORD savedBias = 0;
+    bool active = false;
+
+    ScopedDepthBias(IDirect3DDevice9* d, float bias) : dev(d) {
+        if (dev != nullptr && bias != 0.0f) {
+            dev->GetRenderState(D3DRS_DEPTHBIAS, &savedBias);
+            DWORD dwBias = 0;
+            std::memcpy(&dwBias, &bias, sizeof(dwBias));
+            dev->SetRenderState(D3DRS_DEPTHBIAS, dwBias);
+            active = true;
+        }
+    }
+
+    ~ScopedDepthBias() {
+        if (active && dev != nullptr) {
+            dev->SetRenderState(D3DRS_DEPTHBIAS, savedBias);
+        }
+    }
+};
+
+struct MovingPlatDepthPlan {
+    bool skip = false;
+    uint8_t layer = 0;
+};
+
+struct MovingPlatEntry {
+    uint16_t index = 0;
+    uint8_t valid = 0;
+    uint8_t state = 0;
+    int32_t sizeKind = 0;
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    float sx = 0.0f, sy = 0.0f, sz = 0.0f;
+    float hx = 0.0f, hy = 0.0f, hz = 0.0f;
+};
+
+static std::vector<MovingPlatDepthPlan> s_mpDepthPlan;
+static std::vector<MovingPlatEntry>     s_mpEntries;
+static std::vector<uint16_t>            s_mpOrder;
+static std::vector<uint16_t>            s_mpKept;
+static uint8_t*                         s_mpPlanLevel = nullptr;
+static int                              s_mpRenderCursor = 0;
+
+static void PrepareMovingPlatformDepthPlan(uint8_t* lvl) {
+    int16_t count = *reinterpret_cast<const int16_t*>(lvl + 0x04);
+    uint8_t** arr = *reinterpret_cast<uint8_t***>(lvl + 0x08);
+    if (count <= 0 || arr == nullptr) {
+        s_mpDepthPlan.clear();
+        s_mpPlanLevel = lvl;
+        s_mpRenderCursor = 0;
+        return;
+    }
+
+    const size_t n = static_cast<size_t>(count);
+    s_mpDepthPlan.assign(n, MovingPlatDepthPlan{});
+    s_mpEntries.resize(n);
+    s_mpOrder.resize(n);
+    s_mpKept.clear();
+    if (s_mpKept.capacity() < n) {
+        s_mpKept.reserve(n);
+    }
+
+    for (int i = 0; i < count; ++i) {
+        const size_t idx = static_cast<size_t>(i);
+        s_mpOrder[idx] = static_cast<uint16_t>(i);
+        MovingPlatEntry& e = s_mpEntries[idx];
+        e = MovingPlatEntry{};
+        e.index = static_cast<uint16_t>(i);
+
+        uint8_t* plat = arr[i];
+        if (plat == nullptr) continue;
+        int32_t st = *reinterpret_cast<const int32_t*>(plat + 0x6c);
+        if (st != 0 && st != 1) continue;
+        const uint8_t* bodyModel = *reinterpret_cast<const uint8_t* const*>(plat + st * 8 + 0x50);
+        if (bodyModel == nullptr) continue;
+
+        e.valid = 1;
+        e.state = static_cast<uint8_t>(st);
+        e.sizeKind = *reinterpret_cast<const int32_t*>(plat + 0x44);
+        e.x = *reinterpret_cast<const float*>(bodyModel + 0x30);
+        e.y = *reinterpret_cast<const float*>(bodyModel + 0x34);
+        e.z = *reinterpret_cast<const float*>(bodyModel + 0x38);
+        e.sx = *reinterpret_cast<const float*>(bodyModel + 0x48);
+        e.sy = *reinterpret_cast<const float*>(bodyModel + 0x4c);
+        e.sz = *reinterpret_cast<const float*>(bodyModel + 0x50);
+        e.hx = std::fabs(e.sx) * 0.5f;
+        e.hy = std::fabs(e.sy) * 0.5f;
+        e.hz = std::fabs(e.sz) * 0.5f;
+    }
+
+    // Active platforms (rainbow edges) take visual precedence over inactive ones, then earlier index.
+    std::sort(s_mpOrder.begin(), s_mpOrder.end(), [](uint16_t a, uint16_t b) {
+        const uint8_t sa = s_mpEntries[a].state;
+        const uint8_t sb = s_mpEntries[b].state;
+        if (sa != sb) return sa > sb;
+        return a < b;
+    });
+
+    for (uint16_t idx : s_mpOrder) {
+        const MovingPlatEntry& a = s_mpEntries[idx];
+        if (!a.valid) continue;
+
+        bool skip = false;
+        uint32_t usedMask = 0;
+        for (uint16_t prev : s_mpKept) {
+            const MovingPlatEntry& b = s_mpEntries[prev];
+            float dx = std::fabs(a.x - b.x);
+            if (dx >= (a.hx + b.hx) - 0.05f) continue;
+            float dy = std::fabs(a.y - b.y);
+            if (dy >= (a.hy + b.hy) - 0.05f) continue;
+            float dz = std::fabs(a.z - b.z);
+            if (dz >= (a.hz + b.hz) - 0.05f) continue;
+
+            if (dx < 0.05f && dy < 0.05f && dz < 0.05f
+                && a.sizeKind == b.sizeKind
+                && std::fabs(a.sx - b.sx) < 0.05f
+                && std::fabs(a.sy - b.sy) < 0.05f
+                && std::fabs(a.sz - b.sz) < 0.05f) {
+                skip = true;
+                break;
+            }
+            usedMask |= (1u << s_mpDepthPlan[prev].layer);
+        }
+
+        if (skip) {
+            s_mpDepthPlan[idx].skip = true;
+            continue;
+        }
+
+        uint8_t layer = 0;
+        while (layer < kMaxOverlapLayer && (usedMask & (1u << layer)) != 0u) {
+            ++layer;
+        }
+        s_mpDepthPlan[idx].layer = layer;
+        s_mpKept.push_back(idx);
+    }
+
+    s_mpPlanLevel = lvl;
+    s_mpRenderCursor = 0;
+}
+
+static MovingPlatDepthPlan ResolveMovingPlatformDepthPlan(uint8_t* plat) {
+    uint8_t* lvl = GetLevel();
+    if (lvl == nullptr || plat == nullptr) return {};
+    int16_t count = *reinterpret_cast<const int16_t*>(lvl + 0x04);
+    uint8_t** arr = *reinterpret_cast<uint8_t***>(lvl + 0x08);
+    if (count <= 0 || arr == nullptr) return {};
+
+    if (plat == arr[0] || lvl != s_mpPlanLevel || static_cast<int>(s_mpDepthPlan.size()) != count) {
+        PrepareMovingPlatformDepthPlan(lvl);
+    }
+
+    int idx = -1;
+    if (s_mpRenderCursor >= 0 && s_mpRenderCursor < count && arr[s_mpRenderCursor] == plat) {
+        idx = s_mpRenderCursor;
+        ++s_mpRenderCursor;
+    } else {
+        for (int i = 0; i < count; ++i) {
+            if (arr[i] == plat) {
+                idx = i;
+                s_mpRenderCursor = i + 1;
+                break;
+            }
+        }
+    }
+    if (idx < 0 || static_cast<size_t>(idx) >= s_mpDepthPlan.size()) return {};
+    return s_mpDepthPlan[static_cast<size_t>(idx)];
+}
+
 static void __fastcall Hook_MovingPlatformRender(uint8_t* plat) {
     using OrigFn = void(__thiscall*)(void*);
     auto orig = reinterpret_cast<OrigFn>(0x483fd0);
@@ -1658,6 +1837,20 @@ static void __fastcall Hook_MovingPlatformRender(uint8_t* plat) {
         s_platEdgeCacheDev = curDev;
         s_anyPlatEdgeVbModified = false;
     }
+
+    MovingPlatDepthPlan plan = ResolveMovingPlatformDepthPlan(plat);
+    if (plan.skip) {
+        if (g_colorTheme == 0 && s_anyPlatEdgeVbModified) {
+            uint8_t* edgeModel = *reinterpret_cast<uint8_t**>(plat + 0x60);
+            if (edgeModel != nullptr) {
+                SyncMovingPlatEdgeUVs(edgeModel, false);
+            }
+        }
+        return;
+    }
+
+    float bias = static_cast<float>(1u + plan.layer) * kPlatformDepthBiasStep;
+    ScopedDepthBias depthGuard(GetD3DDevice(), bias);
 
     if (g_colorTheme == 0) {
         if (s_anyPlatEdgeVbModified) {
@@ -2016,7 +2209,13 @@ static void __fastcall Hook_ShrinkerRender(uint8_t* shrinker) {
 static void __fastcall Hook_FallingPlatformRender(uint8_t* plat) {
     using OrigFn = void(__thiscall*)(void*);
     auto orig = reinterpret_cast<OrigFn>(0x486b20);
-    if (g_colorTheme != 1u || plat == nullptr) {
+    if (plat == nullptr) {
+        orig(plat);
+        return;
+    }
+
+    ScopedDepthBias depthGuard(GetD3DDevice(), kFallingPlatformDepthBias);
+    if (g_colorTheme != 1u) {
         orig(plat);
         return;
     }
@@ -2211,6 +2410,13 @@ void __cdecl ResetColorThemeLevelCaches() {
 
     s_switchSubMeshes.clear();
     s_anySwitchVbModified = false;
+
+    s_mpDepthPlan.clear();
+    s_mpEntries.clear();
+    s_mpOrder.clear();
+    s_mpKept.clear();
+    s_mpPlanLevel = nullptr;
+    s_mpRenderCursor = 0;
 }
 
 uint32_t __fastcall RenderPlayerCubeWithColorTheme(void* cube) {

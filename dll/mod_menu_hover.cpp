@@ -39,9 +39,10 @@ struct MenuHoverState {
     bool needsInitialSync = false;
     bool prevPopupOpen    = false;
 
-    int32_t lsHoveredTile = -1;
-    int     lsHoveredBtn  = -1; // -1=none, 1=back/skip, 2=go
-    int32_t lsPrevScrollY = 0;
+    int32_t lsHoveredTile    = -1;
+    int32_t lsPrevPlayedTile = -1;
+    int     lsHoveredBtn     = -1; // -1=none, 1=back/skip, 2=go
+    int32_t lsPrevScrollY    = 0;
 
     int prevMx = -99999;
     int prevMy = -99999;
@@ -299,6 +300,68 @@ static void DrawHoveredSlotBorder(const uint8_t* menu, uint32_t vtbl, int pauseP
     }
 }
 
+static void SetLevelSelectDisplayedTile(uint8_t* ls, int32_t tileIdx) {
+    if (ls == nullptr) return;
+    int32_t count = *reinterpret_cast<const int32_t*>(ls + 0x18);
+    if (tileIdx < 0 || tileIdx >= count) return;
+    if (*reinterpret_cast<const int32_t*>(ls + 0x38) == tileIdx) return;
+
+    *reinterpret_cast<int32_t*>(ls + 0x38) = tileIdx;
+    uint8_t* sm = GetScreenMgr();
+    if (sm == nullptr) return;
+
+    int32_t mode = *reinterpret_cast<const int32_t*>(ls + 0x14);
+    using GetLevelInfoFn = uint8_t*(__thiscall*)(void*, int32_t, int32_t);
+    uint8_t* levelInfo = reinterpret_cast<GetLevelInfoFn>(0x4a4620)(sm + 0x24c, mode, tileIdx);
+    *reinterpret_cast<uint8_t**>(ls + 0x3c) = levelInfo;
+
+    uint8_t* saveInfo = nullptr;
+    if (levelInfo != nullptr) {
+        int32_t levelId = *reinterpret_cast<const int32_t*>(levelInfo + 0x3c);
+        using GetSaveInfoFn = uint8_t*(__thiscall*)(void*, int32_t);
+        saveInfo = reinterpret_cast<GetSaveInfoFn>(0x4920a0)(sm + 0x298, levelId);
+    }
+    *reinterpret_cast<uint8_t**>(ls + 0x40) = saveInfo;
+}
+
+static int32_t __cdecl LsTileShouldUsePressedColor_Impl(const uint8_t* ls, int32_t tileIdx) {
+    if (ls == nullptr) return 0;
+    int32_t exitTimer = *reinterpret_cast<const int32_t*>(ls + 0x8);
+    int32_t exitDest  = *reinterpret_cast<const int32_t*>(ls + 0xc);
+    if (exitTimer >= 0 && exitDest == 0x10) {
+        return (tileIdx == *reinterpret_cast<const int32_t*>(ls + 0x38)) ? 1 : 0;
+    }
+
+    int32_t prevPlayed = (ls == g_hover.activeMenu && g_hover.lsPrevPlayedTile >= 0)
+        ? g_hover.lsPrevPlayedTile
+        : *reinterpret_cast<const int32_t*>(ls + 0x38);
+    if (tileIdx == prevPlayed) return 1;
+
+    if (*reinterpret_cast<const int32_t*>(ls + 0x4) >= 8 &&
+        exitTimer < 0 &&
+        ls[0x44] != 0 &&
+        tileIdx == *reinterpret_cast<const int32_t*>(ls + 0x38)) {
+        return 1;
+    }
+    return 0;
+}
+
+static void __declspec(naked) hk_lsTilePressedCheck() {
+    __asm {
+        push ebx
+        push edi
+        call LsTileShouldUsePressedColor_Impl
+        add esp, 8
+        test eax, eax
+        je ls_tile_not_pressed
+        mov eax, 0x4b812a
+        jmp eax
+    ls_tile_not_pressed:
+        mov eax, 0x4b8161
+        jmp eax
+    }
+}
+
 static void CallSubmenuUpdate(uint8_t* submenu, float dt) {
     using Fn = void(__thiscall*)(void*, float);
     (*reinterpret_cast<Fn**>(submenu))[1](submenu, dt);
@@ -360,6 +423,9 @@ static void __cdecl MenuSubUpdate_Impl(uint8_t* submenu, float dt) {
         g_hover.lastSlot = (selOff >= 0) ? *reinterpret_cast<const int32_t*>(submenu + selOff) : 0;
         if (vtbl == kVtblLevelSel) {
             g_hover.lsPrevScrollY = *reinterpret_cast<const int32_t*>(submenu + 0x50);
+            g_hover.lsPrevPlayedTile = *reinterpret_cast<const int32_t*>(submenu + 0x38);
+        } else {
+            g_hover.lsPrevPlayedTile = -1;
         }
         if (g_hover.lastInputMode == HoverInputMode::Mouse) {
             g_hover.needsInitialSync = true;
@@ -497,8 +563,13 @@ static void __cdecl MenuSubUpdate_Impl(uint8_t* submenu, float dt) {
                                     Game_PlaySfx(sm, 2);
                                 }
                             }
+                            if (submenu[0x44] != 0 && hitTile != *reinterpret_cast<const int32_t*>(submenu + 0x38)) {
+                                submenu[0x44] = 0;
+                            }
+                            SetLevelSelectDisplayedTile(submenu, hitTile);
                         } else {
                             g_hover.lsHoveredTile = -1;
+                            submenu[0x44] = 0;
                             int hitBtn = HitTestMenuButton(vtbl, mx, my);
                             if (hitBtn != g_hover.lsHoveredBtn) {
                                 if (hitBtn > 0 && !silent && !mouseJustPressed) {
@@ -510,6 +581,7 @@ static void __cdecl MenuSubUpdate_Impl(uint8_t* submenu, float dt) {
                     } else {
                         g_hover.lsHoveredTile = -1;
                         g_hover.lsHoveredBtn = -1;
+                        submenu[0x44] = 0;
                     }
                 } else if (g_hover.lastInputMode == HoverInputMode::Mouse && !mouseValid && !mouseDown) {
                     g_hover.lsHoveredTile = -1;
@@ -528,7 +600,8 @@ static void __cdecl MenuSubUpdate_Impl(uint8_t* submenu, float dt) {
 
     // 3. Button-only menus (ScoresMenu, InstructionsMenu, CreditsMenu)
     if (vtbl == kVtblScores || vtbl == kVtblInstr || vtbl == kVtblCredits) {
-        bool ready = (*reinterpret_cast<const int32_t*>(submenu + 4) >= 8) &&
+        int minEnter = (vtbl == kVtblCredits) ? 0 : 8;
+        bool ready = (*reinterpret_cast<const int32_t*>(submenu + 4) >= minEnter) &&
                      (*reinterpret_cast<const int32_t*>(submenu + 8) < 0);
         if (vtbl == kVtblCredits && submenu[0x48] != 0) {
             ready = false;
@@ -611,7 +684,8 @@ static void __cdecl MenuSubRender_Impl(uint8_t* submenu, int frame) {
     if (selOff >= 0) {
         ready = IsStandardSlotMenuReady(submenu, vtbl, pausePage);
     } else if (vtbl == kVtblLevelSel || vtbl == kVtblScores || vtbl == kVtblInstr || vtbl == kVtblCredits) {
-        ready = (*reinterpret_cast<const int32_t*>(submenu + 4) >= 8) && (exitTimer < 0);
+        int minEnter = (vtbl == kVtblCredits) ? 0 : 8;
+        ready = (*reinterpret_cast<const int32_t*>(submenu + 4) >= minEnter) && (exitTimer < 0);
         if (vtbl == kVtblCredits && submenu[0x48] != 0) ready = false;
     }
 
@@ -933,4 +1007,11 @@ void RegisterMenuHover() {
     // 9. Keep PauseMenu P0 & DebriefMenu option labels stationary (disable vanilla selected left-shift)
     patchBytes(0x4ad2ce, {0x83, 0xe2, 0x0e}, {0x83, 0xe2, 0x00}); // PauseMenu P0: and edx, 0 (was 14)
     patchBytes(0x4abce2, {0x83, 0xe1, 0x0c}, {0x83, 0xe1, 0x00}); // DebriefMenu: and ecx, 0 (was 12)
+
+    // 10. LevelSelect: skip info-card slide reset on tile click (keep onEnter), launch on single click,
+    //     and keep previous played level with pressed-down color
+    patchBytes(0x4b672a, {0x74, 0x46}, {0xeb, 0x46}); // skip [edi+0x28] = -3 & old tile flash
+    patchBytes(0x4b68eb, {0x39, 0x7e, 0x38, 0x75, 0x10}, {0x90, 0x90, 0x90, 0x90, 0x90}); // arm single-click launch
+    static const uint8_t exLsPressed[5] = {0x3b, 0x5f, 0x38, 0x75, 0x37};
+    RegRelJmp(0x4b8125, exLsPressed, 5, 5, &hk_lsTilePressedCheck);
 }

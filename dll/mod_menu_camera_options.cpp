@@ -5186,11 +5186,13 @@ static void __cdecl LsTileInnerQuad_Impl(
     bool isHovered = false;
     uint32_t hoverRainbowRgb = 0xffffffu;
 
+    const bool isFocusedHover = IsMenuInputKeyboardMode()
+        ? (tileIdx == *reinterpret_cast<const int32_t*>(ls + 0x38))
+        : (tileIdx == GetLevelSelectHoveredTile());
     if (ls != nullptr &&
         *reinterpret_cast<const int32_t*>(ls + 4) >= 8 &&
         *reinterpret_cast<const int32_t*>(ls + 8) < 0 &&
-        tileIdx != *reinterpret_cast<const int32_t*>(ls + 0x38) &&
-        tileIdx == GetLevelSelectHoveredTile()) {
+        isFocusedHover) {
         isHovered = true;
         int32_t frame = *reinterpret_cast<const int32_t*>(ebpFrame - 0x54);
         hoverRainbowRgb = GetSmoothMenuRainbow(frame);
@@ -5334,12 +5336,17 @@ static void __declspec(naked) hk_lsHitTestTileXY() {
 
 static void __declspec(naked) hk_lsRenderTileXY() {
     __asm {
+        push edi
+        call GetSmoothLevelSelectScrollY
+        add esp, 4
+        push eax
         mov eax, ebx
         cdq
         mov ecx, 6
         idiv ecx
+        pop ecx
         imul eax, eax, 0x2d
-        sub eax, DWORD PTR [edi + 0x50]
+        sub eax, ecx
         mov ecx, DWORD PTR [ebp - 0x48]
         lea eax, [eax + ecx + 0xaa]
         imul edx, edx, 0x2d

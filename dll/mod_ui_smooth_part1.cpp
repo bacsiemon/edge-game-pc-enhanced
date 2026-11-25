@@ -132,6 +132,16 @@ uint32_t __cdecl GetSmoothMenuRainbow(int32_t frame) {
     return col;
 }
 
+int32_t __cdecl GetSmoothLevelSelectScrollY(const uint8_t* ls) {
+    int32_t cur = *reinterpret_cast<const int32_t*>(ls + 0x50);
+    if (g_subPtr == ls && cur != g_subPrev50) {
+        cur = static_cast<int32_t>(std::lrint(
+            static_cast<float>(g_subPrev50) + static_cast<float>(cur - g_subPrev50) * g_uiAlpha
+        ));
+    }
+    return cur;
+}
+
 } // namespace edgemod
 
 namespace {
@@ -939,12 +949,20 @@ static void __declspec(naked) hk_interpModelNodeT() {
     }
 }
 
-static int32_t __cdecl CalcMsScroll_Impl(const uint8_t* ms) {
+static int32_t __cdecl CalcMsScroll_Impl(const uint8_t* ms, int32_t period) {
     int32_t cur = *reinterpret_cast<const int32_t*>(ms + 0xc);
     if (ms == GetMenuScreen()) {
         int32_t diff = cur - g_msPrevC;
         if (diff >= 0 && diff <= 20) {
             return static_cast<int32_t>(std::lrint(static_cast<float>(g_msPrevC) + static_cast<float>(diff) * g_uiAlpha));
+        }
+        if (period > 0) {
+            int32_t wrappedDiff = diff + period;
+            if (wrappedDiff >= 0 && wrappedDiff <= 20) {
+                return static_cast<int32_t>(std::lrint(
+                    static_cast<float>(cur - wrappedDiff) + static_cast<float>(wrappedDiff) * g_uiAlpha
+                ));
+            }
         }
     }
     return cur;
@@ -956,37 +974,15 @@ static void __declspec(naked) hk_msScrollSmooth() {
         mov DWORD PTR [ebp + 0x8], eax
         push ecx
         push edx
+        push ebx
         push edi
         call CalcMsScroll_Impl
-        add esp, 4
+        add esp, 8
         pop edx
         pop ecx
         mov esi, ecx
         sub esi, eax
-        ret
-    }
-}
-
-static int32_t __cdecl CalcLsScroll_Impl(const uint8_t* ls, int32_t row) {
-    int32_t cur = *reinterpret_cast<const int32_t*>(ls + 0x50);
-    if (g_subPtr == ls && cur != g_subPrev50) {
-        cur = static_cast<int32_t>(std::lrint(
-            static_cast<float>(g_subPrev50) + static_cast<float>(cur - g_subPrev50) * g_uiAlpha
-        ));
-    }
-    return row * 0x2d - cur;
-}
-
-static void __declspec(naked) hk_lsScrollSmooth() {
-    __asm {
-        push ecx
-        push edx
-        push eax
-        push edi
-        call CalcLsScroll_Impl
-        add esp, 8
-        pop edx
-        pop ecx
+        mov eax, DWORD PTR [ebp + 0x8]
         ret
     }
 }
@@ -1517,14 +1513,12 @@ void RegisterUiSmoothPart1() {
         RegRelCall(0x4adf88, exP2X, 11, 20, &hk_pauseP2X);
     }
 
-    // ModelNode timer, MenuScreen scroll, LevelSelect scroll
+    // ModelNode timer, MenuScreen scroll (LevelSelect scroll is smoothed inside hk_lsRenderTileXY)
     {
         const uint8_t exMnt[6] = {0xd9, 0x40, 0x10, 0xd9, 0x5d, 0x08};
         RegRelCall(0x425715, exMnt, 6, 6, &hk_interpModelNodeT);
         const uint8_t exMss[11] = {0x8b, 0xf1, 0x2b, 0x77, 0x0c, 0x83, 0xe8, 0x0b, 0x89, 0x45, 0x08};
         RegRelCall(0x49c52b, exMss, 11, 11, &hk_msScrollSmooth);
-        const uint8_t exLss[6] = {0x6b, 0xc0, 0x2d, 0x2b, 0x47, 0x50};
-        RegRelCall(0x4b80a3, exLss, 6, 6, &hk_lsScrollSmooth);
     }
 
     // Submenu selection bar vertical Y slides

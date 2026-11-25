@@ -146,6 +146,7 @@ inline void Game_DrawRainbowRectBorder(int frame, int x, int y, int w, int h, in
 
 // Shared helpers callable from mod_ui_smooth_part2.cpp
 uint32_t __cdecl GetSmoothMenuRainbow(int frame);
+int32_t  __cdecl GetSmoothLevelSelectScrollY(const uint8_t* ls);
 int __cdecl MeasureTextWidth(const EdgeWString* ws, int scaleX, int extraX);
 int __cdecl DrawTextAutoFit(
     const EdgeWString* ws, int x, int y, int scaleX, int scaleY,

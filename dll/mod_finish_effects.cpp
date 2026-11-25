@@ -426,6 +426,13 @@ static void __declspec(naked) hk_unloadLevelClear() {
     // At 0x47e3fc: 7B mov BYTE PTR [esi+0x2120], 0
     __asm {
         mov BYTE PTR g_winFx.active, 0
+        push eax
+        push ecx
+        push edx
+        call ResetCubeDistortionState
+        pop edx
+        pop ecx
+        pop eax
         mov BYTE PTR [esi + 0x2120], 0
         mov eax, 0x47e403
         jmp eax

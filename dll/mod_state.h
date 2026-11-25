@@ -44,6 +44,7 @@ extern int32_t g_aaSamples;   // 0=off, 2/4/8/16 MSAA samples
 extern uint8_t g_finishEffect;   // 0=pc, 1=mobile, 2=java
 extern uint8_t g_finishPlatform; // 0=pc, 1=mobile
 extern uint8_t g_colorTheme;     // 0=pc, 1=mobile, 2=java
+extern uint8_t g_cubeDistortion; // 0=off, 1=on
 extern uint8_t g_timerMode;   // 0=off, 1=level, 2=rank, 3=both
 extern float   g_timerSize;   // 0.25..2.0 (presets: 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2)
 extern uint8_t g_timerPos;    // 0=TL, 1=TR, 2=BL, 3=BR
@@ -167,6 +168,10 @@ bool GetHudPrismCounterMenuPreview(uint32_t state, uint8_t* outType, float* outS
 void __cdecl RenderPauseHeaderTimer(int x, int y, int width);
 void OnColorThemeChanged();
 uint32_t __fastcall RenderPlayerCubeWithColorTheme(void* cube);
+void __cdecl BeginPlayerCubeDistortion(void* cube);
+void __cdecl EndCubeDistortion();
+void __cdecl BeginGhostCubeDistortion(void* worldScreen);
+void __cdecl ResetCubeDistortionState();
 void EnsureMusicPlaylistReady();
 void OnMusicPlaylistChanged();
 float __cdecl ComputeEdgeTimerZoomScale(const uint8_t* ws, int32_t slot);

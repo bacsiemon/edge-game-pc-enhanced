@@ -15,6 +15,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 | **Graphics**    | `chromatic aberration` | `off`, `on`                                                                      | toggle            | Instant 2-state switch                                                                                             |
 | **Graphics**    | `prism vfx`            | `0` (`off`), `1` (`short`), `2` (`medium`), `3` (`long`)                         | slider            | 4 discrete stops (`0..3`); default is `1` (`short`)                                                                |
 | **Graphics**    | `color theme`          | `pc`, `mobile`, `java`                                                           | popup             | Level color scheme, cube palette/lighting, wall gradients, and prism styles (`pc` default, live switch)          |
+| **Graphics**    | `cube distortion`      | `off`, `on`                                                                      | toggle            | Java idle Player Cube & random Ghost Dark Cube horizontal-wave distortion (`off` default)                        |
 | **Graphics**    | `finish effect`        | `pc`, `mobile`, `java`                                                           | popup             | Level-complete cube finish animation style (`pc` default)                                                          |
 | **Graphics**    | `finish platform`      | `pc`, `mobile`                                                                   | toggle            | Level finish platform colors (`pc` default)                                                                        |
 | **Audio**       | `sounds`               | `0`..`100`                                                                       | slider            | Live volume preview while dragging (default `100`)                                                                 |
@@ -54,7 +55,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 
 ## Control Behavior Guidelines
 
-### 1. Toggles (10 items)
+### 1. Toggles (11 items)
 
 - **Display:** 2 dots under the value. Lighter dot indicates the selected option.
 - **Interaction:** Click / Enter / Left / Right toggles immediately and saves, playing hover SFX (`2`).

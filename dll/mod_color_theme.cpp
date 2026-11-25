@@ -2151,6 +2151,21 @@ static void __fastcall Hook_DarkCubeRender(void* cube) {
     reinterpret_cast<OrigFn>(0x48c630)(cube);
 }
 
+struct ScopedPlayerCubeDistort {
+    explicit ScopedPlayerCubeDistort(void* cube) { BeginPlayerCubeDistortion(cube); }
+    ~ScopedPlayerCubeDistort() { EndCubeDistortion(); }
+};
+
+struct ScopedGhostCubeDistort {
+    bool active = false;
+    explicit ScopedGhostCubeDistort(void* ws, bool enable) : active(enable) {
+        if (active) BeginGhostCubeDistortion(ws);
+    }
+    ~ScopedGhostCubeDistort() {
+        if (active) EndCubeDistortion();
+    }
+};
+
 static void __fastcall Hook_GhostCubeTransparents(void* renderer) {
     using OrigFn = void(__thiscall*)(void*);
     uint8_t* ws = *reinterpret_cast<uint8_t**>(0x5f9064);
@@ -2158,6 +2173,7 @@ static void __fastcall Hook_GhostCubeTransparents(void* renderer) {
     bool isSolidDarkCube = (ws != nullptr && ws[0x48] != 0);
     ScopedJavaCubeLight cubeLight(g_colorTheme == 2u && isGhostDarkCube);
     ScopedMobileDarkCubeLight darkLight(g_colorTheme == 1u && isSolidDarkCube);
+    ScopedGhostCubeDistort ghostDistort(ws, isGhostDarkCube);
     reinterpret_cast<OrigFn>(0x407410)(renderer);
 }
 
@@ -2207,6 +2223,7 @@ uint32_t __fastcall RenderPlayerCubeWithColorTheme(void* cube) {
     uint32_t ret = 0;
     {
         ScopedJavaCubeLight cubeLight(g_colorTheme == 2u);
+        ScopedPlayerCubeDistort cubeDistort(cube);
         ret = reinterpret_cast<OrigFn>(0x48c630)(cube);
     }
     return ret;

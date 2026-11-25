@@ -28,6 +28,7 @@ uint8_t g_chromaAb    = 1;
 int32_t g_aaSamples   = -1; // sentinel until loaded/migrated
 uint8_t g_finishEffect   = 0; // 0=pc, 1=mobile, 2=java
 uint8_t g_finishPlatform = 0; // 0=pc, 1=mobile
+uint8_t g_cubeDistortion = 0; // 0=off, 1=on
 uint8_t g_timerMode   = 3;    // default: both
 float   g_timerSize   = 1.0f; // default: 1x
 uint8_t g_timerPos    = 1;    // default: TR (top right)
@@ -330,6 +331,7 @@ EDGE_STATIC_WSTR(g_wstrJava,         "java");
 EDGE_STATIC_WSTR(g_wstrFinishEffect,   "finish effect");
 EDGE_STATIC_WSTR(g_wstrFinishPlatform, "finish platform");
 EDGE_STATIC_WSTR(g_wstrColorTheme,     "color theme");
+EDGE_STATIC_WSTR(g_wstrCubeDistortion, "cube distortion");
 EDGE_STATIC_WSTR(g_wstrDef,          "def");
 EDGE_STATIC_WSTR(g_wstrNew,          "new");
 EDGE_STATIC_WSTR(g_wstrDot,          ".");
@@ -401,6 +403,7 @@ enum OptItem : int {
     OPT_FINISH_EFFECT,
     OPT_FINISH_PLATFORM,
     OPT_COLOR_THEME,
+    OPT_CUBE_DISTORTION,
     OPT_SOUNDS,
     OPT_MUSIC,
     OPT_MUSIC_START,
@@ -846,6 +849,7 @@ static void SaveModSettings() {
     uint8_t finishEffect = (g_finishEffect <= 2u) ? g_finishEffect : 0u;
     uint8_t finishPlatform = (g_finishPlatform != 0) ? 1u : 0u;
     uint8_t colorTheme = (g_colorTheme <= 2u) ? g_colorTheme : 0u;
+    uint8_t cubeDistortion = (g_cubeDistortion != 0) ? 1u : 0u;
     uint8_t timerMode = (g_timerMode <= 3u) ? g_timerMode : 3u;
     float timerSize = std::isfinite(g_timerSize) ? g_timerSizePresets[NearestTimerSizeIdx(g_timerSize)] : 1.0f;
     uint8_t timerPos = (g_timerPos <= 3u) ? g_timerPos : 1u;
@@ -897,6 +901,7 @@ static void SaveModSettings() {
     writeInt("finish_effect", finishEffect);
     writeInt("finish_platform", finishPlatform);
     writeInt("color_theme", colorTheme);
+    writeInt("cube_distortion", cubeDistortion);
     writeInt("timer_mode", timerMode);
     writeFloat("timer_size", timerSize);
     writeInt("timer_pos", timerPos);
@@ -1022,7 +1027,7 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
     bool inEdgeModSec = false;
     int32_t schemaVer = 0;
     uint32_t seenMask = 0;
-    constexpr uint32_t kAllModKeysMask = (1u << 30) - 1u;
+    constexpr uint32_t kAllModKeysMask = (1u << 31) - 1u;
 
     while (pos < data.size()) {
         size_t nl = data.find('\n', pos);
@@ -1225,6 +1230,11 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
                 g_prismShadowOpacity = std::clamp(((iv + 5) / 10) * 10, 0, 100);
                 seenMask |= (1u << 28);
             }
+        } else if (AsciiEqIc(kP, kE, "cube_distortion")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_cubeDistortion = (iv != 0) ? 1u : 0u;
+                seenMask |= (1u << 30);
+            }
         }
     }
 
@@ -1407,6 +1417,7 @@ static void LoadModSettingsOnStartup_Impl(uint8_t* userSettings) {
     g_finishEffect  = 0;
     g_finishPlatform= 0;
     g_colorTheme    = 0;
+    g_cubeDistortion= 0;
     g_timerMode     = 3;
     g_timerSize     = 1.0f;
     g_timerPos      = 1;
@@ -1776,6 +1787,15 @@ static void FinishPlatformAction_Impl(int sfxId) {
     SaveModSettings();
 }
 
+static void CubeDistortionAction_Impl(int sfxId) {
+    uint8_t* sm = GetScreenMgr();
+    g_cubeDistortion ^= 1u;
+    if (sm != nullptr && sfxId > 0) {
+        Game_PlaySfx(sm, sfxId);
+    }
+    SaveModSettings();
+}
+
 static void MusicStartAction_Impl(int sfxId) {
     g_musicStart ^= 1u;
     ApplyOptionScaleChange(sfxId);
@@ -1870,10 +1890,11 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         outItems[1] = OPT_CHROMA_AB;
         outItems[2] = OPT_PRISM_VFX;
         outItems[3] = OPT_COLOR_THEME;
-        outItems[4] = OPT_FINISH_EFFECT;
-        outItems[5] = OPT_FINISH_PLATFORM;
-        outItems[6] = OPT_BACK;
-        return 7;
+        outItems[4] = OPT_CUBE_DISTORTION;
+        outItems[5] = OPT_FINISH_EFFECT;
+        outItems[6] = OPT_FINISH_PLATFORM;
+        outItems[7] = OPT_BACK;
+        return 8;
     case OPT_CAT_AUDIO:
         outItems[0] = OPT_SOUNDS;
         outItems[1] = OPT_MUSIC;
@@ -1951,6 +1972,7 @@ static bool IsOptItemAdjustable(OptItem item) {
     case OPT_FINISH_EFFECT:
     case OPT_FINISH_PLATFORM:
     case OPT_COLOR_THEME:
+    case OPT_CUBE_DISTORTION:
     case OPT_SOUNDS:
     case OPT_MUSIC:
     case OPT_MUSIC_START:
@@ -2014,6 +2036,7 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_FINISH_EFFECT:    return &g_wstrFinishEffect;
     case OPT_FINISH_PLATFORM:  return &g_wstrFinishPlatform;
     case OPT_COLOR_THEME:      return &g_wstrColorTheme;
+    case OPT_CUBE_DISTORTION:  return &g_wstrCubeDistortion;
     case OPT_MUSIC_START:      return &g_wstrMusicStart;
     case OPT_MUSIC_PLAYLIST:   return &g_wstrMusicPlaylist;
     case OPT_MUTE_UNFOCUSED:   return &g_wstrMuteUnfocused;
@@ -2061,6 +2084,7 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_CHROMA_AB:
     case OPT_AUTO_SCALE:
     case OPT_FINISH_PLATFORM:
+    case OPT_CUBE_DISTORTION:
     case OPT_MUSIC_START:
     case OPT_MUSIC_PLAYLIST:
     case OPT_MUTE_UNFOCUSED:
@@ -2160,6 +2184,7 @@ static int GetToggleState(OptItem item) {
     case OPT_CHROMA_AB:       return g_chromaAb ? 1 : 0;
     case OPT_AUTO_SCALE:      return g_autoScale ? 1 : 0;
     case OPT_FINISH_PLATFORM: return g_finishPlatform ? 1 : 0;
+    case OPT_CUBE_DISTORTION: return g_cubeDistortion ? 1 : 0;
     case OPT_MUSIC_START:     return g_musicStart ? 1 : 0;
     case OPT_MUSIC_PLAYLIST:  return g_musicPlaylist ? 1 : 0;
     case OPT_MUTE_UNFOCUSED:  return g_muteUnfocused ? 1 : 0;
@@ -2787,6 +2812,10 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
         if (g_colorTheme == 1) return &g_wstrMobile;
         if (g_colorTheme == 2) return &g_wstrJava;
         return &g_wstrPc;
+    case OPT_CUBE_DISTORTION:
+        Game_GetLocalizedWString(tmp, g_cubeDistortion ? 0xb : 0xc);
+        *outFreeHeap = true;
+        return tmp;
     case OPT_SOUNDS:
         FmtInt0to100Wstr((sm != nullptr) ? *reinterpret_cast<int*>(sm + 0x2b0) : 100, tmp);
         return tmp;
@@ -2894,6 +2923,7 @@ static void ExecuteOptToggle(OptItem item, int sfxId) {
     case OPT_CHROMA_AB:       ChromaAbAction_Impl(sfxId); break;
     case OPT_AUTO_SCALE:      AutoScaleAction_Impl(sfxId); break;
     case OPT_FINISH_PLATFORM: FinishPlatformAction_Impl(sfxId); break;
+    case OPT_CUBE_DISTORTION: CubeDistortionAction_Impl(sfxId); break;
     case OPT_MUSIC_START:     MusicStartAction_Impl(sfxId); break;
     case OPT_MUSIC_PLAYLIST:  MusicPlaylistAction_Impl(sfxId); break;
     case OPT_MUTE_UNFOCUSED:  MuteUnfocusedAction_Impl(sfxId); break;

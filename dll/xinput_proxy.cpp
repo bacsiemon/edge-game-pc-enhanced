@@ -68,6 +68,7 @@ void RegisterAllPatchesOnce() {
     RegisterUiSmoothPart2();
     RegisterEdgeTimer();
     RegisterMenuHover();
+    RegisterCubeDistortion();
 }
 
 } // namespace

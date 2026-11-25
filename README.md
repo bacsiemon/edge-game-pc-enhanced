@@ -9,6 +9,7 @@ Mod settings are stored separately in `%LocalAppData%\Two Tribes\EDGE\edgemod_se
 ### Graphics & Visuals
 - **Rainbow & Prism Color Fix**: Restores animated rainbow colors on prisms, moving platforms, and goal tiles, even when using overlays like RTSS.
 - **Color Themes (`color theme`)**: Switch live in-game between **`pc`**, **`mobile`** (Android), and **`java`** (J2ME/Extended) under **Options → Graphics → `color theme`** for platform-authentic textures, lighting, cube palettes, full-height wall gradients, and Mobile/Java prism styles.
+- **Cube Distortion (`cube distortion`)**: Toggle **`off`** or **`on`** under **Options → Graphics → `cube distortion`** for the Java J2ME/Extended horizontal-wave distortion on the idle Player Cube and Ghost Dark Cube.
 - **Finish Effects & Finish Platform**: Choose between **`pc`**, **`mobile`**, and **`java`** level-complete cube effects (`finish effect`), plus **`pc`** or **`mobile`** finish platform colors (`finish platform`) under **Options → Graphics**.
 - **Post-Processing & Anti-Aliasing**: Customize **`prism vfx`** (`off` / `short` / `medium` / `long`), toggle **`chromatic aberration`** (`off` / `on`), select **`anti-aliasing`** (`off` or `2x`–`16x` MSAA), and remove background blur on Pause and Level Complete screens.
 - **Sharp UI Fonts**: Keeps 2D menu and HUD text crisp when using fractional UI scales (such as `1.25` or `1.5`) without changing native 3D game resolution.

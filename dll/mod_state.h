@@ -56,6 +56,11 @@ extern int32_t g_timerBgOpacity;   // 0..100, step 10 (default 70)
 extern int32_t g_prismBgOpacity;   // 0..100, step 10 (default 70)
 extern int32_t g_timerShadowOpacity; // 0..100, step 10 (default 0)
 extern int32_t g_prismShadowOpacity; // 0..100, step 10 (default 0)
+extern uint8_t g_speedometerEnable;  // 0=off, 1=on (default 0)
+extern float   g_speedometerSize;    // 0.25..2.0 (presets matching g_timerSize, default 1.0)
+extern int32_t g_speedometerBgOpacity;     // 0..100, step 10 (default 70)
+extern int32_t g_speedometerShadowOpacity; // 0..100, step 10 (default 0)
+extern uint8_t g_speedometerPos;     // 0=TL, 1=TR, 2=BL, 3=BR (default 3)
 
 extern uint8_t g_minimapEnable;         // 0=off, 1=on, default 1
 extern uint8_t g_minimapEnableOverride; // 0=use settings.ini visible, 1=set in options menu
@@ -190,10 +195,12 @@ void SetMusicVolume(int newVol, int sfxId, bool save);
 void SyncFocusAudioMute();
 bool GetHudTimerMenuPreview(uint32_t state, uint8_t* outMode, float* outSize, uint8_t* outPos, bool* outForceSample, bool* outDockBesideMenu);
 bool GetHudPrismCounterMenuPreview(uint32_t state, uint8_t* outType, float* outSize, uint8_t* outPos, bool* outForceSample, bool* outDockBesideMenu);
+bool GetHudSpeedometerMenuPreview(uint32_t state, uint8_t* outEnable, float* outSize, uint8_t* outPos, bool* outForceSample, bool* outDockBesideMenu);
 void __cdecl GetEffectiveMinimapMetrics(EffectiveMinimapMetrics* out);
 void __cdecl SyncLiveWorldMinimapFields();
 bool __cdecl GetMinimapMenuPreview(uint32_t state, uint8_t* outPos, bool* outForceSample, bool* outDockBesideMenu);
 void __cdecl ResetMinimapCache();
+void __cdecl ResetSpeedometerState();
 void __cdecl RenderMinimapMenuPreview(uint8_t* renderer, uint8_t* ws, uint32_t expectedState);
 void __cdecl RenderPauseHeaderTimer(int x, int y, int width);
 void OnColorThemeChanged();

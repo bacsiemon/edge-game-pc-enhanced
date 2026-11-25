@@ -24,6 +24,7 @@ int32_t  g_wsPrevX[2]  = {0, 0};
 int32_t  g_wsPrevY[2]  = {0, 0};
 int32_t  g_wsPrevElapsed   = 0;
 int32_t  g_wsPrevTotalEdge = 0;
+int32_t  g_wsPrevBuffTicks = 0;
 float    g_etRemTmp    = 0.0f;
 float    g_etTicksTmp  = 0.0f;
 uint8_t  g_lsFlashPrev[64]{};
@@ -114,6 +115,12 @@ void __cdecl OnSavePrev_Ext() {
         int32_t commEdge = *reinterpret_cast<int32_t*>(g_wsPtr + 0x108);
         int32_t actEdge  = (g_wsPtr[0x6c] != 0) ? *reinterpret_cast<int32_t*>(g_wsPtr + 0x78) : 0;
         g_wsPrevTotalEdge = commEdge + actEdge;
+        uint8_t* cube = *reinterpret_cast<uint8_t* const*>(g_wsPtr + 0x34);
+        if (cube != nullptr) {
+            g_wsPrevBuffTicks = *reinterpret_cast<const int32_t*>(cube + 0x168);
+        } else {
+            g_wsPrevBuffTicks = 0;
+        }
     }
 }
 
@@ -1607,14 +1614,235 @@ static void FormatTicksWstr(double ticks, wchar_t* wbuf, size_t cap, EdgeWString
     out->cap = static_cast<uint32_t>(cap - 1);
 }
 
-struct HudCornerRect {
-    bool    drawn;
-    uint8_t pos;
-    float   leftX;
-    float   rightX;
-    float   topY;
-    float   bottomY;
+struct HudCornerStack {
+    bool  hasAny[4]  = {};
+    float leftX[4]   = {};
+    float rightX[4]  = {};
+    float topY[4]    = {};
+    float bottomY[4] = {};
 };
+
+struct SpeedoSample {
+    double dt;
+    float  dist;
+};
+
+struct SpeedometerTracker {
+    const uint8_t* lastCube = nullptr;
+    bool         hasPos = false;
+    float        lastX = 0.0f;
+    float        lastZ = 0.0f;
+    float        displaySpeed = 0.0f;
+    bool         rollsInit = false;
+    float        smoothRollsLeft = 0.0f;
+    SpeedoSample ring[256]{};
+    uint32_t     head = 0;
+    uint32_t     count = 0;
+    double       totalDt = 0.0;
+    float        totalDist = 0.0f;
+
+    void ResetWindow() {
+        head = 0;
+        count = 0;
+        totalDt = 0.0;
+        totalDist = 0.0f;
+        displaySpeed = 0.0f;
+    }
+
+    void ResetAll() {
+        lastCube = nullptr;
+        hasPos = false;
+        lastX = 0.0f;
+        lastZ = 0.0f;
+        rollsInit = false;
+        smoothRollsLeft = 0.0f;
+        ResetWindow();
+    }
+};
+
+static SpeedometerTracker g_speedTracker{};
+
+static void GetPlayerCubeWorldXZ(const uint8_t* cube, float* outX, float* outZ) {
+    if (cube == nullptr) {
+        *outX = 0.0f;
+        *outZ = 0.0f;
+        return;
+    }
+    uint8_t* model = *reinterpret_cast<uint8_t* const*>(cube + 0x1fc);
+    if (model == nullptr) {
+        model = *reinterpret_cast<uint8_t* const*>(cube + 0x1f4);
+    }
+    if (model != nullptr) {
+        float pos[3]{};
+        reinterpret_cast<float*(__thiscall*)(uint8_t*, float*)>(0x421400)(model, pos);
+        if (std::isfinite(pos[0]) && std::isfinite(pos[2]) &&
+            std::fabs(pos[0]) < 1.0e6f && std::fabs(pos[2]) < 1.0e6f) {
+            *outX = pos[0];
+            *outZ = pos[2];
+            return;
+        }
+    }
+    float scaleDiv = 1.0f;
+    if (*reinterpret_cast<const int32_t*>(cube + 0x138) != 1) {
+        scaleDiv = static_cast<float>(*reinterpret_cast<const int32_t*>(cube + 0x134)) * 0.000244140625f;
+        if (scaleDiv <= 0.1f) scaleDiv = 1.0f;
+    }
+    float halfSz = 15.0f / scaleDiv;
+    *outX = static_cast<float>(*reinterpret_cast<const int32_t*>(cube + 0x4c)) + halfSz;
+    *outZ = static_cast<float>(*reinterpret_cast<const int32_t*>(cube + 0x50)) + halfSz;
+}
+
+static void UpdateSpeedometerTracker(uint8_t* renderer, uint8_t* ws) {
+    uint8_t* sm = GetScreenMgr();
+    if (sm == nullptr || *reinterpret_cast<const uint32_t*>(sm + 0x50) != 0x11u) {
+        return;
+    }
+    if (ws == nullptr || ws[0x2120] == 0) {
+        g_speedTracker.ResetAll();
+        return;
+    }
+    uint8_t* cube = *reinterpret_cast<uint8_t* const*>(ws + 0x34);
+    if (cube == nullptr) {
+        g_speedTracker.ResetAll();
+        return;
+    }
+    if (cube != g_speedTracker.lastCube) {
+        g_speedTracker.ResetAll();
+        g_speedTracker.lastCube = cube;
+    }
+    if (cube[0x171] != 0) {
+        g_speedTracker.hasPos = false;
+        g_speedTracker.ResetWindow();
+        return;
+    }
+
+    float dt = (renderer != nullptr) ? *reinterpret_cast<const float*>(renderer + 0x08) : 0.0f;
+    if (!std::isfinite(dt) || dt < 0.0f) dt = 0.0f;
+    if (dt > 0.1f) dt = 0.1f;
+
+    float curX = 0.0f;
+    float curZ = 0.0f;
+    GetPlayerCubeWorldXZ(cube, &curX, &curZ);
+
+    if (!g_speedTracker.hasPos) {
+        g_speedTracker.hasPos = true;
+        g_speedTracker.lastX = curX;
+        g_speedTracker.lastZ = curZ;
+    } else if (dt > 0.0f) {
+        float dx = curX - g_speedTracker.lastX;
+        float dz = curZ - g_speedTracker.lastZ;
+        float stepDist = std::hypot(dx, dz);
+        g_speedTracker.lastX = curX;
+        g_speedTracker.lastZ = curZ;
+
+        if (!std::isfinite(stepDist) || stepDist > 45.0f) {
+            g_speedTracker.ResetWindow();
+        } else {
+            constexpr double kWindowSec = 0.20;
+            constexpr float kMaxNormalUnitsPerSec = 150.0f;
+
+            if (g_speedTracker.count >= 256u) {
+                uint32_t tail = (g_speedTracker.head + 256u - g_speedTracker.count) & 255u;
+                g_speedTracker.totalDt -= g_speedTracker.ring[tail].dt;
+                g_speedTracker.totalDist -= g_speedTracker.ring[tail].dist;
+                --g_speedTracker.count;
+            }
+            g_speedTracker.ring[g_speedTracker.head] = {static_cast<double>(dt), stepDist};
+            g_speedTracker.head = (g_speedTracker.head + 1u) & 255u;
+            ++g_speedTracker.count;
+            g_speedTracker.totalDt += static_cast<double>(dt);
+            g_speedTracker.totalDist += stepDist;
+
+            while (g_speedTracker.count > 1u) {
+                uint32_t tail = (g_speedTracker.head + 256u - g_speedTracker.count) & 255u;
+                if (g_speedTracker.totalDt - g_speedTracker.ring[tail].dt < kWindowSec) break;
+                g_speedTracker.totalDt -= g_speedTracker.ring[tail].dt;
+                g_speedTracker.totalDist -= g_speedTracker.ring[tail].dist;
+                --g_speedTracker.count;
+            }
+            if (g_speedTracker.totalDt < 0.0) g_speedTracker.totalDt = 0.0;
+            if (g_speedTracker.totalDist < 0.0f) g_speedTracker.totalDist = 0.0f;
+
+            double denom = (std::max)(g_speedTracker.totalDt, kWindowSec);
+            float targetSpeed = (g_speedTracker.totalDist / static_cast<float>(denom)) * (100.0f / kMaxNormalUnitsPerSec);
+            float alpha = 1.0f - std::exp(-dt / 0.05f);
+            g_speedTracker.displaySpeed += (targetSpeed - g_speedTracker.displaySpeed) * alpha;
+            if (g_speedTracker.displaySpeed < 0.25f && targetSpeed < 0.25f) {
+                g_speedTracker.displaySpeed = 0.0f;
+            }
+        }
+    }
+
+    int32_t rollsUsed = *reinterpret_cast<const int32_t*>(cube + 0x160);
+    float targetRollsLeft = static_cast<float>(std::clamp<int32_t>(22 - rollsUsed, 0, 22));
+    if (!g_speedTracker.rollsInit || targetRollsLeft > g_speedTracker.smoothRollsLeft) {
+        g_speedTracker.smoothRollsLeft = targetRollsLeft;
+        g_speedTracker.rollsInit = true;
+    } else if (dt > 0.0f) {
+        float rAlpha = 1.0f - std::exp(-dt / 0.06f);
+        g_speedTracker.smoothRollsLeft += (targetRollsLeft - g_speedTracker.smoothRollsLeft) * rAlpha;
+        if (std::fabs(targetRollsLeft - g_speedTracker.smoothRollsLeft) < 0.01f) {
+            g_speedTracker.smoothRollsLeft = targetRollsLeft;
+        }
+    }
+}
+
+static void DrawSmoothRainbowSpriteAtFrac(
+    uint8_t** sprites, uint32_t ucnt, double frameF, int w, int h, int x, int y, int alpha
+) {
+    if (sprites == nullptr || ucnt == 0u || w <= 0 || h <= 0 || alpha <= 0) return;
+    int a = std::clamp(alpha, 0, 255);
+    double fl = std::floor(frameF);
+    double tD = frameF - fl;
+    float t = std::clamp(static_cast<float>(tD), 0.0f, 1.0f);
+
+    int64_t baseIdx = static_cast<int64_t>(fl);
+    uint32_t cnt32 = ucnt;
+    uint32_t idx0 = static_cast<uint32_t>((baseIdx % static_cast<int64_t>(cnt32) + static_cast<int64_t>(cnt32)) % static_cast<int64_t>(cnt32));
+    uint32_t idx1 = (idx0 + 1u) % cnt32;
+
+    using DrawSpriteAlphaFn = void(__thiscall*)(void*, int, int, int, int, int, int, int);
+    auto drawSpriteAlpha = reinterpret_cast<DrawSpriteAlphaFn>(0x4a7e30);
+
+    float bigA = static_cast<float>(a) / 255.0f;
+    float a2f = t * bigA;
+    int a2 = std::clamp(static_cast<int>(std::lrint(a2f * 255.0f)), 0, 255);
+    if (a2 <= 0) {
+        drawSpriteAlpha(sprites[idx0], 0, 0, w, h, x, y, a);
+        return;
+    }
+    if (t >= 0.999f) {
+        drawSpriteAlpha(sprites[idx1], 0, 0, w, h, x, y, a);
+        return;
+    }
+    float denom = 1.0f - a2f;
+    float a1f = (denom > 1e-4f) ? ((1.0f - t) * bigA / denom) : 1.0f;
+    int a1 = std::clamp(static_cast<int>(std::lrint(a1f * 255.0f)), 0, 255);
+    if (a1 > 0) {
+        drawSpriteAlpha(sprites[idx0], 0, 0, w, h, x, y, a1);
+    }
+    drawSpriteAlpha(sprites[idx1], 0, 0, w, h, x, y, a2);
+}
+
+static inline uint32_t ScaleRgb(uint32_t rgb, float factor) {
+    int r = std::clamp(static_cast<int>(std::lround(static_cast<float>((rgb >> 16) & 0xffu) * factor)), 0, 255);
+    int g = std::clamp(static_cast<int>(std::lround(static_cast<float>((rgb >> 8) & 0xffu) * factor)), 0, 255);
+    int b = std::clamp(static_cast<int>(std::lround(static_cast<float>(rgb & 0xffu) * factor)), 0, 255);
+    return (static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(g) << 8) | static_cast<uint32_t>(b);
+}
+
+static void FormatSpeedIntWstr(int32_t val, wchar_t* wbuf, size_t cap, EdgeWString* out) {
+    if (val < 0) val = 0;
+    int n = std::swprintf(wbuf, cap, L"%d", val);
+    if (n < 0) {
+        wbuf[0] = L'\0';
+        n = 0;
+    }
+    std::memset(out, 0, sizeof(*out));
+    out->ptr = wbuf;
+    out->size = static_cast<uint32_t>(n);
+    out->cap = static_cast<uint32_t>(cap - 1);
+}
 
 struct MinimapHudBox {
     bool  active;
@@ -1758,6 +1986,42 @@ static void AvoidMinimapOverlap(
     *ioY = y + (targetY - y) * ease;
 }
 
+static void PlaceCornerHudBox(
+    HudCornerStack* stack, const MinimapHudBox& mm, uint8_t pos,
+    float scaledW, float scaledH, int32_t virtW, int32_t virtH,
+    float* outX, float* outY
+) {
+    constexpr float kMargin = 0.0f;
+    uint8_t p = (pos <= 3u) ? pos : 0u;
+    float ox = (p == 1u || p == 3u) ? (static_cast<float>(virtW) - kMargin - scaledW) : kMargin;
+    float oy = (p == 2u || p == 3u) ? (static_cast<float>(virtH) - kMargin - scaledH) : kMargin;
+    if (stack != nullptr && stack->hasAny[p]) {
+        ox = (p == 1u || p == 3u) ? (stack->rightX[p] - scaledW) : stack->leftX[p];
+        oy = (p == 0u || p == 1u) ? (stack->bottomY[p] + 4.0f) : (stack->topY[p] - 4.0f - scaledH);
+    }
+    AvoidMinimapOverlap(mm, p, scaledW, scaledH, virtW, virtH, &ox, &oy);
+    float maxX = (std::max)(0.0f, static_cast<float>(virtW) - scaledW);
+    float maxY = (std::max)(0.0f, static_cast<float>(virtH) - scaledH);
+    ox = std::clamp(ox, 0.0f, maxX);
+    oy = std::clamp(oy, 0.0f, maxY);
+    *outX = ox;
+    *outY = oy;
+    if (stack != nullptr) {
+        if (!stack->hasAny[p]) {
+            stack->hasAny[p] = true;
+            stack->leftX[p] = ox;
+            stack->rightX[p] = ox + scaledW;
+            stack->topY[p] = oy;
+            stack->bottomY[p] = oy + scaledH;
+        } else {
+            stack->leftX[p] = (std::min)(stack->leftX[p], ox);
+            stack->rightX[p] = (std::max)(stack->rightX[p], ox + scaledW);
+            stack->topY[p] = (std::min)(stack->topY[p], oy);
+            stack->bottomY[p] = (std::max)(stack->bottomY[p], oy + scaledH);
+        }
+    }
+}
+
 static void DrawHudPanelBgAndBorder(
     int panelW, int panelH, int32_t opacityPct, uint8_t fgAlpha,
     bool drawTop, bool drawBottom, bool drawLeft, bool drawRight
@@ -1852,11 +2116,8 @@ static void ComputeMenuPreviewBesidePos(
 }
 
 static void __cdecl RenderHudTimerOverlay(
-    uint8_t* renderer, uint8_t* ws, uint32_t expectedState, HudCornerRect* outRect = nullptr
+    uint8_t* renderer, uint8_t* ws, uint32_t expectedState, HudCornerStack* stack = nullptr
 ) {
-    if (outRect != nullptr) {
-        *outRect = {false, 0, 0.0f, 0.0f, 0.0f, 0.0f};
-    }
     uint8_t mode = g_timerMode;
     float size = g_timerSize;
     uint8_t pos = g_timerPos;
@@ -1926,30 +2187,16 @@ static void __cdecl RenderHudTimerOverlay(
     int panelH = curY;
 
     float s = std::clamp(size, 0.25f, 2.0f);
-    constexpr float kMargin = 0.0f;
     float scaledW = static_cast<float>(kPanelW) * s;
     float scaledH = static_cast<float>(panelH) * s;
 
-    float ox = kMargin;
-    float oy = kMargin;
+    float ox = 0.0f;
+    float oy = 0.0f;
     if (dockBesideMenu) {
         ComputeMenuPreviewBesidePos(expectedState, scaledW, scaledH, virtW, virtH, &ox, &oy);
     } else {
-        if (pos == 1 || pos == 3) {
-            ox = static_cast<float>(virtW) - kMargin - scaledW;
-        }
-        if (pos == 2 || pos == 3) {
-            oy = static_cast<float>(virtH) - kMargin - scaledH;
-        }
         MinimapHudBox mm = ComputeMinimapHudBox(sm, ws, virtW, virtH, expectedState);
-        AvoidMinimapOverlap(mm, pos, scaledW, scaledH, virtW, virtH, &ox, &oy);
-    }
-    float maxX = (std::max)(0.0f, static_cast<float>(virtW) - scaledW);
-    float maxY = (std::max)(0.0f, static_cast<float>(virtH) - scaledH);
-    ox = std::clamp(ox, 0.0f, maxX);
-    oy = std::clamp(oy, 0.0f, maxY);
-    if (outRect != nullptr && !dockBesideMenu) {
-        *outRect = {true, pos, ox, ox + scaledW, oy, oy + scaledH};
+        PlaceCornerHudBox(stack, mm, pos, scaledW, scaledH, virtW, virtH, &ox, &oy);
     }
 
     bool drawLeft   = (ox > 0.5f);
@@ -2039,7 +2286,7 @@ static void __cdecl RenderHudTimerOverlay(
 }
 
 static void __cdecl RenderHudPrismCounterOverlay(
-    uint8_t* renderer, uint8_t* ws, uint32_t expectedState, const HudCornerRect* timerRect
+    uint8_t* renderer, uint8_t* ws, uint32_t expectedState, HudCornerStack* stack
 ) {
     uint8_t type = g_prismCounterType;
     float size = g_prismCounterSize;
@@ -2107,27 +2354,16 @@ static void __cdecl RenderHudPrismCounterOverlay(
     }
 
     float s = std::clamp(size, 0.25f, 2.0f);
-    constexpr float kMargin = 0.0f;
     float scaledW = static_cast<float>(panelW) * s;
     float scaledH = static_cast<float>(panelH) * s;
-    float ox = kMargin;
-    float oy = kMargin;
+    float ox = 0.0f;
+    float oy = 0.0f;
     if (dockBesideMenu) {
         ComputeMenuPreviewBesidePos(expectedState, scaledW, scaledH, virtW, virtH, &ox, &oy);
     } else {
-        ox = (pos == 1 || pos == 3) ? (static_cast<float>(virtW) - kMargin - scaledW) : kMargin;
-        oy = (pos == 2 || pos == 3) ? (static_cast<float>(virtH) - kMargin - scaledH) : kMargin;
-        if (timerRect != nullptr && timerRect->drawn && timerRect->pos == pos) {
-            ox = (pos == 1 || pos == 3) ? (timerRect->rightX - scaledW) : timerRect->leftX;
-            oy = (pos == 0 || pos == 1) ? (timerRect->bottomY + 4.0f) : (timerRect->topY - 4.0f - scaledH);
-        }
         MinimapHudBox mm = ComputeMinimapHudBox(sm, ws, virtW, virtH, expectedState);
-        AvoidMinimapOverlap(mm, pos, scaledW, scaledH, virtW, virtH, &ox, &oy);
+        PlaceCornerHudBox(stack, mm, pos, scaledW, scaledH, virtW, virtH, &ox, &oy);
     }
-    float maxX = (std::max)(0.0f, static_cast<float>(virtW) - scaledW);
-    float maxY = (std::max)(0.0f, static_cast<float>(virtH) - scaledH);
-    ox = std::clamp(ox, 0.0f, maxX);
-    oy = std::clamp(oy, 0.0f, maxY);
 
     bool drawLeft   = (ox > 0.5f);
     bool drawRight  = (ox + scaledW < static_cast<float>(virtW) - 0.5f);
@@ -2197,10 +2433,229 @@ static void __cdecl RenderHudPrismCounterOverlay(
     stackMode = savedMode;
 }
 
+static void __cdecl RenderHudSpeedometerOverlay(
+    uint8_t* renderer, uint8_t* ws, uint32_t expectedState, HudCornerStack* stack
+) {
+    uint8_t enable = g_speedometerEnable;
+    float size = g_speedometerSize;
+    uint8_t pos = g_speedometerPos;
+    bool forceSample = false;
+    bool dockBesideMenu = false;
+    bool hasMenuPreview = GetHudSpeedometerMenuPreview(expectedState, &enable, &size, &pos, &forceSample, &dockBesideMenu);
+    if ((expectedState == 9u || expectedState == 0x12u) && !hasMenuPreview) return;
+    if (enable == 0 || renderer == nullptr) return;
+
+    uint8_t* sm = GetScreenMgr();
+    if (sm == nullptr) return;
+
+    uint32_t state = *reinterpret_cast<const uint32_t*>(sm + 0x50);
+    if (state != expectedState) return;
+
+    int32_t virtW = *reinterpret_cast<const int32_t*>(sm + 0x24);
+    int32_t virtH = *reinterpret_cast<const int32_t*>(sm + 0x28);
+    if (virtW <= 0 || virtH <= 0) return;
+
+    uint8_t* cube = nullptr;
+    int32_t curActiveTicks = 0;
+    int32_t curRollsUsed = 22;
+    if (!forceSample) {
+        if (ws == nullptr || ws[0x2120] == 0) {
+            if (!(expectedState == 0x12u && hasMenuPreview)) return;
+        } else {
+            cube = *reinterpret_cast<uint8_t* const*>(ws + 0x34);
+            if (cube != nullptr) {
+                curActiveTicks = *reinterpret_cast<const int32_t*>(cube + 0x168);
+                curRollsUsed = *reinterpret_cast<const int32_t*>(cube + 0x160);
+            }
+        }
+    }
+
+    double animSec = GetHudTimerClockSec();
+    int32_t displaySpeed = 0;
+    double effActiveTicks = 0.0;
+    double effRollsLeft = 0.0;
+
+    bool useSampleAnim = forceSample || (expectedState == 0x12u && dockBesideMenu && curActiveTicks <= 0 && curRollsUsed >= 22);
+    if (useSampleAnim) {
+        double phase = std::fmod(animSec, 6.0);
+        displaySpeed = 100;
+        if (phase < 3.5) {
+            effActiveTicks = 100.0 * (1.0 - phase / 3.5);
+            effRollsLeft = 22.0;
+        } else {
+            effActiveTicks = 0.0;
+            effRollsLeft = 22.0 * (1.0 - (phase - 3.5) / 2.5);
+        }
+    } else {
+        if (cube == nullptr) return;
+        displaySpeed = static_cast<int32_t>(std::lround(g_speedTracker.displaySpeed));
+        if (displaySpeed < 0) displaySpeed = 0;
+
+        double effActive = static_cast<double>((std::max)(curActiveTicks, 0));
+        if (state == 0x11u && g_extWsPtr == ws && curActiveTicks >= 0 &&
+            g_wsPrevBuffTicks > curActiveTicks && (g_wsPrevBuffTicks - curActiveTicks) <= 2) {
+            effActive = static_cast<double>(g_wsPrevBuffTicks)
+                      + static_cast<double>(curActiveTicks - g_wsPrevBuffTicks) * static_cast<double>(g_uiAlpha);
+        }
+        effActiveTicks = std::clamp(effActive, 0.0, 100.0);
+
+        if (g_speedTracker.rollsInit) {
+            effRollsLeft = std::clamp(static_cast<double>(g_speedTracker.smoothRollsLeft), 0.0, 22.0);
+        } else {
+            effRollsLeft = static_cast<double>(std::clamp<int32_t>(22 - curRollsUsed, 0, 22));
+        }
+    }
+
+    uint8_t fgAlpha = ((expectedState == 9u || expectedState == 0x12u) && !dockBesideMenu) ? 140u : 255u;
+
+    constexpr int kPanelW = 200;
+    constexpr int kPadX   = 10;
+    constexpr int kPadY   = 8;
+    constexpr int kRowH   = 18;
+    constexpr int kRowGap = 6;
+    constexpr int kBarH   = 6;
+    constexpr int kBarW   = kPanelW - 2 * kPadX;
+    constexpr int kRowY   = kPadY;
+    constexpr int kBarY   = kPadY + kRowH + kRowGap;
+    constexpr int kPanelH = kBarY + kBarH + kPadY;
+
+    float s = std::clamp(size, 0.25f, 2.0f);
+    float scaledW = static_cast<float>(kPanelW) * s;
+    float scaledH = static_cast<float>(kPanelH) * s;
+
+    float ox = 0.0f;
+    float oy = 0.0f;
+    if (dockBesideMenu) {
+        ComputeMenuPreviewBesidePos(expectedState, scaledW, scaledH, virtW, virtH, &ox, &oy);
+    } else {
+        MinimapHudBox mm = ComputeMinimapHudBox(sm, ws, virtW, virtH, expectedState);
+        PlaceCornerHudBox(stack, mm, pos, scaledW, scaledH, virtW, virtH, &ox, &oy);
+    }
+
+    bool drawLeft   = (ox > 0.5f);
+    bool drawRight  = (ox + scaledW < static_cast<float>(virtW) - 0.5f);
+    bool drawTop    = (oy > 0.5f);
+    bool drawBottom = (oy + scaledH < static_cast<float>(virtH) - 0.5f);
+
+    uint8_t* mstack = GetMatrixStack();
+    if (mstack == nullptr) return;
+    uint32_t& stackMode = *reinterpret_cast<uint32_t*>(mstack + 0x4);
+    uint32_t savedMode = stackMode;
+    stackMode = 1;
+
+    float mat[16] = {
+        s,    0.0f, 0.0f, 0.0f,
+        0.0f, s,    0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        ox,   -oy,  0.0f, 1.0f
+    };
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f750)(mstack);
+    reinterpret_cast<void(__thiscall*)(void*, const float*)>(0x41f520)(mstack, mat);
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f660)(mstack);
+
+    Game_SetBlend(renderer, 0);
+    uint32_t* pTextCol = reinterpret_cast<uint32_t*>(0x5f4268);
+    uint32_t savedTextCol = *pTextCol;
+
+    DrawHudPanelBgAndBorder(kPanelW, kPanelH, g_speedometerBgOpacity, fgAlpha, drawTop, drawBottom, drawLeft, drawRight);
+    uint8_t trkAlpha = static_cast<uint8_t>((42u * fgAlpha) / 255u);
+    uint32_t trackRgba = MakeRgba(255, 255, 255, trkAlpha);
+    uint8_t shAlpha = CalcHudShadowAlpha(g_speedometerShadowOpacity, fgAlpha);
+    uint32_t shadowRgba = MakeRgba(0, 0, 0, shAlpha);
+
+    bool hasActiveBuff = (effActiveTicks > 0.05);
+    bool hasRollBuff   = (!hasActiveBuff && effRollsLeft > 0.05);
+
+    uint32_t row1Rgba = MakeRgba(255, 255, 255, fgAlpha);
+    if (hasActiveBuff) {
+        row1Rgba = RgbToRgba(CalcSmoothRainbow(static_cast<float>(animSec * 36.0), 1.0f), fgAlpha);
+    } else if (hasRollBuff) {
+        row1Rgba = RgbToRgba(CalcSmoothRainbow(static_cast<float>(animSec * 10.0), 1.0f), fgAlpha);
+    }
+
+    wchar_t spdBuf[32];
+    EdgeWString spdWs;
+    FormatSpeedIntWstr(displaySpeed, spdBuf, 32, &spdWs);
+    if (shAlpha > 0) {
+        *pTextCol = shadowRgba;
+        Game_DrawText(&spdWs, kPadX + 2, kRowY + 2, 0x2000, 0x2000, 1, 0, 0x14);
+    }
+    *pTextCol = row1Rgba;
+    Game_DrawText(&spdWs, kPadX, kRowY, 0x2000, 0x2000, 1, 0, 0x14);
+
+    if (hasActiveBuff || hasRollBuff) {
+        EdgeWString arrowWs;
+        if (hasActiveBuff) {
+            arrowWs.set_literal(L">>", 2u);
+        } else {
+            arrowWs.set_literal(L">", 1u);
+        }
+        if (shAlpha > 0) {
+            *pTextCol = shadowRgba;
+            Game_DrawText(&arrowWs, kPanelW - kPadX + 2, kRowY + 2, 0x2000, 0x2000, 1, 0, 0x18);
+        }
+        *pTextCol = row1Rgba;
+        Game_DrawText(&arrowWs, kPanelW - kPadX, kRowY, 0x2000, 0x2000, 1, 0, 0x18);
+    }
+
+    if (shAlpha > 0) {
+        Game_DrawQuad(kPadX + 2, kBarY + 2, kBarW, kBarH, &shadowRgba);
+    }
+    Game_DrawQuad(kPadX, kBarY, kBarW, kBarH, &trackRgba);
+
+    int rollFillW = std::clamp(
+        static_cast<int>(std::lround((effRollsLeft / 22.0) * static_cast<double>(kBarW))), 0, kBarW
+    );
+    if (rollFillW > 0) {
+        uint32_t rollRgb = CalcSmoothRainbow(static_cast<float>(animSec * 10.0), 1.0f);
+        if (hasActiveBuff) {
+            rollRgb = ScaleRgb(rollRgb, 0.65f);
+        }
+        uint32_t rollRgba = RgbToRgba(rollRgb, fgAlpha);
+        Game_DrawQuad(kPadX, kBarY, rollFillW, kBarH, &rollRgba);
+    }
+
+    int activeFillW = std::clamp(
+        static_cast<int>(std::lround((effActiveTicks / 100.0) * static_cast<double>(kBarW))), 0, kBarW
+    );
+    if (activeFillW > 0) {
+        bool drewSprite = false;
+        uint8_t* hGrp = *reinterpret_cast<uint8_t* const*>(sm + 0x58);
+        if (hGrp != nullptr) {
+            int16_t cnt = *reinterpret_cast<const int16_t*>(hGrp + 8);
+            uint8_t** hSprites = *reinterpret_cast<uint8_t** const*>(hGrp + 0x20);
+            if (cnt > 0 && hSprites != nullptr) {
+                DrawSmoothRainbowSpriteAtFrac(
+                    hSprites, static_cast<uint32_t>(cnt), animSec * 30.0,
+                    activeFillW, kBarH, kPadX, kBarY, fgAlpha
+                );
+                Game_SetBlend(renderer, 0);
+                drewSprite = true;
+            }
+        }
+        if (!drewSprite) {
+            uint32_t actRgba = RgbToRgba(CalcSmoothRainbow(static_cast<float>(animSec * 36.0), 1.0f), fgAlpha);
+            Game_DrawQuad(kPadX, kBarY, activeFillW, kBarH, &actRgba);
+        }
+        if (activeFillW > 1 && activeFillW < kBarW) {
+            uint32_t capRgba = MakeRgba(255, 255, 255, fgAlpha);
+            Game_DrawQuad(kPadX + activeFillW - 1, kBarY, 1, kBarH, &capRgba);
+        }
+    }
+
+    *pTextCol = savedTextCol;
+    Game_SetBlend(renderer, 0);
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f610)(mstack);
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f660)(mstack);
+    stackMode = savedMode;
+}
+
 static void __cdecl RenderHudOverlaysWorld_Impl(uint8_t* renderer, uint8_t* ws) {
-    HudCornerRect timerRect{};
-    RenderHudTimerOverlay(renderer, ws, 0x11u, &timerRect);
-    RenderHudPrismCounterOverlay(renderer, ws, 0x11u, &timerRect);
+    UpdateSpeedometerTracker(renderer, ws);
+    HudCornerStack stack{};
+    RenderHudTimerOverlay(renderer, ws, 0x11u, &stack);
+    RenderHudPrismCounterOverlay(renderer, ws, 0x11u, &stack);
+    RenderHudSpeedometerOverlay(renderer, ws, 0x11u, &stack);
 }
 
 static void __declspec(naked) hk_worldEnd2DHudTimer() {
@@ -2221,13 +2676,15 @@ static void __declspec(naked) hk_worldEnd2DHudTimer() {
 static void __cdecl RenderHudTimerPause_Impl(uint8_t* renderer) {
     uint8_t* ws = GetWorldScreen();
     RenderMinimapMenuPreview(renderer, ws, 0x12u);
-    HudCornerRect tr12{};
-    RenderHudTimerOverlay(renderer, ws, 0x12u, &tr12);
-    RenderHudPrismCounterOverlay(renderer, ws, 0x12u, &tr12);
+    HudCornerStack stack12{};
+    RenderHudTimerOverlay(renderer, ws, 0x12u, &stack12);
+    RenderHudPrismCounterOverlay(renderer, ws, 0x12u, &stack12);
+    RenderHudSpeedometerOverlay(renderer, ws, 0x12u, &stack12);
     RenderMinimapMenuPreview(renderer, ws, 9u);
-    HudCornerRect tr9{};
-    RenderHudTimerOverlay(renderer, ws, 9u, &tr9);
-    RenderHudPrismCounterOverlay(renderer, ws, 9u, &tr9);
+    HudCornerStack stack9{};
+    RenderHudTimerOverlay(renderer, ws, 9u, &stack9);
+    RenderHudPrismCounterOverlay(renderer, ws, 9u, &stack9);
+    RenderHudSpeedometerOverlay(renderer, ws, 9u, &stack9);
 }
 
 static void __declspec(naked) hk_menuEnd2DHudTimer() {
@@ -2247,6 +2704,11 @@ static void __declspec(naked) hk_menuEnd2DHudTimer() {
 } // namespace
 
 namespace edgemod {
+
+void __cdecl ResetSpeedometerState() {
+    g_speedTracker.ResetAll();
+    g_wsPrevBuffTicks = 0;
+}
 
 void __cdecl RenderPauseHeaderTimer(int x, int y, int width) {
     uint8_t* ws = GetWorldScreen();

@@ -40,6 +40,11 @@ int32_t g_timerBgOpacity   = 70; // 0..100, step 10
 int32_t g_prismBgOpacity   = 70; // 0..100, step 10
 int32_t g_timerShadowOpacity = 0;  // 0..100, step 10
 int32_t g_prismShadowOpacity = 0;  // 0..100, step 10
+uint8_t g_speedometerEnable  = 0;  // 0=off, 1=on
+float   g_speedometerSize    = 1.0f; // default: 1x
+int32_t g_speedometerBgOpacity     = 70; // 0..100, step 10
+int32_t g_speedometerShadowOpacity = 0;  // 0..100, step 10
+uint8_t g_speedometerPos     = 3;  // 0=TL, 1=TR, 2=BL, 3=BR (default: BR)
 
 uint8_t g_minimapEnable         = 1;
 uint8_t g_minimapEnableOverride = 0;
@@ -383,6 +388,7 @@ EDGE_STATIC_WSTR(g_wstrMinimapEnable,     "enable");
 EDGE_STATIC_WSTR(g_wstrMinimapWidth,      "width");
 EDGE_STATIC_WSTR(g_wstrMinimapHeight,     "height");
 EDGE_STATIC_WSTR(g_wstrMinimapRange,      "range");
+EDGE_STATIC_WSTR(g_wstrSpeedometer,       "speedometer");
 
 static int NearestMinimapPresetIdx(float v) {
     int best = 2; // 1.0x
@@ -434,6 +440,7 @@ enum OptCategory : int {
     OPT_CAT_TIMER,
     OPT_CAT_PRISM_COUNTER,
     OPT_CAT_MINIMAP,
+    OPT_CAT_SPEEDOMETER,
     OPT_CAT_GAMEPLAY
 };
 
@@ -446,6 +453,7 @@ enum OptItem : int {
     OPT_CAT_BTN_TIMER,
     OPT_CAT_BTN_PRISM_COUNTER,
     OPT_CAT_BTN_MINIMAP,
+    OPT_CAT_BTN_SPEEDOMETER,
     OPT_CAT_BTN_GAMEPLAY,
     OPT_FULLSCREEN,
     OPT_PRISM_VFX,
@@ -484,6 +492,11 @@ enum OptItem : int {
     OPT_MINIMAP_RANGE,
     OPT_MINIMAP_BG_OPACITY,
     OPT_MINIMAP_POS,
+    OPT_SPEEDOMETER_ENABLE,
+    OPT_SPEEDOMETER_SIZE,
+    OPT_SPEEDOMETER_BG_OPACITY,
+    OPT_SPEEDOMETER_SHADOW_OPACITY,
+    OPT_SPEEDOMETER_POS,
     OPT_RESET_SCORE,
     OPT_BACK
 };
@@ -941,9 +954,14 @@ static void SaveModSettings() {
     uint8_t minimapPosOverride = (g_minimapPosOverride != 0) ? 1u : 0u;
     int32_t minimapAlignXIni = (g_lastIniMinimapAlignX >= 0 && g_lastIniMinimapAlignX <= 2) ? g_lastIniMinimapAlignX : -1;
     int32_t minimapAlignYIni = (g_lastIniMinimapAlignY >= 0 && g_lastIniMinimapAlignY <= 2) ? g_lastIniMinimapAlignY : -1;
+    uint8_t speedometerEnable = (g_speedometerEnable != 0) ? 1u : 0u;
+    float   speedometerSize = std::isfinite(g_speedometerSize) ? g_timerSizePresets[NearestTimerSizeIdx(g_speedometerSize)] : 1.0f;
+    int32_t speedometerBgOpacity = std::clamp(g_speedometerBgOpacity, 0, 100);
+    int32_t speedometerShadowOpacity = std::clamp(g_speedometerShadowOpacity, 0, 100);
+    uint8_t speedometerPos = (g_speedometerPos <= 3u) ? g_speedometerPos : 3u;
 
     std::string out;
-    out.reserve(768);
+    out.reserve(1536);
     out += "; EDGE PC Mod settings (auto-managed)\r\n";
     out += "[edgemod]\r\n";
     auto writeInt = [&](const char* k, int32_t v) {
@@ -1011,6 +1029,11 @@ static void SaveModSettings() {
     writeInt("minimap_pos_override", minimapPosOverride);
     writeInt("minimap_align_x_ini", minimapAlignXIni);
     writeInt("minimap_align_y_ini", minimapAlignYIni);
+    writeInt("speedometer_enable", speedometerEnable);
+    writeFloat("speedometer_size", speedometerSize);
+    writeInt("speedometer_bg_opacity", speedometerBgOpacity);
+    writeInt("speedometer_shadow_opacity", speedometerShadowOpacity);
+    writeInt("speedometer_pos", speedometerPos);
 
     wchar_t tmpPath[MAX_PATH + 16]{};
     if (std::swprintf(tmpPath, MAX_PATH + 16, L"%ls.tmp", iniPath) <= 0) return;
@@ -1125,7 +1148,7 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
     bool inEdgeModSec = false;
     int32_t schemaVer = 0;
     uint64_t seenMask = 0;
-    constexpr uint64_t kAllModKeysMask = (1ull << 49) - 1ull;
+    constexpr uint64_t kAllModKeysMask = (1ull << 54) - 1ull;
 
     while (pos < data.size()) {
         size_t nl = data.find('\n', pos);
@@ -1426,6 +1449,34 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
                 g_lastIniMinimapAlignY = iv;
                 seenMask |= (1ull << 48);
             }
+        } else if (AsciiEqIc(kP, kE, "speedometer_enable")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_speedometerEnable = (iv != 0) ? 1u : 0u;
+                seenMask |= (1ull << 49);
+            }
+        } else if (AsciiEqIc(kP, kE, "speedometer_size")) {
+            if (ParseAsciiDouble(vP, vE, &dv)) {
+                float fv = static_cast<float>(dv);
+                if (fv < 0.25f) fv = 0.25f;
+                if (fv > 2.0f) fv = 2.0f;
+                g_speedometerSize = g_timerSizePresets[NearestTimerSizeIdx(fv)];
+                seenMask |= (1ull << 50);
+            }
+        } else if (AsciiEqIc(kP, kE, "speedometer_bg_opacity")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 100) {
+                g_speedometerBgOpacity = std::clamp(((iv + 5) / 10) * 10, 0, 100);
+                seenMask |= (1ull << 51);
+            }
+        } else if (AsciiEqIc(kP, kE, "speedometer_shadow_opacity")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 100) {
+                g_speedometerShadowOpacity = std::clamp(((iv + 5) / 10) * 10, 0, 100);
+                seenMask |= (1ull << 52);
+            }
+        } else if (AsciiEqIc(kP, kE, "speedometer_pos")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 3) {
+                g_speedometerPos = static_cast<uint8_t>(iv);
+                seenMask |= (1ull << 53);
+            }
         }
     }
 
@@ -1620,6 +1671,11 @@ static void LoadModSettingsOnStartup_Impl(uint8_t* userSettings) {
     g_prismBgOpacity     = 70;
     g_timerShadowOpacity = 0;
     g_prismShadowOpacity = 0;
+    g_speedometerEnable        = 0;
+    g_speedometerSize          = 1.0f;
+    g_speedometerBgOpacity     = 70;
+    g_speedometerShadowOpacity = 0;
+    g_speedometerPos           = 3;
     g_minimapEnable         = 1;
     g_minimapEnableOverride = 0;
     g_minimapWidth          = 1.0f;
@@ -2115,6 +2171,7 @@ static int GetOptTargetCategory(OptItem item) {
     case OPT_CAT_BTN_TIMER:         return OPT_CAT_TIMER;
     case OPT_CAT_BTN_PRISM_COUNTER: return OPT_CAT_PRISM_COUNTER;
     case OPT_CAT_BTN_MINIMAP:       return OPT_CAT_MINIMAP;
+    case OPT_CAT_BTN_SPEEDOMETER:   return OPT_CAT_SPEEDOMETER;
     case OPT_CAT_BTN_GAMEPLAY:      return OPT_CAT_GAMEPLAY;
     default:                        return -1;
     }
@@ -2129,6 +2186,7 @@ static int GetOptParentCategory(int cat) {
     case OPT_CAT_TIMER:
     case OPT_CAT_PRISM_COUNTER:
     case OPT_CAT_MINIMAP:
+    case OPT_CAT_SPEEDOMETER:
         return OPT_CAT_UI;
     case OPT_CAT_DISPLAY:
     case OPT_CAT_GRAPHICS:
@@ -2144,7 +2202,7 @@ static int GetOptParentCategory(int cat) {
 
 static int GetOptCategoryDepth(int cat) {
     if (cat == OPT_CAT_ROOT)  return 0;
-    if (cat == OPT_CAT_TIMER || cat == OPT_CAT_PRISM_COUNTER || cat == OPT_CAT_MINIMAP) return 2;
+    if (cat == OPT_CAT_TIMER || cat == OPT_CAT_PRISM_COUNTER || cat == OPT_CAT_MINIMAP || cat == OPT_CAT_SPEEDOMETER) return 2;
     return 1;
 }
 
@@ -2158,6 +2216,7 @@ static int GetOptParentRowForCategory(int cat) {
     case OPT_CAT_TIMER:         return 2; // row 2 in OPT_CAT_UI (below time format & edge timer)
     case OPT_CAT_PRISM_COUNTER: return 3; // row 3 in OPT_CAT_UI (below timer)
     case OPT_CAT_MINIMAP:       return 4; // row 4 in OPT_CAT_UI (below prism counter)
+    case OPT_CAT_SPEEDOMETER:   return 5; // row 5 in OPT_CAT_UI (below minimap)
     default:                    return 0;
     }
 }
@@ -2194,8 +2253,9 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         outItems[2] = OPT_CAT_BTN_TIMER;
         outItems[3] = OPT_CAT_BTN_PRISM_COUNTER;
         outItems[4] = OPT_CAT_BTN_MINIMAP;
-        outItems[5] = OPT_BACK;
-        return 6;
+        outItems[5] = OPT_CAT_BTN_SPEEDOMETER;
+        outItems[6] = OPT_BACK;
+        return 7;
     case OPT_CAT_TIMER:
         outItems[0] = OPT_TIMER;
         outItems[1] = OPT_TIMER_SIZE;
@@ -2221,6 +2281,14 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         outItems[5] = OPT_MINIMAP_POS;
         outItems[6] = OPT_BACK;
         return 7;
+    case OPT_CAT_SPEEDOMETER:
+        outItems[0] = OPT_SPEEDOMETER_ENABLE;
+        outItems[1] = OPT_SPEEDOMETER_SIZE;
+        outItems[2] = OPT_SPEEDOMETER_BG_OPACITY;
+        outItems[3] = OPT_SPEEDOMETER_SHADOW_OPACITY;
+        outItems[4] = OPT_SPEEDOMETER_POS;
+        outItems[5] = OPT_BACK;
+        return 6;
     case OPT_CAT_GAMEPLAY: {
         int n = 0;
         outItems[n++] = OPT_UP_KEY;
@@ -2293,6 +2361,11 @@ static bool IsOptItemAdjustable(OptItem item) {
     case OPT_MINIMAP_RANGE:
     case OPT_MINIMAP_BG_OPACITY:
     case OPT_MINIMAP_POS:
+    case OPT_SPEEDOMETER_ENABLE:
+    case OPT_SPEEDOMETER_SIZE:
+    case OPT_SPEEDOMETER_BG_OPACITY:
+    case OPT_SPEEDOMETER_SHADOW_OPACITY:
+    case OPT_SPEEDOMETER_POS:
         return true;
     default:
         return false;
@@ -2309,6 +2382,7 @@ static const EdgeWString* GetOptHeaderWstr(int cat, EdgeWString* tmp, bool* outF
     case OPT_CAT_TIMER:         return &g_wstrTimer;
     case OPT_CAT_PRISM_COUNTER: return &g_wstrPrismCounter;
     case OPT_CAT_MINIMAP:       return &g_wstrMinimap;
+    case OPT_CAT_SPEEDOMETER:   return &g_wstrSpeedometer;
     case OPT_CAT_GAMEPLAY:      return &g_wstrCatGameplay;
     case OPT_CAT_ROOT:
     default:
@@ -2328,6 +2402,7 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_CAT_BTN_TIMER:         return &g_wstrTimer;
     case OPT_CAT_BTN_PRISM_COUNTER: return &g_wstrPrismCounter;
     case OPT_CAT_BTN_MINIMAP:       return &g_wstrMinimap;
+    case OPT_CAT_BTN_SPEEDOMETER:   return &g_wstrSpeedometer;
     case OPT_CAT_BTN_GAMEPLAY:      return &g_wstrCatGameplay;
     case OPT_PRISM_VFX:        return &g_wstrPrismVfx;
     case OPT_CHROMA_AB:        return &g_wstrChromaAb;
@@ -2350,18 +2425,23 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_TIMER_SIZE:       return &g_wstrTimerSizeLbl;
     case OPT_TIMER_POS:        return &g_wstrTimerPosLbl;
     case OPT_PRISM_COUNTER_TYPE: return &g_wstrTimerType;
-    case OPT_PRISM_COUNTER_SIZE: return &g_wstrTimerSizeLbl;
+    case OPT_PRISM_COUNTER_SIZE:
+    case OPT_SPEEDOMETER_SIZE:   return &g_wstrTimerSizeLbl;
     case OPT_PRISM_COUNTER_POS:  return &g_wstrTimerPosLbl;
     case OPT_TIMER_BG_OPACITY:
     case OPT_PRISM_BG_OPACITY:
-    case OPT_MINIMAP_BG_OPACITY:   return &g_wstrBgOpacity;
+    case OPT_MINIMAP_BG_OPACITY:
+    case OPT_SPEEDOMETER_BG_OPACITY: return &g_wstrBgOpacity;
     case OPT_TIMER_SHADOW_OPACITY:
-    case OPT_PRISM_SHADOW_OPACITY: return &g_wstrShadowOpacity;
-    case OPT_MINIMAP_ENABLE:       return &g_wstrMinimapEnable;
+    case OPT_PRISM_SHADOW_OPACITY:
+    case OPT_SPEEDOMETER_SHADOW_OPACITY: return &g_wstrShadowOpacity;
+    case OPT_MINIMAP_ENABLE:
+    case OPT_SPEEDOMETER_ENABLE:   return &g_wstrMinimapEnable;
     case OPT_MINIMAP_WIDTH:        return &g_wstrMinimapWidth;
     case OPT_MINIMAP_HEIGHT:       return &g_wstrMinimapHeight;
     case OPT_MINIMAP_RANGE:        return &g_wstrMinimapRange;
-    case OPT_MINIMAP_POS:          return &g_wstrTimerPosLbl;
+    case OPT_MINIMAP_POS:
+    case OPT_SPEEDOMETER_POS:      return &g_wstrTimerPosLbl;
     case OPT_RESET_SCORE:      return &g_wstrResetScore;
     case OPT_FULLSCREEN:
         Game_GetLocalizedWString(tmp, 0x34);
@@ -2401,6 +2481,7 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_SKIP_INTRO:
     case OPT_TIME_FMT:
     case OPT_MINIMAP_ENABLE:
+    case OPT_SPEEDOMETER_ENABLE:
         return CTRL_TOGGLE;
     case OPT_AA:
     case OPT_CAM_DIST:
@@ -2413,6 +2494,7 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_PRISM_COUNTER_TYPE:
     case OPT_PRISM_COUNTER_POS:
     case OPT_MINIMAP_POS:
+    case OPT_SPEEDOMETER_POS:
         return CTRL_POPUP;
     case OPT_RESET_SCORE:
         return CTRL_CONFIRM_POPUP;
@@ -2422,10 +2504,13 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_MUSIC:
     case OPT_TIMER_SIZE:
     case OPT_PRISM_COUNTER_SIZE:
+    case OPT_SPEEDOMETER_SIZE:
     case OPT_TIMER_BG_OPACITY:
     case OPT_PRISM_BG_OPACITY:
+    case OPT_SPEEDOMETER_BG_OPACITY:
     case OPT_TIMER_SHADOW_OPACITY:
     case OPT_PRISM_SHADOW_OPACITY:
+    case OPT_SPEEDOMETER_SHADOW_OPACITY:
     case OPT_MINIMAP_WIDTH:
     case OPT_MINIMAP_HEIGHT:
     case OPT_MINIMAP_RANGE:
@@ -2520,6 +2605,7 @@ static int GetToggleState(OptItem item) {
     case OPT_SKIP_INTRO:  return g_skipIntro ? 1 : 0;
     case OPT_TIME_FMT:    return g_timeFmt ? 1 : 0;
     case OPT_MINIMAP_ENABLE: return GetMinimapDisplayEnabled() ? 1 : 0;
+    case OPT_SPEEDOMETER_ENABLE: return g_speedometerEnable ? 1 : 0;
     default:              return 0;
     }
 }
@@ -2539,6 +2625,7 @@ static int GetPopupChoiceCount(OptItem item) {
     case OPT_PRISM_COUNTER_TYPE: return 3;
     case OPT_PRISM_COUNTER_POS:  return 4;
     case OPT_MINIMAP_POS:        return 4;
+    case OPT_SPEEDOMETER_POS:    return 4;
     case OPT_RESET_SCORE:        return 2;
     default:                     return 0;
     }
@@ -2584,6 +2671,7 @@ static int GetPopupCurrentChoice(OptItem item) {
     case OPT_PRISM_COUNTER_TYPE: return std::clamp<int>(g_prismCounterType, 0, 2);
     case OPT_PRISM_COUNTER_POS:  return std::clamp<int>(g_prismCounterPos, 0, 3);
     case OPT_MINIMAP_POS:        return std::clamp<int>(GetMinimapDisplayPos(), 0, 3);
+    case OPT_SPEEDOMETER_POS:    return std::clamp<int>(g_speedometerPos, 0, 3);
     case OPT_RESET_SCORE:        return 0; // default highlight on "no"
     default:                     return 0;
     }
@@ -2611,6 +2699,7 @@ static int GetPopupDefaultChoice(OptItem item) {
     case OPT_PRISM_COUNTER_TYPE: return 2; // full
     case OPT_PRISM_COUNTER_POS:  return 1; // TR
     case OPT_MINIMAP_POS:        return 0; // TL
+    case OPT_SPEEDOMETER_POS:    return 3; // BR
     case OPT_RESET_SCORE:        return 0; // no
     default:                     return 0;
     }
@@ -2680,6 +2769,7 @@ static const EdgeWString* GetPopupChoiceWstr(OptItem item, int idx, EdgeWString*
     case OPT_TIMER_POS:
     case OPT_PRISM_COUNTER_POS:
     case OPT_MINIMAP_POS:
+    case OPT_SPEEDOMETER_POS:
         idx = std::clamp(idx, 0, 3);
         if (idx == 0) return &g_wstrTimerPosTL;
         if (idx == 1) return &g_wstrTimerPosTR;
@@ -2792,6 +2882,11 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
         SyncLiveWorldMinimapFields();
         SaveModSettings();
         break;
+    case OPT_SPEEDOMETER_POS:
+        g_speedometerPos = static_cast<uint8_t>(idx);
+        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SaveModSettings();
+        break;
     default:
         break;
     }
@@ -2859,14 +2954,20 @@ static float GetSliderNormalized(OptItem item) {
         return static_cast<float>(NearestTimerSizeIdx(g_timerSize)) / 7.0f;
     case OPT_PRISM_COUNTER_SIZE:
         return static_cast<float>(NearestTimerSizeIdx(g_prismCounterSize)) / 7.0f;
+    case OPT_SPEEDOMETER_SIZE:
+        return static_cast<float>(NearestTimerSizeIdx(g_speedometerSize)) / 7.0f;
     case OPT_TIMER_BG_OPACITY:
         return static_cast<float>(std::clamp(g_timerBgOpacity, 0, 100)) / 100.0f;
     case OPT_PRISM_BG_OPACITY:
         return static_cast<float>(std::clamp(g_prismBgOpacity, 0, 100)) / 100.0f;
+    case OPT_SPEEDOMETER_BG_OPACITY:
+        return static_cast<float>(std::clamp(g_speedometerBgOpacity, 0, 100)) / 100.0f;
     case OPT_TIMER_SHADOW_OPACITY:
         return static_cast<float>(std::clamp(g_timerShadowOpacity, 0, 100)) / 100.0f;
     case OPT_PRISM_SHADOW_OPACITY:
         return static_cast<float>(std::clamp(g_prismShadowOpacity, 0, 100)) / 100.0f;
+    case OPT_SPEEDOMETER_SHADOW_OPACITY:
+        return static_cast<float>(std::clamp(g_speedometerShadowOpacity, 0, 100)) / 100.0f;
     case OPT_MINIMAP_WIDTH:
     case OPT_MINIMAP_HEIGHT:
     case OPT_MINIMAP_RANGE: {
@@ -2888,10 +2989,13 @@ static float GetSliderDefaultNormalized(OptItem item) {
     case OPT_MUSIC:                return 1.0f;        // 100
     case OPT_TIMER_SIZE:           return 3.0f / 7.0f; // 1.0
     case OPT_PRISM_COUNTER_SIZE:   return 3.0f / 7.0f; // 1.0
+    case OPT_SPEEDOMETER_SIZE:     return 3.0f / 7.0f; // 1.0
     case OPT_TIMER_BG_OPACITY:     return 0.7f;        // 70
     case OPT_PRISM_BG_OPACITY:     return 0.7f;        // 70
+    case OPT_SPEEDOMETER_BG_OPACITY: return 0.7f;      // 70
     case OPT_TIMER_SHADOW_OPACITY: return 0.0f;        // 0
     case OPT_PRISM_SHADOW_OPACITY: return 0.0f;        // 0
+    case OPT_SPEEDOMETER_SHADOW_OPACITY: return 0.0f;  // 0
     case OPT_MINIMAP_WIDTH:        return 2.0f / 8.0f; // 1.0
     case OPT_MINIMAP_HEIGHT:       return 2.0f / 8.0f; // 1.0
     case OPT_MINIMAP_RANGE:        return 2.0f / 8.0f; // 1.0
@@ -2974,8 +3078,11 @@ static void StepSlider(OptItem item, int dir, int sfxId) {
         break;
     }
     case OPT_TIMER_SIZE:
-    case OPT_PRISM_COUNTER_SIZE: {
-        float& valRef = (item == OPT_TIMER_SIZE) ? g_timerSize : g_prismCounterSize;
+    case OPT_PRISM_COUNTER_SIZE:
+    case OPT_SPEEDOMETER_SIZE: {
+        float& valRef = (item == OPT_TIMER_SIZE)         ? g_timerSize
+                      : (item == OPT_PRISM_COUNTER_SIZE) ? g_prismCounterSize
+                                                         : g_speedometerSize;
         int curIdx = NearestTimerSizeIdx(valRef);
         int nextIdx = std::clamp(curIdx + dir, 0, 7);
         if (nextIdx != curIdx) {
@@ -2988,13 +3095,17 @@ static void StepSlider(OptItem item, int dir, int sfxId) {
     case OPT_TIMER_BG_OPACITY:
     case OPT_PRISM_BG_OPACITY:
     case OPT_MINIMAP_BG_OPACITY:
+    case OPT_SPEEDOMETER_BG_OPACITY:
     case OPT_TIMER_SHADOW_OPACITY:
-    case OPT_PRISM_SHADOW_OPACITY: {
-        int32_t& valRef = (item == OPT_TIMER_BG_OPACITY)     ? g_timerBgOpacity
-                        : (item == OPT_PRISM_BG_OPACITY)     ? g_prismBgOpacity
-                        : (item == OPT_MINIMAP_BG_OPACITY)   ? g_minimapBgOpacity
-                        : (item == OPT_TIMER_SHADOW_OPACITY) ? g_timerShadowOpacity
-                                                             : g_prismShadowOpacity;
+    case OPT_PRISM_SHADOW_OPACITY:
+    case OPT_SPEEDOMETER_SHADOW_OPACITY: {
+        int32_t& valRef = (item == OPT_TIMER_BG_OPACITY)       ? g_timerBgOpacity
+                        : (item == OPT_PRISM_BG_OPACITY)       ? g_prismBgOpacity
+                        : (item == OPT_MINIMAP_BG_OPACITY)     ? g_minimapBgOpacity
+                        : (item == OPT_SPEEDOMETER_BG_OPACITY) ? g_speedometerBgOpacity
+                        : (item == OPT_TIMER_SHADOW_OPACITY)   ? g_timerShadowOpacity
+                        : (item == OPT_PRISM_SHADOW_OPACITY)   ? g_prismShadowOpacity
+                                                               : g_speedometerShadowOpacity;
         int cur = std::clamp<int>(valRef, 0, 100);
         int next = (dir > 0)
             ? std::clamp((cur / 10) * 10 + 10, 0, 100)
@@ -3070,8 +3181,11 @@ static void SetSliderFromNormalized(OptItem item, float norm, bool isDrag) {
         break;
     }
     case OPT_TIMER_SIZE:
-    case OPT_PRISM_COUNTER_SIZE: {
-        float& valRef = (item == OPT_TIMER_SIZE) ? g_timerSize : g_prismCounterSize;
+    case OPT_PRISM_COUNTER_SIZE:
+    case OPT_SPEEDOMETER_SIZE: {
+        float& valRef = (item == OPT_TIMER_SIZE)         ? g_timerSize
+                      : (item == OPT_PRISM_COUNTER_SIZE) ? g_prismCounterSize
+                                                         : g_speedometerSize;
         int idx = std::clamp(static_cast<int>(std::lround(norm * 7.0f)), 0, 7);
         float newVal = g_timerSizePresets[idx];
         if (std::fabs(newVal - valRef) > 0.001f) {
@@ -3086,13 +3200,17 @@ static void SetSliderFromNormalized(OptItem item, float norm, bool isDrag) {
     case OPT_TIMER_BG_OPACITY:
     case OPT_PRISM_BG_OPACITY:
     case OPT_MINIMAP_BG_OPACITY:
+    case OPT_SPEEDOMETER_BG_OPACITY:
     case OPT_TIMER_SHADOW_OPACITY:
-    case OPT_PRISM_SHADOW_OPACITY: {
-        int32_t& valRef = (item == OPT_TIMER_BG_OPACITY)     ? g_timerBgOpacity
-                        : (item == OPT_PRISM_BG_OPACITY)     ? g_prismBgOpacity
-                        : (item == OPT_MINIMAP_BG_OPACITY)   ? g_minimapBgOpacity
-                        : (item == OPT_TIMER_SHADOW_OPACITY) ? g_timerShadowOpacity
-                                                             : g_prismShadowOpacity;
+    case OPT_PRISM_SHADOW_OPACITY:
+    case OPT_SPEEDOMETER_SHADOW_OPACITY: {
+        int32_t& valRef = (item == OPT_TIMER_BG_OPACITY)       ? g_timerBgOpacity
+                        : (item == OPT_PRISM_BG_OPACITY)       ? g_prismBgOpacity
+                        : (item == OPT_MINIMAP_BG_OPACITY)     ? g_minimapBgOpacity
+                        : (item == OPT_SPEEDOMETER_BG_OPACITY) ? g_speedometerBgOpacity
+                        : (item == OPT_TIMER_SHADOW_OPACITY)   ? g_timerShadowOpacity
+                        : (item == OPT_PRISM_SHADOW_OPACITY)   ? g_prismShadowOpacity
+                                                               : g_speedometerShadowOpacity;
         int v = std::clamp(static_cast<int>(std::lround((norm * 100.0f) / 10.0f)) * 10, 0, 100);
         if (v != valRef) {
             valRef = v;
@@ -3157,8 +3275,11 @@ static void ResetSliderToDefault(OptItem item, int sfxId) {
         SetMusicVolume(100, sfxId, true);
         break;
     case OPT_TIMER_SIZE:
-    case OPT_PRISM_COUNTER_SIZE: {
-        float& valRef = (item == OPT_TIMER_SIZE) ? g_timerSize : g_prismCounterSize;
+    case OPT_PRISM_COUNTER_SIZE:
+    case OPT_SPEEDOMETER_SIZE: {
+        float& valRef = (item == OPT_TIMER_SIZE)         ? g_timerSize
+                      : (item == OPT_PRISM_COUNTER_SIZE) ? g_prismCounterSize
+                                                         : g_speedometerSize;
         if (std::fabs(valRef - 1.0f) > 0.001f) {
             valRef = 1.0f;
             if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
@@ -3169,14 +3290,19 @@ static void ResetSliderToDefault(OptItem item, int sfxId) {
     case OPT_TIMER_BG_OPACITY:
     case OPT_PRISM_BG_OPACITY:
     case OPT_MINIMAP_BG_OPACITY:
+    case OPT_SPEEDOMETER_BG_OPACITY:
     case OPT_TIMER_SHADOW_OPACITY:
-    case OPT_PRISM_SHADOW_OPACITY: {
-        int defVal = (item == OPT_TIMER_BG_OPACITY || item == OPT_PRISM_BG_OPACITY || item == OPT_MINIMAP_BG_OPACITY) ? 70 : 0;
-        int32_t& valRef = (item == OPT_TIMER_BG_OPACITY)     ? g_timerBgOpacity
-                        : (item == OPT_PRISM_BG_OPACITY)     ? g_prismBgOpacity
-                        : (item == OPT_MINIMAP_BG_OPACITY)   ? g_minimapBgOpacity
-                        : (item == OPT_TIMER_SHADOW_OPACITY) ? g_timerShadowOpacity
-                                                             : g_prismShadowOpacity;
+    case OPT_PRISM_SHADOW_OPACITY:
+    case OPT_SPEEDOMETER_SHADOW_OPACITY: {
+        int defVal = (item == OPT_TIMER_BG_OPACITY || item == OPT_PRISM_BG_OPACITY ||
+                      item == OPT_MINIMAP_BG_OPACITY || item == OPT_SPEEDOMETER_BG_OPACITY) ? 70 : 0;
+        int32_t& valRef = (item == OPT_TIMER_BG_OPACITY)       ? g_timerBgOpacity
+                        : (item == OPT_PRISM_BG_OPACITY)       ? g_prismBgOpacity
+                        : (item == OPT_MINIMAP_BG_OPACITY)     ? g_minimapBgOpacity
+                        : (item == OPT_SPEEDOMETER_BG_OPACITY) ? g_speedometerBgOpacity
+                        : (item == OPT_TIMER_SHADOW_OPACITY)   ? g_timerShadowOpacity
+                        : (item == OPT_PRISM_SHADOW_OPACITY)   ? g_prismShadowOpacity
+                                                               : g_speedometerShadowOpacity;
         if (valRef != defVal) {
             valRef = defVal;
             if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
@@ -3374,6 +3500,23 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
         if (pos == 2) return &g_wstrTimerPosBL;
         return &g_wstrTimerPosBR;
     }
+    case OPT_SPEEDOMETER_ENABLE:
+        Game_GetLocalizedWString(tmp, g_speedometerEnable ? 0xb : 0xc);
+        *outFreeHeap = true;
+        return tmp;
+    case OPT_SPEEDOMETER_SIZE:
+        return GetTimerSizeValWstr(g_speedometerSize);
+    case OPT_SPEEDOMETER_BG_OPACITY:
+        FmtInt0to100Wstr(std::clamp(g_speedometerBgOpacity, 0, 100), tmp);
+        return tmp;
+    case OPT_SPEEDOMETER_SHADOW_OPACITY:
+        FmtInt0to100Wstr(std::clamp(g_speedometerShadowOpacity, 0, 100), tmp);
+        return tmp;
+    case OPT_SPEEDOMETER_POS:
+        if (g_speedometerPos == 0) return &g_wstrTimerPosTL;
+        if (g_speedometerPos == 1) return &g_wstrTimerPosTR;
+        if (g_speedometerPos == 2) return &g_wstrTimerPosBL;
+        return &g_wstrTimerPosBR;
     default:
         return nullptr;
     }
@@ -3413,6 +3556,13 @@ static void MinimapEnableAction_Impl(int sfxId) {
     SaveModSettings();
 }
 
+static void SpeedometerEnableAction_Impl(int sfxId) {
+    g_speedometerEnable = g_speedometerEnable ? 0u : 1u;
+    uint8_t* sm = GetScreenMgr();
+    if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+    SaveModSettings();
+}
+
 static void ExecuteOptToggle(OptItem item, int sfxId) {
     switch (item) {
     case OPT_FULLSCREEN:      ToggleFullscreenWithSfx(sfxId); break;
@@ -3426,7 +3576,8 @@ static void ExecuteOptToggle(OptItem item, int sfxId) {
     case OPT_UP_KEY:          ToggleUpKeyWithSfx(sfxId); break;
     case OPT_SKIP_INTRO:      SkipIntroAction_Impl(sfxId); break;
     case OPT_TIME_FMT:        TimeFmtAction_Impl(sfxId); break;
-    case OPT_MINIMAP_ENABLE:  MinimapEnableAction_Impl(sfxId); break;
+    case OPT_MINIMAP_ENABLE:     MinimapEnableAction_Impl(sfxId); break;
+    case OPT_SPEEDOMETER_ENABLE: SpeedometerEnableAction_Impl(sfxId); break;
     default: break;
     }
 }
@@ -6296,9 +6447,10 @@ bool GetHudTimerMenuPreview(
             return (*outMode != 0);
         }
 
-        // Companion corner preview when positioning Prism Counter or Minimap
+        // Companion corner preview when positioning Prism Counter, Minimap, or Speedometer
         if ((cat == OPT_CAT_PRISM_COUNTER && activeItem == OPT_PRISM_COUNTER_POS) ||
-            (cat == OPT_CAT_MINIMAP && activeItem == OPT_MINIMAP_POS)) {
+            (cat == OPT_CAT_MINIMAP && activeItem == OPT_MINIMAP_POS) ||
+            (cat == OPT_CAT_SPEEDOMETER && activeItem == OPT_SPEEDOMETER_POS)) {
             *outForceSample = !inPause;
             *outDockBesideMenu = false;
             *outMode = g_timerMode;
@@ -6361,9 +6513,10 @@ bool GetHudPrismCounterMenuPreview(
             return (*outType != 0);
         }
 
-        // Companion corner preview when positioning Timer or Minimap
+        // Companion corner preview when positioning Timer, Minimap, or Speedometer
         if ((cat == OPT_CAT_TIMER && activeItem == OPT_TIMER_POS) ||
-            (cat == OPT_CAT_MINIMAP && activeItem == OPT_MINIMAP_POS)) {
+            (cat == OPT_CAT_MINIMAP && activeItem == OPT_MINIMAP_POS) ||
+            (cat == OPT_CAT_SPEEDOMETER && activeItem == OPT_SPEEDOMETER_POS)) {
             *outForceSample = !inPause;
             *outDockBesideMenu = false;
             *outType = g_prismCounterType;
@@ -6417,15 +6570,80 @@ bool __cdecl GetMinimapMenuPreview(
         return true;
     }
 
-    // Companion corner preview when positioning Timer or Prism Counter
+    // Companion corner preview when positioning Timer, Prism Counter, or Speedometer
     if ((cat == OPT_CAT_TIMER && activeItem == OPT_TIMER_POS) ||
-        (cat == OPT_CAT_PRISM_COUNTER && activeItem == OPT_PRISM_COUNTER_POS)) {
+        (cat == OPT_CAT_PRISM_COUNTER && activeItem == OPT_PRISM_COUNTER_POS) ||
+        (cat == OPT_CAT_SPEEDOMETER && activeItem == OPT_SPEEDOMETER_POS)) {
         *outForceSample = !inPause;
         *outDockBesideMenu = false;
         return GetMinimapDisplayEnabled();
     }
 
     return false;
+}
+
+bool GetHudSpeedometerMenuPreview(
+    uint32_t state, uint8_t* outEnable, float* outSize, uint8_t* outPos,
+    bool* outForceSample, bool* outDockBesideMenu
+) {
+    if (outEnable == nullptr || outSize == nullptr || outPos == nullptr ||
+        outForceSample == nullptr || outDockBesideMenu == nullptr) {
+        return false;
+    }
+    *outEnable = g_speedometerEnable;
+    *outSize   = g_speedometerSize;
+    *outPos    = g_speedometerPos;
+    *outForceSample = false;
+    *outDockBesideMenu = false;
+
+    if (state == 9u || state == 0x12u) {
+        const bool inPause = (state == 0x12u);
+        uint8_t* sub = inPause
+            ? GetMenuSubForState(0x12u, 0x58cf44u)
+            : GetMenuSubForState(9u, 0x58d24cu);
+        if (sub == nullptr || *reinterpret_cast<const int*>(sub + 8) >= 0) {
+            return false;
+        }
+        if (inPause && *reinterpret_cast<const int*>(sub + 0x44) != 1) {
+            return false;
+        }
+
+        const int cat = inPause ? g_pauseOptCat : g_mainOptCat;
+        const int selRow = inPause
+            ? *reinterpret_cast<const int*>(sub + 0x50)
+            : *reinterpret_cast<const int*>(sub + 0x10);
+        OptItem activeItem = GetActiveOptItemInCat(cat, inPause, selRow);
+
+        if (cat == OPT_CAT_SPEEDOMETER) {
+            *outForceSample = !inPause;
+            const bool isPos = (activeItem == OPT_SPEEDOMETER_POS);
+            *outDockBesideMenu = !isPos;
+            if (g_optUi.popupOpen && g_optUi.popupInPause == inPause && g_optUi.popupItem == OPT_SPEEDOMETER_POS) {
+                *outPos = static_cast<uint8_t>(std::clamp(g_optUi.popupHighlight, 0, 3));
+                *outEnable = 1u;
+            } else if (activeItem == OPT_SPEEDOMETER_SIZE || activeItem == OPT_SPEEDOMETER_POS ||
+                       activeItem == OPT_SPEEDOMETER_BG_OPACITY || activeItem == OPT_SPEEDOMETER_SHADOW_OPACITY) {
+                *outEnable = 1u;
+            } else {
+                *outEnable = g_speedometerEnable;
+            }
+            return (*outEnable != 0);
+        }
+
+        // Companion corner preview when positioning Timer, Prism Counter, or Minimap
+        if ((cat == OPT_CAT_TIMER && activeItem == OPT_TIMER_POS) ||
+            (cat == OPT_CAT_PRISM_COUNTER && activeItem == OPT_PRISM_COUNTER_POS) ||
+            (cat == OPT_CAT_MINIMAP && activeItem == OPT_MINIMAP_POS)) {
+            *outForceSample = !inPause;
+            *outDockBesideMenu = false;
+            *outEnable = g_speedometerEnable;
+            return (*outEnable != 0);
+        }
+
+        return false;
+    }
+
+    return (*outEnable != 0);
 }
 
 void __cdecl GetEffectiveMinimapMetrics(EffectiveMinimapMetrics* out) {

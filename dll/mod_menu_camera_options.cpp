@@ -2928,8 +2928,9 @@ static void __stdcall DrawMenuStrip_Impl(int unusedArg) {
 }
 
 static void __cdecl DrawMenuRainbowBorder_Impl(int frame) {
+    uint8_t* renderer = GetRenderer();
     uint8_t* sm = GetScreenMgr();
-    if (sm == nullptr) return;
+    if (renderer == nullptr || sm == nullptr) return;
     uint8_t* hGrp = *reinterpret_cast<uint8_t**>(sm + 0x58);
     uint8_t* vGrp = *reinterpret_cast<uint8_t**>(sm + 0x5c);
     if (hGrp == nullptr || vGrp == nullptr) return;
@@ -2948,12 +2949,14 @@ static void __cdecl DrawMenuRainbowBorder_Impl(int frame) {
     uint32_t u = static_cast<uint32_t>(frame);
     uint32_t ucnt = static_cast<uint32_t>(cnt);
 
-    using DrawSpriteFn = void(__thiscall*)(void*, int, int, int, int, int, int);
-    auto drawSprite = reinterpret_cast<DrawSpriteFn>(0x4a8140);
-    drawSprite(hSprites[(u + 0u) % ucnt], 0, 0, menuW, 2, bx, 4);
-    drawSprite(hSprites[(u + 1u) % ucnt], 0, 0, menuW, 2, bx, virtH - 0xf);
-    drawSprite(vSprites[(u + 2u) % ucnt], 0, 0, 2, virtH - 0x11, bx, 4);
-    drawSprite(vSprites[(u + 3u) % ucnt], 0, 0, 2, virtH - 0x11, bx + menuW - 2, 4);
+    int32_t savedSrc = *reinterpret_cast<const int32_t*>(renderer + 0x18);
+    int32_t savedDst = *reinterpret_cast<const int32_t*>(renderer + 0x1c);
+    Game_SetBlend(renderer, 0);
+    DrawSmoothRainbowSprite(hSprites, ucnt, u + 0u, menuW, 2, bx, 4, 255);
+    DrawSmoothRainbowSprite(hSprites, ucnt, u + 1u, menuW, 2, bx, virtH - 0xf, 255);
+    DrawSmoothRainbowSprite(vSprites, ucnt, u + 2u, 2, virtH - 0x11, bx, 4, 255);
+    DrawSmoothRainbowSprite(vSprites, ucnt, u + 3u, 2, virtH - 0x11, bx + menuW - 2, 4, 255);
+    Game_SetD3DBlend(renderer, savedSrc, savedDst);
 }
 
 constexpr int kMenuWideW         = 0x170; // 368px (320 + 48 leftward expansion)

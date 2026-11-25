@@ -2,6 +2,57 @@
 #include <algorithm>
 #include <cmath>
 
+namespace {
+
+struct FloatTracker {
+    float* ptr;
+    float  prev;
+    float  tgt;
+    float  last;
+};
+
+struct MsModelTracker {
+    uint8_t* animNode;
+    float    prevAnim;
+    float    tgtAnim;
+    uint8_t* nodeTimer;
+    float    prevNodeT;
+    float    tgtNodeT;
+};
+
+static int32_t        g_subPrev4c         = 0;
+static int32_t        g_endPrev3c         = 0;
+static int32_t        g_endPrev40         = 0;
+static int32_t        g_wsPrev4           = 0;
+static int32_t        g_wsBuilt2108       = -1;
+static uint8_t        g_wsMmInterp        = 0;
+static uint32_t       g_wsPrevTst2b       = 0;
+static int32_t        g_wsPrevTst34       = 0;
+static int32_t        g_wsPrevTstX        = 0;
+static int32_t        g_wsPrevTstY        = 0;
+static int32_t        g_msPrevC           = 0;
+static int32_t        g_subPrev50         = 0;
+static MsModelTracker g_mmTrackers[4]{};
+static uint8_t*       g_mmPrevCubePtr     = nullptr;
+static int32_t        g_mmPrevCube4c      = 0;
+static int32_t        g_mmPrevCube50      = 0;
+static int32_t        g_mmPrevCube28      = 0;
+static int32_t        g_mmPrevCube2c      = 0;
+static uint8_t        g_wsMmForceTerrain  = 0;
+static float          g_mmPlayerPulseF    = 0.0f;
+static float          g_msFooterFracX     = 0.0f;
+static bool           g_msFooterMatPushed = false;
+static uint32_t       g_msFooterSavedMode = 0;
+
+static FloatTracker   g_trkPp304_4c{};
+static FloatTracker   g_trkPp304_68{};
+static FloatTracker   g_trkSm34{};
+static float          g_camPrevFov  = 22.0f;
+static float          g_camTgtFov   = 22.0f;
+static bool           g_camFovValid = false;
+
+} // namespace
+
 namespace edgemod {
 
 float    g_uiAlpha      = 0.0f;
@@ -9,28 +60,10 @@ uint8_t  g_justTicked   = 0;
 uint8_t* g_subPtr       = nullptr;
 int32_t  g_subPrev4     = 0;
 int32_t  g_subPrev8     = 0;
-int32_t  g_subPrev4c    = 0;
-int32_t  g_endPrev3c    = 0;
-int32_t  g_endPrev40    = 0;
 uint8_t* g_wsPtr        = nullptr;
-int32_t  g_wsPrev4      = 0;
 int32_t  g_wsPrev2108   = 0;
 int32_t  g_wsTgt2108    = 0;
-int32_t  g_wsBuilt2108  = -1;
-uint8_t  g_wsMmInterp   = 0;
-uint32_t g_wsPrevTst2b  = 0;
-int32_t  g_wsPrevTst34  = 0;
 uint32_t g_rbTmp        = 0;
-int32_t  g_msPrevC      = 0;
-int32_t  g_subPrev50    = 0;
-MsModelTracker g_mmTrackers[4]{};
-
-static FloatTracker g_trkPp304_4c{};
-static FloatTracker g_trkPp304_68{};
-static FloatTracker g_trkSm34{};
-static float        g_camPrevFov = 22.0f;
-static float        g_camTgtFov  = 22.0f;
-static bool         g_camFovValid = false;
 
 void __cdecl GetActiveSub(uint8_t* sm, uint8_t** outSub, uint32_t* outVtable) {
     uint8_t* ms = *reinterpret_cast<uint8_t**>(sm + 0x4c);
@@ -132,6 +165,12 @@ uint32_t __cdecl GetSmoothMenuRainbow(int32_t frame) {
     return col;
 }
 
+uint32_t __cdecl GetSmoothSlotRainbow(int32_t frame) {
+    uint32_t col = ApplyMenuSlotRainbowStyle(GetSmoothMenuRainbow(frame));
+    g_rbTmp = col;
+    return col;
+}
+
 int32_t __cdecl GetSmoothLevelSelectScrollY(const uint8_t* ls) {
     int32_t cur = *reinterpret_cast<const int32_t*>(ls + 0x50);
     if (g_subPtr == ls && cur != g_subPrev50) {
@@ -140,6 +179,58 @@ int32_t __cdecl GetSmoothLevelSelectScrollY(const uint8_t* ls) {
         ));
     }
     return cur;
+}
+
+void __cdecl PushUiMatrixTranslate(uint8_t* mstack, float tx, float ty, uint32_t* outSavedMode) {
+    uint32_t& stackMode = *reinterpret_cast<uint32_t*>(mstack + 0x4);
+    if (outSavedMode != nullptr) *outSavedMode = stackMode;
+    stackMode = 1;
+    float mat[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        tx,   ty,   0.0f, 1.0f
+    };
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f750)(mstack);
+    reinterpret_cast<void(__thiscall*)(void*, const float*)>(0x41f520)(mstack, mat);
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f660)(mstack);
+}
+
+void __cdecl PopUiMatrixTranslate(uint8_t* mstack, uint32_t savedMode) {
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f610)(mstack);
+    reinterpret_cast<void(__thiscall*)(void*)>(0x41f660)(mstack);
+    *reinterpret_cast<uint32_t*>(mstack + 0x4) = savedMode;
+}
+
+void __cdecl DrawSmoothRainbowSprite(
+    uint8_t** sprites, uint32_t ucnt, uint32_t idx, int w, int h, int x, int y, int alpha
+) {
+    if (sprites == nullptr || ucnt == 0u || w <= 0 || h <= 0 || alpha <= 0) return;
+    int a = std::clamp(alpha, 0, 255);
+    float t = std::clamp(g_uiAlpha, 0.0f, 1.0f);
+    using DrawSpriteAlphaFn = void(__thiscall*)(void*, int, int, int, int, int, int, int);
+    auto drawSpriteAlpha = reinterpret_cast<DrawSpriteAlphaFn>(0x4a7e30);
+
+    uint32_t idx0 = idx % ucnt;
+    uint32_t idx1 = (idx + 1u) % ucnt;
+    float bigA = static_cast<float>(a) / 255.0f;
+    float a2f = t * bigA;
+    int a2 = std::clamp(static_cast<int>(std::lrint(a2f * 255.0f)), 0, 255);
+    if (a2 <= 0) {
+        drawSpriteAlpha(sprites[idx0], 0, 0, w, h, x, y, a);
+        return;
+    }
+    if (t >= 0.999f) {
+        drawSpriteAlpha(sprites[idx1], 0, 0, w, h, x, y, a);
+        return;
+    }
+    float denom = 1.0f - a2f;
+    float a1f = (denom > 1e-4f) ? ((1.0f - t) * bigA / denom) : 1.0f;
+    int a1 = std::clamp(static_cast<int>(std::lrint(a1f * 255.0f)), 0, 255);
+    if (a1 > 0) {
+        drawSpriteAlpha(sprites[idx0], 0, 0, w, h, x, y, a1);
+    }
+    drawSpriteAlpha(sprites[idx1], 0, 0, w, h, x, y, a2);
 }
 
 } // namespace edgemod
@@ -301,8 +392,21 @@ static void __cdecl OnSavePrev_Impl(uint8_t* sm) {
         g_wsTgt2108 = g_wsPrev2108;
         g_wsPrevTst2b = ws[0x2158 + 0x2b];
         g_wsPrevTst34 = *reinterpret_cast<int32_t*>(ws + 0x2158 + 0x34);
+        g_wsPrevTstX  = *reinterpret_cast<int32_t*>(ws + 0x2158 + 0x1c);
+        g_wsPrevTstY  = *reinterpret_cast<int32_t*>(ws + 0x2158 + 0x20);
+        uint8_t* cube = *reinterpret_cast<uint8_t**>(ws + 0x34);
+        if (cube != nullptr) {
+            g_mmPrevCubePtr = cube;
+            g_mmPrevCube4c  = *reinterpret_cast<int32_t*>(cube + 0x4c);
+            g_mmPrevCube50  = *reinterpret_cast<int32_t*>(cube + 0x50);
+            g_mmPrevCube28  = *reinterpret_cast<int32_t*>(cube + 0x28);
+            g_mmPrevCube2c  = *reinterpret_cast<int32_t*>(cube + 0x2c);
+        } else {
+            g_mmPrevCubePtr = nullptr;
+        }
     } else {
         g_wsPtr = nullptr;
+        g_mmPrevCubePtr = nullptr;
     }
 
     uint8_t* sub = nullptr;
@@ -523,38 +627,10 @@ static void __declspec(naked) hk_pauseStartClose() {
     }
 }
 
-static void PushMatrixTranslateY(uint8_t* mstack, float matTransY, uint32_t* outSavedMode) {
-    uint32_t& stackMode = *reinterpret_cast<uint32_t*>(mstack + 0x4);
-    *outSavedMode = stackMode;
-    stackMode = 1;
-    float mat[16] = {
-        1.0f, 0.0f,      0.0f, 0.0f,
-        0.0f, 1.0f,      0.0f, 0.0f,
-        0.0f, 0.0f,      1.0f, 0.0f,
-        0.0f, matTransY, 0.0f, 1.0f
-    };
-    reinterpret_cast<void(__thiscall*)(void*)>(0x41f750)(mstack);
-    reinterpret_cast<void(__thiscall*)(void*, const float*)>(0x41f520)(mstack, mat);
-    reinterpret_cast<void(__thiscall*)(void*)>(0x41f660)(mstack);
-}
-
-static void PopMatrixTranslateY(uint8_t* mstack, uint32_t savedMode) {
-    reinterpret_cast<void(__thiscall*)(void*)>(0x41f610)(mstack);
-    reinterpret_cast<void(__thiscall*)(void*)>(0x41f660)(mstack);
-    *reinterpret_cast<uint32_t*>(mstack + 0x4) = savedMode;
-}
-
 static void __fastcall PauseDrawStrip_Impl(void* pm, void*, int32_t frame) {
     float extraOffsetY = g_pauseRenderBgOffsetY - g_pauseRenderMenuOffsetY;
-    uint8_t* mstack = (extraOffsetY != 0.0f) ? GetMatrixStack() : nullptr;
-    if (mstack != nullptr) {
-        uint32_t savedMode = 0;
-        // Negate screen-space offset: 2D MatrixStack +Y moves UP, -Y moves DOWN.
-        PushMatrixTranslateY(mstack, -extraOffsetY, &savedMode);
-        reinterpret_cast<void(__thiscall*)(void*, int32_t)>(0x496070)(pm, frame);
-        PopMatrixTranslateY(mstack, savedMode);
-        return;
-    }
+    // Negate screen-space offset: 2D MatrixStack +Y moves UP, -Y moves DOWN.
+    ScopedUiMatrixTranslate matGuard(0.0f, -extraOffsetY);
     reinterpret_cast<void(__thiscall*)(void*, int32_t)>(0x496070)(pm, frame);
 }
 
@@ -574,14 +650,9 @@ static void __fastcall PauseRenderWrap_Impl(uint8_t* pm, void*, int32_t frame) {
     g_pauseRenderBgOffsetY = -(1.0f - e) * bgDist;
     g_pauseRenderMenuOffsetY = -(1.0f - e) * menuDist;
 
-    uint8_t* mstack = (g_pauseRenderMenuOffsetY != 0.0f) ? GetMatrixStack() : nullptr;
-    if (mstack != nullptr) {
-        uint32_t savedMode = 0;
+    {
         // Negate screen-space offset: 2D MatrixStack +Y moves UP, -Y moves DOWN.
-        PushMatrixTranslateY(mstack, -g_pauseRenderMenuOffsetY, &savedMode);
-        reinterpret_cast<void(__thiscall*)(void*, int32_t)>(0x4ad100)(pm, frame);
-        PopMatrixTranslateY(mstack, savedMode);
-    } else {
+        ScopedUiMatrixTranslate matGuard(0.0f, -g_pauseRenderMenuOffsetY);
         reinterpret_cast<void(__thiscall*)(void*, int32_t)>(0x4ad100)(pm, frame);
     }
     g_pauseRenderBgOffsetY = 0.0f;
@@ -951,21 +1022,44 @@ static void __declspec(naked) hk_interpModelNodeT() {
 
 static int32_t __cdecl CalcMsScroll_Impl(const uint8_t* ms, int32_t period) {
     int32_t cur = *reinterpret_cast<const int32_t*>(ms + 0xc);
+    float effScroll = static_cast<float>(cur);
     if (ms == GetMenuScreen()) {
         int32_t diff = cur - g_msPrevC;
         if (diff >= 0 && diff <= 20) {
-            return static_cast<int32_t>(std::lrint(static_cast<float>(g_msPrevC) + static_cast<float>(diff) * g_uiAlpha));
-        }
-        if (period > 0) {
+            effScroll = static_cast<float>(g_msPrevC) + static_cast<float>(diff) * g_uiAlpha;
+        } else if (period > 0) {
             int32_t wrappedDiff = diff + period;
             if (wrappedDiff >= 0 && wrappedDiff <= 20) {
-                return static_cast<int32_t>(std::lrint(
-                    static_cast<float>(cur - wrappedDiff) + static_cast<float>(wrappedDiff) * g_uiAlpha
-                ));
+                effScroll = static_cast<float>(cur - wrappedDiff) + static_cast<float>(wrappedDiff) * g_uiAlpha;
             }
         }
     }
-    return cur;
+    int32_t intScroll = static_cast<int32_t>(std::floor(effScroll));
+    g_msFooterFracX = std::clamp(effScroll - static_cast<float>(intScroll), 0.0f, 0.9999f);
+    g_msFooterMatPushed = false;
+    if (g_msFooterFracX > 0.0005f) {
+        uint8_t* mstack = GetMatrixStack();
+        if (mstack != nullptr) {
+            PushUiMatrixTranslate(mstack, -g_msFooterFracX, 0.0f, &g_msFooterSavedMode);
+            g_msFooterMatPushed = true;
+        }
+    }
+    return intScroll;
+}
+
+static void __cdecl MsScrollPopAndClearScissor_Impl() {
+    if (g_msFooterMatPushed) {
+        uint8_t* mstack = GetMatrixStack();
+        if (mstack != nullptr) {
+            PopUiMatrixTranslate(mstack, g_msFooterSavedMode);
+        }
+        g_msFooterMatPushed = false;
+    }
+    g_msFooterFracX = 0.0f;
+    uint8_t* renderer = GetRenderer();
+    if (renderer != nullptr) {
+        reinterpret_cast<void(__thiscall*)(void*)>(0x405b90)(renderer);
+    }
 }
 
 static void __declspec(naked) hk_msScrollSmooth() {
@@ -1059,40 +1153,97 @@ static void __declspec(naked) hk_hudRainbowSmooth() {
     }
 }
 
-static uint32_t __cdecl ToastAlphaSmooth_Impl(const uint8_t* toast) {
+static void __cdecl ToastRenderSmooth_Impl(const uint8_t* toast) {
     bool active = (g_wsPtr != nullptr && toast == (g_wsPtr + 0x2158));
     if (*reinterpret_cast<const int32_t*>(toast + 0x34) <= 0) {
-        if (!active || g_wsPrevTst34 <= 0 || g_wsPrevTst2b == 0) return 0;
+        if (!active || g_wsPrevTst34 <= 0 || g_wsPrevTst2b == 0) return;
     }
     uint32_t cur2b = toast[0x2b];
-    float sm = static_cast<float>(cur2b);
+    float smAlpha = static_cast<float>(cur2b);
     if (active && cur2b != g_wsPrevTst2b) {
-        sm = static_cast<float>(g_wsPrevTst2b) + static_cast<float>(static_cast<int32_t>(cur2b) - static_cast<int32_t>(g_wsPrevTst2b)) * g_uiAlpha;
+        smAlpha = static_cast<float>(g_wsPrevTst2b)
+                + static_cast<float>(static_cast<int32_t>(cur2b) - static_cast<int32_t>(g_wsPrevTst2b)) * g_uiAlpha;
     }
-    float outF = sm * (170.0f / 255.0f);
-    if (outF < 0.0f) outF = 0.0f;
-    if (outF > 255.0f) outF = 255.0f;
-    return static_cast<uint32_t>(std::lrint(outF));
+    smAlpha = std::clamp(smAlpha, 0.0f, 255.0f);
+    int32_t mainAlpha = static_cast<int32_t>(std::lrint(smAlpha));
+    if (mainAlpha <= 0) return;
+    int32_t shadowAlpha = static_cast<int32_t>(std::lrint(smAlpha * (170.0f / 255.0f)));
+
+    uint8_t fg[4] = {toast[0x28], toast[0x29], toast[0x2a], static_cast<uint8_t>(mainAlpha)};
+    if (active && *reinterpret_cast<const int32_t*>(g_wsPtr + 0x218c) > 0) {
+        uint8_t* sm = GetScreenMgr();
+        if (sm != nullptr && *reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x11u) {
+            uint32_t rb = CalcSmoothRainbow(GetSmoothWsFrame(g_wsPtr), 1.0f);
+            fg[0] = static_cast<uint8_t>((rb >> 16) & 0xffu);
+            fg[1] = static_cast<uint8_t>((rb >> 8) & 0xffu);
+            fg[2] = static_cast<uint8_t>(rb & 0xffu);
+        }
+    }
+
+    int32_t curX = *reinterpret_cast<const int32_t*>(toast + 0x1c);
+    int32_t curY = *reinterpret_cast<const int32_t*>(toast + 0x20);
+    int32_t scale = *reinterpret_cast<const int32_t*>(toast + 0x24);
+
+    float tx = 0.0f;
+    float ty = 0.0f;
+    if (active && g_wsPrevTst34 > 0) {
+        int32_t dx = curX - g_wsPrevTstX;
+        int32_t dy = curY - g_wsPrevTstY;
+        if (dx > -200 && dx < 200 && dy > -200 && dy < 200 && (dx != 0 || dy != 0)) {
+            float invA = 1.0f - g_uiAlpha;
+            tx = -static_cast<float>(dx) * invA;
+            ty = static_cast<float>(dy) * invA;
+        }
+    }
+
+    ScopedUiMatrixTranslate matGuard(tx, ty);
+    const EdgeWString* textWs = reinterpret_cast<const EdgeWString*>(toast);
+    uint32_t* pTextCol = reinterpret_cast<uint32_t*>(0x5f4268);
+    if (shadowAlpha > 0) {
+        const uint8_t* bg = reinterpret_cast<const uint8_t*>(0x5f88e0);
+        uint32_t shCol = static_cast<uint32_t>(bg[0])
+                       | (static_cast<uint32_t>(bg[1]) << 8)
+                       | (static_cast<uint32_t>(bg[2]) << 16)
+                       | (static_cast<uint32_t>(shadowAlpha) << 24);
+        *pTextCol = shCol;
+        Game_DrawText(textWs, curX + 3, curY + 3, scale, scale, 0, 0, 0x18);
+    }
+
+    uint32_t mainCol = static_cast<uint32_t>(fg[0])
+                     | (static_cast<uint32_t>(fg[1]) << 8)
+                     | (static_cast<uint32_t>(fg[2]) << 16)
+                     | (static_cast<uint32_t>(fg[3]) << 24);
+    *pTextCol = mainCol;
+    Game_DrawText(textWs, curX, curY, scale, scale, 0, 0, 0x18);
 }
 
-static void __declspec(naked) hk_toastAlphaSmooth() {
+static void __declspec(naked) hk_toastRenderSmooth() {
     __asm {
         push esi
-        call ToastAlphaSmooth_Impl
+        call ToastRenderSmooth_Impl
         add esp, 4
-        test eax, eax
-        je tas_skip
-        mov ecx, DWORD PTR ds:[0x5f88e0]
-        mov DWORD PTR [ebp - 0x4], ecx
-        mov BYTE PTR [ebp - 0x1], al
-        push 0x18
-        push 0
-        mov eax, 0x4953c1
-        jmp eax
-    tas_skip:
         mov eax, 0x49540a
         jmp eax
     }
+}
+
+static int32_t InterpGridAxis(int32_t prevPos, int32_t curPos, int32_t prevTile, int32_t curTile, int32_t* outTile) {
+    int32_t d = curPos - prevPos;
+    if (d == 0 || d < -30 || d > 30) {
+        *outTile = curTile;
+        return curPos;
+    }
+    bool sameTile = (prevTile == curTile && std::abs(d) <= 15);
+    bool alignedGrid = (prevPos >= 0 && curPos >= 0 && (prevPos / 30) == prevTile && (curPos / 30) == curTile);
+    if (!sameTile && !alignedGrid) {
+        *outTile = curTile;
+        return curPos;
+    }
+    int32_t eff = static_cast<int32_t>(std::lrint(
+        static_cast<float>(prevPos) + static_cast<float>(d) * g_uiAlpha
+    ));
+    *outTile = alignedGrid ? (eff / 30) : curTile;
+    return eff;
 }
 
 static void __cdecl MinimapSmoothDraw_Impl(uint8_t* ws) {
@@ -1113,11 +1264,44 @@ static void __cdecl MinimapSmoothDraw_Impl(uint8_t* ws) {
 
     uint8_t* sm = GetScreenMgr();
     int32_t sm34 = *reinterpret_cast<int32_t*>(sm + 0x34);
-    if (drawAlpha != g_wsBuilt2108 || *reinterpret_cast<int32_t*>(ws + 0x1c0) != sm34) {
+    bool needTerrain = (drawAlpha != g_wsBuilt2108 || *reinterpret_cast<int32_t*>(ws + 0x1c0) != sm34);
+    bool activeGameplay = (sm != nullptr && *reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x11u);
+
+    if (needTerrain || activeGameplay) {
+        uint8_t* cube = *reinterpret_cast<uint8_t**>(ws + 0x34);
+        bool savedCube = false;
+        int32_t orig4c = 0, orig50 = 0, orig28 = 0, orig2c = 0;
+        if (activeGameplay && cube != nullptr && cube == g_mmPrevCubePtr) {
+            orig4c = *reinterpret_cast<int32_t*>(cube + 0x4c);
+            orig50 = *reinterpret_cast<int32_t*>(cube + 0x50);
+            orig28 = *reinterpret_cast<int32_t*>(cube + 0x28);
+            orig2c = *reinterpret_cast<int32_t*>(cube + 0x2c);
+            int32_t new28 = orig28;
+            int32_t new2c = orig2c;
+            int32_t new4c = InterpGridAxis(g_mmPrevCube4c, orig4c, g_mmPrevCube28, orig28, &new28);
+            int32_t new50 = InterpGridAxis(g_mmPrevCube50, orig50, g_mmPrevCube2c, orig2c, &new2c);
+            if (new4c != orig4c || new50 != orig50 || new28 != orig28 || new2c != orig2c) {
+                *reinterpret_cast<int32_t*>(cube + 0x4c) = new4c;
+                *reinterpret_cast<int32_t*>(cube + 0x50) = new50;
+                *reinterpret_cast<int32_t*>(cube + 0x28) = new28;
+                *reinterpret_cast<int32_t*>(cube + 0x2c) = new2c;
+                savedCube = true;
+            }
+        }
+
         g_wsMmInterp = 1;
+        g_wsMmForceTerrain = needTerrain ? 1 : 0;
         *reinterpret_cast<int32_t*>(ws + 0x2108) = drawAlpha;
         reinterpret_cast<void(__thiscall*)(void*, int)>(0x47e620)(ws, 0);
+        g_wsMmForceTerrain = 0;
         g_wsMmInterp = 0;
+
+        if (savedCube) {
+            *reinterpret_cast<int32_t*>(cube + 0x4c) = orig4c;
+            *reinterpret_cast<int32_t*>(cube + 0x50) = orig50;
+            *reinterpret_cast<int32_t*>(cube + 0x28) = orig28;
+            *reinterpret_cast<int32_t*>(cube + 0x2c) = orig2c;
+        }
     }
     *reinterpret_cast<int32_t*>(ws + 0x2108) = drawAlpha;
     reinterpret_cast<void(__thiscall*)(void*)>(0x47a960)(ws);
@@ -1163,7 +1347,7 @@ static void __declspec(naked) hk_mmSkipOut() {
 
 static void __declspec(naked) hk_mmForceVb() {
     __asm {
-        cmp BYTE PTR g_wsMmInterp, 0
+        cmp BYTE PTR g_wsMmForceTerrain, 0
         je mmfv_chk
         mov cl, 1
     mmfv_chk:
@@ -1174,6 +1358,246 @@ static void __declspec(naked) hk_mmForceVb() {
     mmfv_done:
         mov edi, DWORD PTR ds:[0x5f9040]
         ret
+    }
+}
+
+static uint32_t __cdecl MmPrismRainbow_Impl(const uint8_t* ws) {
+    return CalcSmoothRainbow(GetSmoothWsFrame(ws), 1.0f);
+}
+
+static void __declspec(naked) hk_mmPrismRainbow() {
+    __asm {
+        push eax
+        push ecx
+        push edx
+        sub esp, 112
+        movdqu XMMWORD PTR [esp + 0x00], xmm0
+        movdqu XMMWORD PTR [esp + 0x10], xmm1
+        movdqu XMMWORD PTR [esp + 0x20], xmm2
+        movdqu XMMWORD PTR [esp + 0x30], xmm3
+        movdqu XMMWORD PTR [esp + 0x40], xmm4
+        movdqu XMMWORD PTR [esp + 0x50], xmm5
+        movdqu XMMWORD PTR [esp + 0x60], xmm6
+        push DWORD PTR [ebp - 0x78]
+        call MmPrismRainbow_Impl
+        add esp, 4
+        mov ebx, eax
+        movdqu xmm0, XMMWORD PTR [esp + 0x00]
+        movdqu xmm1, XMMWORD PTR [esp + 0x10]
+        movdqu xmm2, XMMWORD PTR [esp + 0x20]
+        movdqu xmm3, XMMWORD PTR [esp + 0x30]
+        movdqu xmm4, XMMWORD PTR [esp + 0x40]
+        movdqu xmm5, XMMWORD PTR [esp + 0x50]
+        movdqu xmm6, XMMWORD PTR [esp + 0x60]
+        add esp, 112
+        pop edx
+        pop ecx
+        pop eax
+        ret
+    }
+}
+
+static uint32_t __cdecl MmPlayerDot_Impl(const uint8_t* ws) {
+    float f = std::fmod(GetSmoothWsFrame(ws), 16.0f);
+    if (f < 0.0f) f += 16.0f;
+    float pulse = 0.0f;
+    if (f < 1.0f) pulse = 2.0f + 2.0f * f;
+    else if (f < 2.0f) pulse = 4.0f * (2.0f - f);
+    else if (f >= 15.0f) pulse = 2.0f * (f - 15.0f);
+    g_mmPlayerPulseF = pulse;
+
+    const uint32_t* pal = reinterpret_cast<const uint32_t*>(0x5f9110);
+    uint32_t idx = static_cast<uint32_t>(static_cast<int32_t>(std::floor(f))) & 15u;
+    uint32_t nextIdx = (idx + 1u) & 15u;
+    float frac = f - std::floor(f);
+    int32_t pct = ClampPct0_100(frac * 100.0f);
+    return Game_ColorLerp(pal[idx], pal[nextIdx], pct);
+}
+
+static void __declspec(naked) hk_mmPlayerDot() {
+    __asm {
+        push DWORD PTR [ebp - 0x78]
+        call MmPlayerDot_Impl
+        add esp, 4
+        xorps xmm0, xmm0
+        mov edx, 0x47f289
+        jmp edx
+    }
+}
+
+static void __declspec(naked) hk_mmPlayerPulseLoad() {
+    __asm {
+        movss xmm2, DWORD PTR g_mmPlayerPulseF
+        xorps xmm4, xmm4
+        ret
+    }
+}
+
+// ------------------------------------------------------------------
+// Rainbow Rect Border, PauseConfirm fade2/bars, State 0x17 Loading, OptionsMenu RB
+// ------------------------------------------------------------------
+static void __cdecl Game_DrawRainbowRectBorder_Impl(
+    int frame, int x, int y, int w, int h, int thickness, int alpha
+) {
+    if (w <= 0 || h <= 0 || thickness <= 0 || alpha <= 0) return;
+    uint8_t* renderer = GetRenderer();
+    uint8_t* sm = GetScreenMgr();
+    if (renderer == nullptr || sm == nullptr) return;
+    uint8_t* hGrp = *reinterpret_cast<uint8_t**>(sm + 0x58);
+    uint8_t* vGrp = *reinterpret_cast<uint8_t**>(sm + 0x5c);
+    if (hGrp == nullptr || vGrp == nullptr) return;
+    int16_t cnt = *reinterpret_cast<int16_t*>(hGrp + 8);
+    if (cnt <= 0) return;
+    uint8_t** hSprites = *reinterpret_cast<uint8_t***>(hGrp + 0x20);
+    uint8_t** vSprites = *reinterpret_cast<uint8_t***>(vGrp + 0x20);
+    if (hSprites == nullptr || vSprites == nullptr) return;
+
+    uint32_t u = static_cast<uint32_t>(frame);
+    uint32_t ucnt = static_cast<uint32_t>(cnt);
+    Game_SetBlend(renderer, 0);
+    DrawSmoothRainbowSprite(hSprites, ucnt, u + 0u, w, thickness, x, y, alpha);
+    DrawSmoothRainbowSprite(hSprites, ucnt, u + 1u, w, thickness, x, y + h - thickness, alpha);
+    DrawSmoothRainbowSprite(vSprites, ucnt, u + 2u, thickness, h, x, y, alpha);
+    DrawSmoothRainbowSprite(vSprites, ucnt, u + 3u, thickness, h, x + w - thickness, y, alpha);
+    Game_SetBlend(renderer, 3);
+}
+
+static int32_t __cdecl PauseConfirmFade2_Impl(const uint8_t* pc) {
+    int32_t cur8 = *reinterpret_cast<const int32_t*>(pc + 0x8);
+    if (cur8 >= 0) {
+        int32_t prev8 = (g_subPtr == pc) ? g_subPrev8 : cur8;
+        return DivPct8(SmoothCounterPair(cur8, prev8, true));
+    }
+    int32_t cur4 = *reinterpret_cast<const int32_t*>(pc + 0x4);
+    int32_t prev4 = (g_subPtr == pc) ? g_subPrev4 : cur4;
+    float sm4 = SmoothCounterPair(cur4, prev4, false);
+    return ClampPct0_100((sm4 - 14.0f) * (100.0f / 3.0f));
+}
+
+static void __declspec(naked) hk_pauseConfirmFade2() {
+    __asm {
+        push ecx
+        push edx
+        push esi
+        call PauseConfirmFade2_Impl
+        add esp, 4
+        pop edx
+        pop ecx
+        mov edi, eax
+        mov eax, 0x4ae9de
+        jmp eax
+    }
+}
+
+static void __cdecl DrawPauseConfirmBar_Impl(int frame, int barW, int fadePct, bool restoreBlend) {
+    int alpha = restoreBlend ? 255 : ((fadePct * 255) / 100);
+    if (barW <= 0 || alpha <= 0) return;
+    uint8_t* renderer = GetRenderer();
+    uint8_t* sm = GetScreenMgr();
+    if (renderer == nullptr || sm == nullptr) return;
+    uint8_t* hGrp = *reinterpret_cast<uint8_t**>(sm + 0x58);
+    if (hGrp == nullptr) return;
+    int16_t cnt = *reinterpret_cast<int16_t*>(hGrp + 8);
+    if (cnt <= 0) return;
+    uint8_t** hSprites = *reinterpret_cast<uint8_t***>(hGrp + 0x20);
+    if (hSprites == nullptr) return;
+
+    int32_t virtH = *reinterpret_cast<const int32_t*>(sm + 0x28);
+    int32_t savedSrc = *reinterpret_cast<const int32_t*>(renderer + 0x18);
+    int32_t savedDst = *reinterpret_cast<const int32_t*>(renderer + 0x1c);
+    Game_SetBlend(renderer, 0);
+    DrawSmoothRainbowSprite(hSprites, static_cast<uint32_t>(cnt), static_cast<uint32_t>(frame), barW, 2, 0, virtH - 12, alpha);
+    if (restoreBlend) {
+        Game_SetD3DBlend(renderer, savedSrc, savedDst);
+    } else {
+        Game_SetBlend(renderer, 3);
+    }
+}
+
+static void __declspec(naked) hk_pauseConfirmBar1() {
+    __asm {
+        push 0
+        push edi
+        push DWORD PTR [ebx + 0x24]
+        push DWORD PTR [ebp - 0x44]
+        call DrawPauseConfirmBar_Impl
+        add esp, 16
+        mov eax, 0x4aeb47
+        jmp eax
+    }
+}
+
+static void __declspec(naked) hk_pauseConfirmBar2() {
+    __asm {
+        push 1
+        push 100
+        push eax
+        push DWORD PTR [ebp - 0x44]
+        call DrawPauseConfirmBar_Impl
+        add esp, 16
+        mov eax, 0x4aeb83
+        jmp eax
+    }
+}
+
+static uint32_t __cdecl LoadingFlashColor_Impl(const uint8_t* ms) {
+    float f = static_cast<float>(*reinterpret_cast<const uint32_t*>(ms + 0x4)) + g_uiAlpha;
+    float ph = std::fmod(f, 2.0f);
+    if (ph < 0.0f) ph += 2.0f;
+    float t = (ph < 1.0f) ? ph : (2.0f - ph);
+    return Game_ColorLerp(0xffffffu, 0xdddddfu, ClampPct0_100(t * 100.0f));
+}
+
+static void __declspec(naked) hk_loadingFlashColor() {
+    __asm {
+        push esi
+        call LoadingFlashColor_Impl
+        add esp, 4
+        mov edx, 0x49c5db
+        jmp edx
+    }
+}
+
+// OptionsMenu raw rainbow hooks (RenderMainOptionsBody_Impl applies ApplyMenuSlotRainbowStyle itself)
+static void __declspec(naked) hk_optRb_4b2a67() {
+    __asm {
+        push DWORD PTR [ebp - 0x6c]
+        call GetSmoothMenuRainbow
+        add esp, 4
+        mov edx, eax
+        mov edi, OFFSET g_rbTmp
+        mov ecx, 0x4b2a87
+        jmp ecx
+    }
+}
+static void __declspec(naked) hk_optRb_4b2b5b() {
+    __asm {
+        mov ebx, eax
+        push DWORD PTR [ebp - 0x6c]
+        call GetSmoothMenuRainbow
+        add esp, 4
+        mov ecx, eax
+        mov edx, 0x4b2b76
+        jmp edx
+    }
+}
+static void __declspec(naked) hk_optRb_4b2bf2() {
+    __asm {
+        push DWORD PTR [ebp - 0x6c]
+        call GetSmoothMenuRainbow
+        add esp, 4
+        mov edx, eax
+        mov ecx, 0x4b2c0b
+        jmp ecx
+    }
+}
+static void __declspec(naked) hk_optRb_4b2cb9() {
+    __asm {
+        push DWORD PTR [ebp - 0x6c]
+        call GetSmoothMenuRainbow
+        add esp, 4
+        mov ecx, 0x4b2cd2
+        jmp ecx
     }
 }
 
@@ -1240,12 +1664,6 @@ static void __declspec(naked) hk_subFade_4b1b87() {
         mov eax, 0x4b1c1b
         jmp eax
     }
-}
-
-static uint32_t __cdecl GetSmoothSlotRainbow(int32_t frame) {
-    uint32_t col = ApplyMenuSlotRainbowStyle(GetSmoothMenuRainbow(frame));
-    g_rbTmp = col;
-    return col;
 }
 
 static void __declspec(naked) hk_rb_4b9b06() {
@@ -1519,6 +1937,24 @@ void RegisterUiSmoothPart1() {
         RegRelCall(0x425715, exMnt, 6, 6, &hk_interpModelNodeT);
         const uint8_t exMss[11] = {0x8b, 0xf1, 0x2b, 0x77, 0x0c, 0x83, 0xe8, 0x0b, 0x89, 0x45, 0x08};
         RegRelCall(0x49c52b, exMss, 11, 11, &hk_msScrollSmooth);
+        const uint8_t exMssPop[11] = {0x8b, 0x0d, 0x70, 0x87, 0x5f, 0x00, 0xe8, 0x16, 0x96, 0xf6, 0xff};
+        RegRelCall(0x49c56f, exMssPop, 11, 11, reinterpret_cast<void*>(&MsScrollPopAndClearScissor_Impl));
+    }
+
+    // DrawRainbowRectBorder, State 0x17 loading pulse, OptionsMenu rainbow highlights
+    {
+        const uint8_t exRrb[10] = {0x55, 0x8b, 0xec, 0x83, 0xec, 0x08, 0x8b, 0x0d, 0x70, 0x87};
+        RegRelJmp(0x495f30, exRrb, 10, 5, reinterpret_cast<void*>(&Game_DrawRainbowRectBorder_Impl), 0x90);
+
+        const uint8_t exLfc[10] = {0x8b, 0x46, 0x04, 0x24, 0x01, 0x0f, 0xb6, 0xc0, 0xf7, 0xd8};
+        RegRelJmp(0x49c5c5, exLfc, 10, 5, &hk_loadingFlashColor, 0x90, 0x49c5db);
+
+        const uint8_t exOpt1[10] = {0x8b, 0x4d, 0x94, 0xb8, 0x4f, 0xec, 0xc4, 0x4e, 0xf7, 0xe1};
+        RegRelJmp(0x4b2a67, exOpt1, 10, 5, &hk_optRb_4b2a67, 0x90, 0x4b2a87);
+        const uint8_t exOpt2[10] = {0x8b, 0x4d, 0x94, 0x8b, 0xd8, 0xb8, 0x4f, 0xec, 0xc4, 0x4e};
+        RegRelJmp(0x4b2b5b, exOpt2, 10, 5, &hk_optRb_4b2b5b, 0x90, 0x4b2b76);
+        RegRelJmp(0x4b2bf2, exOpt1, 10, 5, &hk_optRb_4b2bf2, 0x90, 0x4b2c0b);
+        RegRelJmp(0x4b2cb9, exOpt1, 10, 5, &hk_optRb_4b2cb9, 0x90, 0x4b2cd2);
     }
 
     // Submenu selection bar vertical Y slides
@@ -1533,7 +1969,7 @@ void RegisterUiSmoothPart1() {
         RegRelJmp(0x4b1ac4, ex4b, 10, 5, &hk_subSlide_s4b1aa0, 0x90, 0x4b1b84);
     }
 
-    // 21 menu rainbow highlights
+    // Menu rainbow highlights
     {
         const uint8_t ex4b9b06[8] = {0x8b, 0x4d, 0x98, 0x8b, 0xd8, 0xb8, 0x4f, 0xec};
         RegRelJmp(0x4b9b06, ex4b9b06, 8, 5, &hk_rb_4b9b06, 0x90, 0x4b9b21);
@@ -1645,6 +2081,15 @@ void RegisterUiSmoothPart1() {
         const uint8_t exPc[8] = {0x8b, 0x46, 0x04, 0x83, 0xc4, 0x14, 0xbb, 0xd4};
         RegRelJmp(0x4ae793, exPc, 8, 5, &hk_pauseConfirmSmooth, 0x90, 0x4ae7e2);
 
+        const uint8_t exPcF2[10] = {0x3b, 0xc7, 0x7c, 0x0f, 0x6b, 0xc0, 0x64, 0x99, 0x83, 0xe2};
+        RegRelJmp(0x4ae9a3, exPcF2, 10, 5, &hk_pauseConfirmFade2, 0x90, 0x4ae9de);
+
+        const uint8_t exPcB1[12] = {0x8b, 0x0d, 0x70, 0x87, 0x5f, 0x00, 0x6a, 0x00, 0xe8, 0xf0, 0x72, 0xf5};
+        RegRelJmp(0x4aeae3, exPcB1, 12, 5, &hk_pauseConfirmBar1, 0x90, 0x4aeb47);
+
+        const uint8_t exPcB2[12] = {0x8b, 0x53, 0x28, 0x8b, 0x4b, 0x58, 0x0f, 0xbf, 0x71, 0x08, 0x83, 0xea};
+        RegRelJmp(0x4aeb5a, exPcB2, 12, 5, &hk_pauseConfirmBar2, 0x90, 0x4aeb83);
+
         const uint8_t exEf[8] = {0x8b, 0x46, 0x3c, 0x83, 0xc4, 0x04, 0x83, 0xf8};
         RegRelJmp(0x4a99de, exEf, 8, 5, &hk_endFlashAlpha, 0x90, 0x4a9a0b);
 
@@ -1661,7 +2106,7 @@ void RegisterUiSmoothPart1() {
         RegRelJmp(0x47b531, exHr, 8, 5, &hk_hudRainbowSmooth, 0x90, 0x47b5af);
 
         const uint8_t exTst[8] = {0x83, 0x7e, 0x34, 0x00, 0x0f, 0x8e, 0x89, 0x00};
-        RegRelJmp(0x495377, exTst, 8, 5, &hk_toastAlphaSmooth, 0x90, 0x4953c1);
+        RegRelJmp(0x495377, exTst, 8, 5, &hk_toastRenderSmooth, 0x90, 0x4953c1);
 
         const uint8_t exMm[7] = {0x8b, 0xcf, 0xe8, 0x48, 0xf4, 0xff, 0xff};
         RegRelCall(0x47b511, exMm, 7, 7, &hk_minimapSmoothDraw_bridge);
@@ -1674,5 +2119,14 @@ void RegisterUiSmoothPart1() {
 
         const uint8_t exMmVb[6] = {0x8b, 0x3d, 0x40, 0x90, 0x5f, 0x00};
         RegRelCall(0x47e8d0, exMmVb, 6, 6, &hk_mmForceVb);
+
+        const uint8_t exMmPrb[7] = {0x8b, 0x1c, 0x95, 0xb8, 0x9b, 0x58, 0x00};
+        RegRelCall(0x47ef15, exMmPrb, 7, 7, &hk_mmPrismRainbow);
+
+        const uint8_t exMmPdot[12] = {0x8b, 0x55, 0x88, 0x8b, 0x42, 0x04, 0x83, 0xe0, 0x0f, 0xc7, 0x45, 0x94};
+        RegRelJmp(0x47f25b, exMmPdot, 12, 5, &hk_mmPlayerDot, 0x90, 0x47f289);
+
+        const uint8_t exMmPulse[6] = {0x0f, 0x5b, 0xd2, 0x0f, 0x57, 0xe4};
+        RegRelCall(0x47f2e8, exMmPulse, 6, 6, &hk_mmPlayerPulseLoad);
     }
 }

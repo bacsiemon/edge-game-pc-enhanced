@@ -119,6 +119,10 @@ inline void Game_SetBlend(void* renderer, int mode) {
     reinterpret_cast<void(__thiscall*)(void*, int)>(0x405de0)(renderer, mode);
 }
 
+inline void Game_SetD3DBlend(void* renderer, int srcBlend, int dstBlend) {
+    reinterpret_cast<void(__thiscall*)(void*, int, int)>(0x405910)(renderer, srcBlend, dstBlend);
+}
+
 // Engine D3DXMatrixOrthoRH & D3DXMatrixPerspectiveFovRH
 // Note: 0x4bb2ca / 0x4bb2d0 are thunks jmp DWORD PTR [IAT]; both are __stdcall (5 args)!
 inline void Game_D3DXMatrixOrthoRH(void* pOut, float w, float h, float zn, float zf) {
@@ -144,9 +148,12 @@ inline void Game_DrawRainbowRectBorder(int frame, int x, int y, int w, int h, in
     );
 }
 
-// Shared helpers callable from mod_ui_smooth_part2.cpp
+// Shared helpers callable from mod_ui_smooth_part2.cpp & mod_menu_camera_options.cpp
 uint32_t __cdecl GetSmoothMenuRainbow(int frame);
 int32_t  __cdecl GetSmoothLevelSelectScrollY(const uint8_t* ls);
+void     __cdecl DrawSmoothRainbowSprite(
+    uint8_t** sprites, uint32_t ucnt, uint32_t idx, int w, int h, int x, int y, int alpha
+);
 int __cdecl MeasureTextWidth(const EdgeWString* ws, int scaleX, int extraX);
 int __cdecl DrawTextAutoFit(
     const EdgeWString* ws, int x, int y, int scaleX, int scaleY,

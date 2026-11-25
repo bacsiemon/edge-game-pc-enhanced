@@ -28,6 +28,9 @@ float    g_etRemTmp    = 0.0f;
 float    g_etTicksTmp  = 0.0f;
 uint8_t  g_lsFlashPrev[64]{};
 uint32_t g_hudMatOrig[16]{};
+const uint8_t* g_creditsActiveObj = nullptr;
+float    g_creditsSubFracY = 0.0f;
+float    g_debNrSubFracX   = 0.0f;
 
 static void SnapSubState(uint8_t* sub, uint32_t vt) {
     g_extSubPtr = sub;
@@ -167,6 +170,8 @@ static void __fastcall ScoresRenderWrap_Impl(uint8_t* scoresMenu, void*, uint32_
 }
 
 static void __fastcall CreditsRenderWrap_Impl(uint8_t* cm, void*, uint32_t arg1) {
+    g_creditsActiveObj = cm;
+    g_creditsSubFracY = 0.0f;
     float saved4c = *reinterpret_cast<float*>(cm + 0x4c);
     if (cm[0x48] != 0 && cm[0x49] == 0 && *reinterpret_cast<int32_t*>(cm + 0x4) >= 5) {
         float speed = *reinterpret_cast<float*>(cm + 0x50);
@@ -176,9 +181,98 @@ static void __fastcall CreditsRenderWrap_Impl(uint8_t* cm, void*, uint32_t arg1)
             if (eff < minY) eff = minY;
         }
         *reinterpret_cast<float*>(cm + 0x4c) = eff;
+        g_creditsSubFracY = eff - static_cast<float>(static_cast<int32_t>(eff));
     }
     reinterpret_cast<void(__thiscall*)(void*, uint32_t)>(0x4a1a70)(cm, arg1);
     *reinterpret_cast<float*>(cm + 0x4c) = saved4c;
+    g_creditsSubFracY = 0.0f;
+    g_creditsActiveObj = nullptr;
+}
+
+static int32_t __cdecl CreditsIntroFadePct_Impl(const uint8_t* cm) {
+    float sp = *reinterpret_cast<const float*>(cm + 0x4c);
+    if (sp >= 8.0f) return -1;
+    return ClampPct0_100(sp * 12.5f);
+}
+
+static void __declspec(naked) hk_creditsIntroFade() {
+    __asm {
+        push ebx
+        call CreditsIntroFadePct_Impl
+        add esp, 4
+        test eax, eax
+        jl cif_done
+        mov edx, 0x4a1ac4
+        jmp edx
+    cif_done:
+        mov cl, BYTE PTR [ebx + 0x18]
+        mov edx, 0x4a1b1d
+        jmp edx
+    }
+}
+
+static int __cdecl CreditsDrawText_Impl(
+    const EdgeWString* ws, int x, int y, int scaleX, int scaleY,
+    int shadowFlag, int a7, int alignFlags
+) {
+    ScopedUiMatrixTranslate matGuard(0.0f, g_creditsSubFracY);
+    return Game_DrawText(ws, x, y, scaleX, scaleY, shadowFlag, a7, alignFlags);
+}
+
+static int __cdecl CreditsDrawGameOver_Impl(
+    const EdgeWString* ws, int x, int y, int scaleX, int scaleY,
+    int shadowFlag, int a7, int alignFlags
+) {
+    if (g_creditsActiveObj != nullptr && g_creditsActiveObj[0x49] == 0) {
+        return CreditsDrawText_Impl(ws, x, y, scaleX, scaleY, shadowFlag, a7, alignFlags);
+    }
+    return Game_DrawText(ws, x, y, scaleX, scaleY, shadowFlag, a7, alignFlags);
+}
+
+static uint32_t __cdecl CreditsHalfSpeedRb_Impl(int32_t frame, int32_t idx) {
+    float f = (static_cast<float>(frame) + g_uiAlpha) * 0.5f + static_cast<float>(idx);
+    return CalcSmoothRainbow(f, 1.0f);
+}
+
+static void __declspec(naked) hk_creditsHdrRb() {
+    __asm {
+        mov eax, DWORD PTR [ebp - 0x40]
+        lea ecx, [eax + 1]
+        mov DWORD PTR [ebp - 0x40], ecx
+        push eax
+        push DWORD PTR [ebp - 0x58]
+        call CreditsHalfSpeedRb_Impl
+        add esp, 8
+        mov edx, eax
+        mov eax, DWORD PTR [ebp - 0x4c]
+        mov ecx, 0x4a1c45
+        jmp ecx
+    }
+}
+
+static void __declspec(naked) hk_creditsEndRb() {
+    __asm {
+        push DWORD PTR [ebp - 0x40]
+        push DWORD PTR [ebp - 0x58]
+        call CreditsHalfSpeedRb_Impl
+        add esp, 8
+        mov edx, eax
+        mov BYTE PTR [ebp - 0x3d], 0xff
+        mov ecx, 0x4a1d04
+        jmp ecx
+    }
+}
+
+static void __declspec(naked) hk_creditsCompRb() {
+    __asm {
+        push ecx
+        push edi
+        call GetSmoothMenuRainbow
+        add esp, 4
+        pop ecx
+        mov edx, 0x4a1e0b
+        jmp edx
+    }
 }
 
 static void __cdecl ScoresCardFlip_Impl(uint8_t* sm, int32_t cardIdx, uint8_t* outBack, int32_t* outScale70, int32_t* outScaleTxt) {
@@ -314,12 +408,6 @@ static void __declspec(naked) hk_drawBtnRainbow() {
         add esp, 8
         ret
     }
-}
-
-static uint32_t __cdecl GetSmoothSlotRainbow(int32_t frame) {
-    uint32_t col = ApplyMenuSlotRainbowStyle(GetSmoothMenuRainbow(frame));
-    g_rbTmp = col;
-    return col;
 }
 
 // ScoresSelectMenu rainbow hooks
@@ -689,6 +777,7 @@ static uint32_t __cdecl DebColorStage_Impl(
 }
 
 static uint32_t __cdecl DebNrScale_Impl(const uint8_t* deb, int32_t* outScale) {
+    g_debNrSubFracX = 0.0f;
     float eff = GetDebEff44(deb);
     if (eff < 14.0f) eff = 14.0f;
     if (eff > 19.0f) eff = 19.0f;
@@ -708,15 +797,32 @@ static void __declspec(naked) hk_debNrScale() {
 }
 
 static int32_t __cdecl CalcDebNrMarqueeDelta(const uint8_t* deb, int32_t width) {
-    if (width <= 0) return 0;
+    if (width <= 0) {
+        g_debNrSubFracX = 0.0f;
+        return 0;
+    }
     double eff = static_cast<double>(GetDebEff44(deb));
     double f = eff * 4.0 - 76.0;
-    if (f <= 0.0) return 0;
+    if (f <= 0.0) {
+        g_debNrSubFracX = 0.0f;
+        return 0;
+    }
     double rem = std::fmod(f, static_cast<double>(width));
-    int32_t d = static_cast<int32_t>(std::floor(rem));
+    if (rem < 0.0) rem += static_cast<double>(width);
+    double fl = std::floor(rem);
+    g_debNrSubFracX = static_cast<float>(rem - fl);
+    int32_t d = static_cast<int32_t>(fl);
     if (d < 0) d = 0;
     if (d >= width) d %= width;
     return d;
+}
+
+static int __cdecl DebNrDrawText_Impl(
+    const EdgeWString* ws, int x, int y, int scaleX, int scaleY,
+    int shadowFlag, int a7, int alignFlags
+) {
+    ScopedUiMatrixTranslate matGuard(-g_debNrSubFracX, 0.0f);
+    return Game_DrawText(ws, x, y, scaleX, scaleY, shadowFlag, a7, alignFlags);
 }
 
 static void __declspec(naked) hk_debNrMarquee() {
@@ -2146,9 +2252,26 @@ void __cdecl RenderPauseHeaderTimer(int x, int y, int width) {
 } // namespace edgemod
 
 void RegisterUiSmoothPart2() {
-    // ScoresMenu & CreditsMenu vtable[2]
+    // ScoresMenu & CreditsMenu vtable[2] + CreditsMenu smooth fade/scroll/rainbows
     RegU32(0x58d120, 0x4af660, reinterpret_cast<uint32_t>(&ScoresRenderWrap_Impl));
     RegU32(0x58b9d8, 0x4a1a70, reinterpret_cast<uint32_t>(&CreditsRenderWrap_Impl));
+    {
+        const uint8_t exCif[10] = {0xf3, 0x0f, 0x2c, 0x43, 0x4c, 0x83, 0xf8, 0x08, 0x7d, 0x65};
+        RegRelJmp(0x4a1aae, exCif, 10, 5, &hk_creditsIntroFade, 0x90, 0x4a1ac4);
+
+        const uint8_t exCdt1[5] = {0xe8, 0xf2, 0x4f, 0x00, 0x00};
+        RegRelCall(0x4a1c89, exCdt1, 5, 5, reinterpret_cast<void*>(&CreditsDrawText_Impl));
+
+        const uint8_t exCdt2[5] = {0xe8, 0x10, 0x4f, 0x00, 0x00};
+        RegRelCall(0x4a1d6b, exCdt2, 5, 5, reinterpret_cast<void*>(&CreditsDrawGameOver_Impl));
+
+        const uint8_t exChdr[10] = {0x8b, 0x45, 0xa8, 0xd1, 0xe8, 0x03, 0x45, 0xc0, 0x33, 0xd2};
+        RegRelJmp(0x4a1c27, exChdr, 10, 5, &hk_creditsHdrRb, 0x90, 0x4a1c45);
+        RegRelJmp(0x4a1ce8, exChdr, 10, 5, &hk_creditsEndRb, 0x90, 0x4a1d04);
+
+        const uint8_t exCcomp[10] = {0xb8, 0x4f, 0xec, 0xc4, 0x4e, 0xf7, 0xe7, 0xc1, 0xea, 0x02};
+        RegRelJmp(0x4a1df3, exCcomp, 10, 5, &hk_creditsCompRb, 0x90, 0x4a1e0b);
+    }
 
     // ScoresMenu card flip & dots
     {
@@ -2256,9 +2379,12 @@ void RegisterUiSmoothPart2() {
         RegRelCall(0x4aaece, exNrS, 6, 0x4aaeff - 0x4aaece, &hk_debNrScale);
 
         const uint8_t exNrM[8] = {0x83, 0x7a, 0x44, 0x13, 0x89, 0x8d, 0x24, 0xff};
-        // Note: 0x4aaf17 needs `mov [ebp-0xdc], ecx; lea edi, [eax+0xa]; cmp [edx+0x44], 19; jl skip; call hk_debNrMarquee`
-        // Let's write a small naked bridge `hk_debNrMarqueeGate` via RegRelJmp at 0x4aaf17!
         RegRelJmp(0x4aaf17, exNrM, 8, 5, &hk_debNrMarquee, 0x90, 0x4aaf37);
+
+        const uint8_t exNrDt1[5] = {0xe8, 0xee, 0xbc, 0xff, 0xff};
+        RegRelCall(0x4aaf8d, exNrDt1, 5, 5, reinterpret_cast<void*>(&DebNrDrawText_Impl));
+        const uint8_t exNrDt2[5] = {0xe8, 0x8d, 0xbc, 0xff, 0xff};
+        RegRelCall(0x4aafee, exNrDt2, 5, 5, reinterpret_cast<void*>(&DebNrDrawText_Impl));
 
         const uint8_t exRsx[9] = {0x83, 0xf8, 0x19, 0x0f, 0x8c, 0xc2, 0x01, 0x00, 0x00};
         RegRelJmp(0x4aabe2, exRsx, 9, 5, &hk_debRankSlideX, 0x90, 0x4aac1b);

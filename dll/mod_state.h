@@ -1,6 +1,7 @@
 #pragma once
 
 #include "patch_utils.h"
+#include <string>
 
 namespace edgemod {
 
@@ -212,6 +213,10 @@ void __cdecl BeginGhostCubeDistortion(void* worldScreen);
 void __cdecl ResetCubeDistortionState();
 void EnsureMusicPlaylistReady();
 void OnMusicPlaylistChanged();
+bool IsSupportedMusicExtension(const char* extWithDot);
+std::string GetActiveSoundFontPath();
+float GetActiveSoundFontGainDb();
+void* CreateCustomMusicDecoder(const char* fullPath, const char* soundFontPath, float soundFontGainDb = 0.0f);
 float __cdecl ComputeEdgeTimerZoomScale(const uint8_t* ws, int32_t slot);
 void  __cdecl RenderEdgeTimer3D();
 void  __cdecl GetEdgeTimerSmoothState(const uint8_t* ws, int32_t slot, float* outEffTicks, float* outEffRise, uint32_t* outBaseRgb);

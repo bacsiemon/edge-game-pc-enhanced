@@ -1,7 +1,9 @@
 #include "mod_state.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 namespace {
 
@@ -199,6 +201,269 @@ static void __cdecl ApplyVolOnLoad_Impl(uint8_t* sm) {
     }
 }
 
+// ------------------------------------------------------------------
+// 4. Hint Ghost SFX volume reduction & infinite loop fix
+// ------------------------------------------------------------------
+static uint16_t ReadLe16(const uint8_t* p, size_t off) {
+    return static_cast<uint16_t>(p[off]) | (static_cast<uint16_t>(p[off + 1]) << 8);
+}
+
+static uint32_t ReadLe32(const uint8_t* p, size_t off) {
+    return static_cast<uint32_t>(p[off]) |
+           (static_cast<uint32_t>(p[off + 1]) << 8) |
+           (static_cast<uint32_t>(p[off + 2]) << 16) |
+           (static_cast<uint32_t>(p[off + 3]) << 24);
+}
+
+static void WriteLe16(std::vector<uint8_t>& buf, size_t off, uint16_t v) {
+    buf[off + 0] = static_cast<uint8_t>(v & 0xffu);
+    buf[off + 1] = static_cast<uint8_t>((v >> 8) & 0xffu);
+}
+
+static void WriteLe32(std::vector<uint8_t>& buf, size_t off, uint32_t v) {
+    buf[off + 0] = static_cast<uint8_t>(v & 0xffu);
+    buf[off + 1] = static_cast<uint8_t>((v >> 8) & 0xffu);
+    buf[off + 2] = static_cast<uint8_t>((v >> 16) & 0xffu);
+    buf[off + 3] = static_cast<uint8_t>((v >> 24) & 0xffu);
+}
+
+static uint16_t ComputeXsbFcs16(const uint8_t* data, size_t len) {
+    uint16_t crc = 0xffffu;
+    for (size_t i = 0; i < len; ++i) {
+        crc ^= data[i];
+        for (int b = 0; b < 8; ++b) {
+            crc = (crc & 1u) ? static_cast<uint16_t>((crc >> 1) ^ 0x8408u) : static_cast<uint16_t>(crc >> 1);
+        }
+    }
+    return static_cast<uint16_t>(crc ^ 0xffffu);
+}
+
+static uint8_t ScaleXactVolByte(uint8_t oldVol, int num, int den) {
+    long scaled = std::lround(static_cast<double>(oldVol) * static_cast<double>(num) / static_cast<double>(den));
+    if (scaled < 1) scaled = 1;
+    if (scaled > 255) scaled = 255;
+    return static_cast<uint8_t>(scaled);
+}
+
+static bool PatchHologramSoundBank(const uint8_t* src, uint32_t srcSize, std::vector<uint8_t>& out) {
+    if (src == nullptr || srcSize < 0x4au) return false;
+    if (ReadLe32(src, 0x00) != 0x4b424453u) return false; // "SDBK"
+    if (ReadLe16(src, 0x04) < 43u || ReadLe16(src, 0x06) != 43u) return false;
+
+    const uint16_t cueSimpleCount  = ReadLe16(src, 0x13);
+    const uint16_t cueComplexCount = ReadLe16(src, 0x15);
+    const uint16_t soundCount      = ReadLe16(src, 0x1c);
+    const uint32_t cueSimpleOff    = ReadLe32(src, 0x22);
+    const uint32_t cueNameOff      = ReadLe32(src, 0x2a);
+    const uint32_t varOff          = ReadLe32(src, 0x32);
+    const uint32_t transOff        = ReadLe32(src, 0x36);
+    const uint32_t cueNameIdxOff   = ReadLe32(src, 0x42);
+    const uint32_t soundOff        = ReadLe32(src, 0x46);
+
+    if (cueSimpleCount == 0 || cueSimpleOff == 0xffffffffu || cueNameOff == 0xffffffffu || soundOff == 0xffffffffu) {
+        return false;
+    }
+    if (cueSimpleOff + static_cast<uint32_t>(cueSimpleCount) * 5u > srcSize || cueNameOff >= srcSize) {
+        return false;
+    }
+
+    uint32_t loopSndOff  = 0xffffffffu;
+    uint32_t onOffSndOff = 0xffffffffu;
+    uint32_t namePos = cueNameOff;
+    for (uint16_t i = 0; i < cueSimpleCount && namePos < srcSize; ++i) {
+        const char* cueName = reinterpret_cast<const char*>(src + namePos);
+        size_t maxLen = srcSize - namePos;
+        size_t len = 0;
+        while (len < maxLen && cueName[len] != '\0') ++len;
+        if (len >= maxLen) break;
+
+        if (_stricmp(cueName, "hologram_loop") == 0) {
+            loopSndOff = ReadLe32(src, cueSimpleOff + static_cast<size_t>(i) * 5u + 1u);
+        } else if (_stricmp(cueName, "hologram_on-off") == 0) {
+            onOffSndOff = ReadLe32(src, cueSimpleOff + static_cast<size_t>(i) * 5u + 1u);
+        }
+        namePos += static_cast<uint32_t>(len + 1u);
+    }
+
+    if (loopSndOff == 0xffffffffu && onOffSndOff == 0xffffffffu) {
+        return false;
+    }
+
+    const bool allSimpleContiguous =
+        soundCount > 0 &&
+        soundOff < cueSimpleOff &&
+        soundOff + static_cast<uint32_t>(soundCount) * 12u == cueSimpleOff &&
+        cueComplexCount == 0 &&
+        varOff == 0xffffffffu &&
+        transOff == 0xffffffffu;
+
+    if (loopSndOff != 0xffffffffu &&
+        loopSndOff + 12u <= srcSize &&
+        (src[loopSndOff] & 0x01u) == 0u &&
+        allSimpleContiguous) {
+        constexpr uint32_t kDelta = 24u;
+        uint8_t cs[36] = {};
+        cs[0x00] = 0x01; // SOUND_FLAG_COMPLEX
+        cs[0x01] = src[loopSndOff + 1u];
+        cs[0x02] = src[loopSndOff + 2u];
+        cs[0x03] = ScaleXactVolByte(src[loopSndOff + 3u], 48, 90);
+        cs[0x04] = src[loopSndOff + 4u];
+        cs[0x05] = src[loopSndOff + 5u];
+        cs[0x06] = src[loopSndOff + 6u];
+        cs[0x07] = 36u;
+        cs[0x08] = 0u;
+        cs[0x09] = 1u;   // trackCount
+        cs[0x0a] = 0xb4; // 180 = 0.0 dB track volume
+        const uint32_t evtOff = loopSndOff + 19u;
+        cs[0x0b] = static_cast<uint8_t>(evtOff & 0xffu);
+        cs[0x0c] = static_cast<uint8_t>((evtOff >> 8) & 0xffu);
+        cs[0x0d] = static_cast<uint8_t>((evtOff >> 16) & 0xffu);
+        cs[0x0e] = static_cast<uint8_t>((evtOff >> 24) & 0xffu);
+        cs[0x13] = 1u;   // eventCount
+        // evtInfo: FACTEVENT_PLAYWAVE (1) | timestamp (0) | first-event bit 29 (0x20000000)
+        cs[0x14] = 0x01u;
+        cs[0x15] = 0x00u;
+        cs[0x16] = 0x00u;
+        cs[0x17] = 0x20u;
+        cs[0x1a] = 0xffu; // separator
+        cs[0x1c] = src[loopSndOff + 9u];  // waveIndex lo
+        cs[0x1d] = src[loopSndOff + 10u]; // waveIndex hi
+        cs[0x1e] = src[loopSndOff + 11u]; // waveBank
+        cs[0x1f] = 0xffu; // loopCount = XACTLOOPCOUNT_INFINITE
+
+        out.clear();
+        out.reserve(srcSize + kDelta);
+        out.insert(out.end(), src, src + loopSndOff);
+        out.insert(out.end(), cs, cs + sizeof(cs));
+        out.insert(out.end(), src + loopSndOff + 12u, src + srcSize);
+
+        if (onOffSndOff != 0xffffffffu) {
+            const uint32_t newOnOff = onOffSndOff + (onOffSndOff > loopSndOff ? kDelta : 0u);
+            if (newOnOff + 9u <= out.size()) {
+                out[newOnOff + 3u] = ScaleXactVolByte(out[newOnOff + 3u], 56, 90);
+            }
+        }
+
+        static constexpr size_t kHdrOffs[10] = {0x22, 0x26, 0x2a, 0x2e, 0x32, 0x36, 0x3a, 0x3e, 0x42, 0x46};
+        for (size_t hOff : kHdrOffs) {
+            const uint32_t v = ReadLe32(out.data(), hOff);
+            if (v != 0xffffffffu && v > loopSndOff) {
+                WriteLe32(out, hOff, v + kDelta);
+            }
+        }
+
+        const uint32_t newSimpleOff = ReadLe32(out.data(), 0x22);
+        if (newSimpleOff != 0xffffffffu && newSimpleOff + static_cast<uint32_t>(cueSimpleCount) * 5u <= out.size()) {
+            for (uint16_t i = 0; i < cueSimpleCount; ++i) {
+                const size_t cOff = newSimpleOff + static_cast<size_t>(i) * 5u + 1u;
+                const uint32_t sc = ReadLe32(out.data(), cOff);
+                if (sc > loopSndOff) {
+                    WriteLe32(out, cOff, sc + kDelta);
+                }
+            }
+        }
+
+        const uint32_t newNameIdxOff = (cueNameIdxOff != 0xffffffffu) ? ReadLe32(out.data(), 0x42) : 0xffffffffu;
+        if (newNameIdxOff != 0xffffffffu && newNameIdxOff + static_cast<uint32_t>(cueSimpleCount) * 6u <= out.size()) {
+            for (uint16_t i = 0; i < cueSimpleCount; ++i) {
+                const size_t niOff = newNameIdxOff + static_cast<size_t>(i) * 6u;
+                const uint32_t no = ReadLe32(out.data(), niOff);
+                if (no > loopSndOff) {
+                    WriteLe32(out, niOff, no + kDelta);
+                }
+            }
+        }
+    } else {
+        out.assign(src, src + srcSize);
+        if (onOffSndOff != 0xffffffffu && onOffSndOff + 9u <= out.size()) {
+            out[onOffSndOff + 3u] = ScaleXactVolByte(out[onOffSndOff + 3u], 56, 90);
+        }
+        if (loopSndOff != 0xffffffffu && loopSndOff + 12u <= out.size()) {
+            out[loopSndOff + 3u] = ScaleXactVolByte(out[loopSndOff + 3u], 48, 90);
+            if ((src[loopSndOff] & 0x1fu) == 0x01u && loopSndOff + 19u <= out.size() && out[loopSndOff + 9u] >= 1u) {
+                const uint32_t trackCode = ReadLe32(out.data(), loopSndOff + 11u);
+                if (trackCode + 17u <= out.size() &&
+                    out[trackCode] >= 1u &&
+                    (ReadLe32(out.data(), trackCode + 1u) & 0x1fu) == 1u &&
+                    out[trackCode + 7u] == 0xffu) {
+                    out[trackCode + 12u] = 0xffu;
+                }
+            }
+        }
+    }
+
+    WriteLe16(out, 0x08, ComputeXsbFcs16(out.data() + 0x12, out.size() - 0x12));
+    return true;
+}
+
+static HRESULT __cdecl CreatePatchedSoundBank_Impl(
+    void* xactEngine, const void* pvBuf, uint32_t dwSize, void** ppSoundBank
+) {
+    using CreateSoundBankFn = HRESULT(__stdcall*)(void*, const void*, uint32_t, uint32_t, uint32_t, void**);
+    auto** vt = *reinterpret_cast<void***>(xactEngine);
+    auto createSb = reinterpret_cast<CreateSoundBankFn>(vt[0x24 / 4]);
+
+    static std::vector<uint8_t> g_patchedXsbBuf;
+    std::vector<uint8_t> patched;
+    if (PatchHologramSoundBank(static_cast<const uint8_t*>(pvBuf), dwSize, patched)) {
+        g_patchedXsbBuf = std::move(patched);
+        HRESULT hr = createSb(xactEngine, g_patchedXsbBuf.data(), static_cast<uint32_t>(g_patchedXsbBuf.size()), 0, 0, ppSoundBank);
+        if (SUCCEEDED(hr)) {
+            return hr;
+        }
+        g_patchedXsbBuf.clear();
+    }
+    return createSb(xactEngine, pvBuf, dwSize, 0, 0, ppSoundBank);
+}
+
+static void __declspec(naked) hk_xactCreateSoundBank() {
+    // Replaces 21 bytes at 0x43de15..0x43de2a inside XactSoundSystem::loadSoundBank.
+    // Inputs: edi = XactSoundSystem* ([edi+4] = IXACT3Engine*), edx = pvBuffer, ecx = dwSize, esi = path EdgeString*.
+    // Output: eax = HRESULT, ebx = &ppSoundBank (ebp - 0x44), esi/ebp preserved.
+    __asm {
+        lea ebx, [ebp - 0x44]
+        push ebx
+        push ecx
+        push edx
+        push DWORD PTR [edi + 0x4]
+        call CreatePatchedSoundBank_Impl
+        add esp, 16
+        ret
+    }
+}
+
+static void __stdcall GhostPlayLoop_Impl(uint8_t* sm, int sfxId) {
+    if (sm == nullptr) return;
+    reinterpret_cast<void(__thiscall*)(void*, int)>(0x481610)(sm, sfxId);
+    Game_PlaySfx(sm, sfxId);
+}
+
+static void __declspec(naked) hk_ghostPlayLoop() {
+    // Replaces `call 0x4815f0` at 0x47a84e (__thiscall: ecx = ScreenMgr*, [esp+4] = sfxId).
+    __asm {
+        pop eax
+        pop edx
+        push edx
+        push ecx
+        push eax
+        jmp GhostPlayLoop_Impl
+    }
+}
+
+static uint32_t __fastcall ResetGhost_Impl(uint8_t* ws) {
+    if (ws != nullptr) {
+        ws[0x48] = 0;
+        ws[0x50] = 0;
+        *reinterpret_cast<uint32_t*>(ws + 0x64) = 0;
+        *reinterpret_cast<uint32_t*>(ws + 0x68) = 0;
+    }
+    uint8_t* sm = GetScreenMgr();
+    if (sm != nullptr) {
+        reinterpret_cast<void(__thiscall*)(void*, int)>(0x481610)(sm, 0x15);
+    }
+    return 0;
+}
+
 static LRESULT CALLBACK hk_GameWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     bool updateFocus = false;
     bool focused = g_windowFocused;
@@ -381,5 +646,22 @@ void RegisterCoreFixes() {
         RegRelCall(0x482b7f, expLoad, 5, 5, &hk_applyVolOnLoad, 0x90);
 
         RegU32(0x44d72f, 0x0044d4e0u, reinterpret_cast<uint32_t>(&hk_GameWndProc));
+    }
+
+    // 4. Hint Ghost SFX volume reduction & native infinite loop
+    {
+        static const uint8_t expCreateSb[21] = {
+            0x8b, 0x47, 0x04, 0x8b, 0x38, 0x8d, 0x5d, 0xbc, 0x53, 0x6a, 0x00,
+            0x6a, 0x00, 0x51, 0x52, 0x8b, 0x57, 0x24, 0x50, 0xff, 0xd2
+        };
+        RegRelCall(0x43de15, expCreateSb, 21, 21, &hk_xactCreateSoundBank, 0x90);
+
+        static const uint8_t expGhostLoop[5] = {0xe8, 0x9d, 0x6d, 0x00, 0x00};
+        RegRelCall(0x47a84e, expGhostLoop, 5, 5, &hk_ghostPlayLoop);
+
+        static const uint8_t expResetGhost[15] = {
+            0x33, 0xc0, 0x88, 0x41, 0x48, 0x88, 0x41, 0x50, 0x89, 0x41, 0x64, 0x89, 0x41, 0x68, 0xc3
+        };
+        RegRelJmp(0x479740, expResetGhost, 15, 15, &ResetGhost_Impl, 0x90, 0x47974f);
     }
 }

@@ -39,6 +39,7 @@ DLL_SOURCES = [
     "xinput_proxy.cpp",
     "mod_core_fixes.cpp",
     "mod_music_playlist.cpp",
+    "mod_music_decoders.cpp",
     "mod_ui_scale_rt.cpp",
     "mod_menu_camera_options.cpp",
     "mod_finish_effects.cpp",
@@ -82,7 +83,7 @@ def compile_dll_and_verifier() -> None:
         "@echo off\r\n"
         f'call "{vcvars}" x86 >nul || exit /b 1\r\n'
         f'cl.exe /nologo /O2 /arch:SSE2 /EHsc /MT /std:c++17 /W3 '
-        f'/Fo"{BUILD_DIR}\\\\" /Fe"{DLL_OUT}" /LD {srcs} {def_file} user32.lib || exit /b 1\r\n'
+        f'/Fo"{BUILD_DIR}\\\\" /Fe"{DLL_OUT}" /LD {srcs} {def_file} user32.lib ole32.lib || exit /b 1\r\n'
         f'cl.exe /nologo /O2 /EHsc /MT /std:c++17 /W3 '
         f'/Fo"{BUILD_DIR}\\\\" /Fe"{VERIFIER_OUT}" "{DLL_DIR / "verify_dll.cpp"}" || exit /b 1\r\n'
     )

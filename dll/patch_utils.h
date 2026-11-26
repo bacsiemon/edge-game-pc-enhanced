@@ -211,6 +211,7 @@ inline bool ApplyAllRegisteredPatches() {
 
 void RegisterCoreFixes();
 void RegisterMusicPlaylist();
+void RegisterMusicDecoders();
 void RegisterUiScaleAndRt();
 void RegisterMenuCameraOptions();
 void RegisterFinishEffects();

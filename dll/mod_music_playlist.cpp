@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <random>
 #include <string>
@@ -183,15 +185,25 @@ static const CanonicalLevel kCanonicalLevels[] = {
     {"level550",        8,  109},
 };
 
+static constexpr const char* kDefaultFallbackSoundFont =
+    "D:\\Games\\Mods\\EDGE mod\\java\\ost\\Bada_Mobile_0300_base.sf2";
+
+static const char* const kMusicExts[] = {
+    ".ogg", ".flac", ".wav", ".mp3", ".m4a", ".aac", ".wma", ".aif", ".aiff", ".opus", ".mid", ".midi"
+};
+
 static bool                                      g_playlistLoaded = false;
 static FILETIME                                  g_xmlLastWrite{};
+static std::string                               g_xmlSoundFont;
+static float                                     g_xmlSoundFontGainDb = 0.0f;
 static PlaylistPair                              g_titleTracks   = {"00_Title", "100_menus"};
 static PlaylistPair                              g_debriefTracks = {"13_Debrief", "13_Debrief"};
 static std::vector<PlaylistLevelEntry>           g_levelEntries;
 static std::unordered_map<std::string, size_t>   g_levelIndex;
 static std::string                               g_currentLevelName;
 static int                                       g_currentLevelFileMusicId = -1;
-static std::string                               g_lastPlayedStem;
+static std::string                               g_lastPlayedPath;
+static std::string                               g_lastPlayedSoundFont;
 
 static std::string ToLowerAscii(const std::string& s) {
     std::string out = s;
@@ -258,35 +270,128 @@ static std::string GetPlaylistXmlPath() {
     return JoinExePath("music\\playlist.xml");
 }
 
-static bool MusicOggExists(const std::string& stem) {
-    if (stem.empty()) return false;
-    std::string rel = "music\\" + stem + ".ogg";
-    std::string full = JoinExePath(rel.c_str());
-    DWORD attrs = GetFileAttributesA(full.c_str());
+static bool FileExistsOnDisk(const std::string& path) {
+    if (path.empty()) return false;
+    DWORD attrs = GetFileAttributesA(path.c_str());
     return (attrs != INVALID_FILE_ATTRIBUTES) && ((attrs & FILE_ATTRIBUTE_DIRECTORY) == 0);
 }
 
-static bool TryFindCustomMusicStem(const char* pattern, char* outStem, size_t outCap) {
+static bool IsAbsoluteTrackPath(const std::string& p) {
+    if (p.size() >= 2 && std::isalpha(static_cast<unsigned char>(p[0])) && p[1] == ':') return true;
+    if (p.size() >= 2 && ((p[0] == '\\' && p[1] == '\\') || (p[0] == '/' && p[1] == '/'))) return true;
+    if (!p.empty() && (p[0] == '\\' || p[0] == '/')) return true;
+    return false;
+}
+
+static bool HasSupportedMusicExt(const std::string& spec, std::string* outExt = nullptr) {
+    size_t slash = spec.find_last_of("/\\");
+    size_t dot = spec.find_last_of('.');
+    if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) {
+        return false;
+    }
+    std::string ext = spec.substr(dot);
+    if (!IsSupportedMusicExtension(ext.c_str())) {
+        return false;
+    }
+    if (outExt != nullptr) *outExt = ext;
+    return true;
+}
+
+static std::string ResolveSoundFontCandidate(const std::string& spec) {
+    std::string s = TrimAscii(spec);
+    if (s.empty()) return {};
+    if (IsAbsoluteTrackPath(s)) {
+        return FileExistsOnDisk(s) ? s : std::string{};
+    }
+    std::string norm = s;
+    for (char& ch : norm) {
+        if (ch == '/') ch = '\\';
+    }
+    if (!StartsWithNoCase(norm, "music\\")) {
+        std::string inMusic = JoinExePath(("music\\" + norm).c_str());
+        if (FileExistsOnDisk(inMusic)) return inMusic;
+    }
+    std::string inExe = JoinExePath(norm.c_str());
+    if (FileExistsOnDisk(inExe)) return inExe;
+    return {};
+}
+
+static std::string ResolveTrackFilePath(const std::string& spec) {
+    std::string s = TrimAscii(spec);
+    if (s.empty()) return {};
+
+    if (IsAbsoluteTrackPath(s)) {
+        return FileExistsOnDisk(s) ? s : std::string{};
+    }
+
+    std::string relSlash = s;
+    for (char& ch : relSlash) {
+        if (ch == '\\') ch = '/';
+    }
+    if (StartsWithNoCase(relSlash, "music/")) {
+        relSlash = relSlash.substr(6);
+    }
+    if (relSlash.empty()) return {};
+
+    std::string relBack = relSlash;
+    for (char& ch : relBack) {
+        if (ch == '/') ch = '\\';
+    }
+
+    if (HasSupportedMusicExt(relSlash)) {
+        std::string full = JoinExePath(("music\\" + relBack).c_str());
+        if (FileExistsOnDisk(full)) {
+            return "music/" + relSlash;
+        }
+        return {};
+    }
+
+    for (const char* ext : kMusicExts) {
+        std::string candBack = relBack + ext;
+        if (FileExistsOnDisk(JoinExePath(("music\\" + candBack).c_str()))) {
+            return "music/" + relSlash + ext;
+        }
+    }
+    return {};
+}
+
+static std::string TryFindCustomMusicSpec(const char* pattern) {
     WIN32_FIND_DATAA fd{};
     HANDLE hFind = FindFirstFileA(pattern, &fd);
     if (hFind == INVALID_HANDLE_VALUE) {
-        return false;
+        return {};
     }
-    bool found = false;
+    std::string bestFile;
+    int bestRank = 999;
     do {
         if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
             continue;
         }
-        size_t len = std::strlen(fd.cFileName);
-        if (len > 4 && (len - 4) < outCap && _stricmp(fd.cFileName + len - 4, ".ogg") == 0) {
-            std::memcpy(outStem, fd.cFileName, len - 4);
-            outStem[len - 4] = '\0';
-            found = true;
-            break;
+        std::string fname(fd.cFileName);
+        std::string ext;
+        if (!HasSupportedMusicExt(fname, &ext)) {
+            continue;
+        }
+        int rank = 999;
+        for (int i = 0; i < static_cast<int>(sizeof(kMusicExts) / sizeof(kMusicExts[0])); ++i) {
+            if (_stricmp(ext.c_str(), kMusicExts[i]) == 0) {
+                rank = i;
+                break;
+            }
+        }
+        if (rank < bestRank) {
+            bestRank = rank;
+            bestFile = fname;
+            if (rank == 0) break;
         }
     } while (FindNextFileA(hFind, &fd));
     FindClose(hFind);
-    return found;
+
+    if (bestFile.empty()) return {};
+    if (EndsWithNoCase(bestFile, ".ogg")) {
+        bestFile.resize(bestFile.size() - 4);
+    }
+    return bestFile;
 }
 
 static std::string ResolveIdToStem(int musicId) {
@@ -298,16 +403,18 @@ static std::string ResolveIdToStem(int musicId) {
         char patExact[MAX_PATH + 32] = {};
         const std::string& exeDir = GetExeDir();
         if (!exeDir.empty()) {
-            std::snprintf(patPrefix, sizeof(patPrefix), "%s\\music\\%d_*.ogg", exeDir.c_str(), musicId);
-            std::snprintf(patExact, sizeof(patExact), "%s\\music\\%d.ogg", exeDir.c_str(), musicId);
+            std::snprintf(patPrefix, sizeof(patPrefix), "%s\\music\\%d_*.*", exeDir.c_str(), musicId);
+            std::snprintf(patExact, sizeof(patExact), "%s\\music\\%d.*", exeDir.c_str(), musicId);
         } else {
-            std::snprintf(patPrefix, sizeof(patPrefix), "music\\%d_*.ogg", musicId);
-            std::snprintf(patExact, sizeof(patExact), "music\\%d.ogg", musicId);
+            std::snprintf(patPrefix, sizeof(patPrefix), "music\\%d_*.*", musicId);
+            std::snprintf(patExact, sizeof(patExact), "music\\%d.*", musicId);
         }
-        char stem[MAX_PATH] = {};
-        if (TryFindCustomMusicStem(patPrefix, stem, sizeof(stem)) ||
-            TryFindCustomMusicStem(patExact, stem, sizeof(stem))) {
-            return stem;
+        std::string found = TryFindCustomMusicSpec(patPrefix);
+        if (found.empty()) {
+            found = TryFindCustomMusicSpec(patExact);
+        }
+        if (!found.empty()) {
+            return found;
         }
         if (musicId >= 100 && musicId <= 111) {
             return kJavaMusic[musicId - 100];
@@ -334,11 +441,12 @@ static std::string NormalizeTrackSpec(const std::string& raw) {
         return {};
     }
 
+    if (IsAbsoluteTrackPath(s)) {
+        return s;
+    }
+
     if (StartsWithNoCase(s, "music/") || StartsWithNoCase(s, "music\\")) {
         s = s.substr(6);
-    }
-    if (EndsWithNoCase(s, ".ogg")) {
-        s.resize(s.size() - 4);
     }
     return TrimAscii(s);
 }
@@ -532,8 +640,10 @@ static const std::string* FindAttr(
 }
 
 static void ParsePlaylistXmlText(const std::string& xml) {
-    g_titleTracks   = {"00_Title", "100_menus"};
-    g_debriefTracks = {"13_Debrief", "13_Debrief"};
+    g_xmlSoundFont.clear();
+    g_xmlSoundFontGainDb = 0.0f;
+    g_titleTracks   = {"", ""};
+    g_debriefTracks = {"", ""};
     g_levelEntries.clear();
     g_levelIndex.clear();
 
@@ -576,10 +686,33 @@ static void ParsePlaylistXmlText(const std::string& xml) {
             ++sp;
         }
         std::string tag = ToLowerAscii(inner.substr(0, sp));
-        if (tag != "menu" && tag != "level") continue;
+        if (tag != "menu" && tag != "level" && tag != "soundfont" && tag != "midi") continue;
 
         std::vector<std::pair<std::string, std::string>> attrs;
         ParseAttributes(inner.substr(sp), &attrs);
+
+        if (tag == "soundfont" || tag == "midi") {
+            const std::string* pPath = FindAttr(attrs, "path");
+            if (pPath == nullptr) pPath = FindAttr(attrs, "file");
+            if (pPath == nullptr) pPath = FindAttr(attrs, "soundfont");
+            if (pPath != nullptr) {
+                g_xmlSoundFont = TrimAscii(*pPath);
+            }
+            const std::string* pGain = FindAttr(attrs, "gain");
+            if (pGain == nullptr) pGain = FindAttr(attrs, "gain_db");
+            if (pGain == nullptr) pGain = FindAttr(attrs, "volume_db");
+            if (pGain != nullptr) {
+                std::string gs = TrimAscii(*pGain);
+                if (!gs.empty()) {
+                    char* endPtr = nullptr;
+                    float val = std::strtof(gs.c_str(), &endPtr);
+                    if (endPtr != gs.c_str() && std::isfinite(val)) {
+                        g_xmlSoundFontGainDb = (std::max)(-36.0f, (std::min)(24.0f, val));
+                    }
+                }
+            }
+            continue;
+        }
 
         const std::string* pName = FindAttr(attrs, "name");
         if (pName == nullptr) pName = FindAttr(attrs, "filename");
@@ -594,23 +727,11 @@ static void ParsePlaylistXmlText(const std::string& xml) {
         if (tag == "menu") {
             std::string key = ToLowerAscii(name);
             if (key == "title") {
-                if (!pc.empty())   g_titleTracks.pc = pc;
-                if (!java.empty()) g_titleTracks.java = java;
+                g_titleTracks = {pc, java};
             } else if (key == "debrief") {
-                if (!pc.empty())   g_debriefTracks.pc = pc;
-                if (!java.empty()) g_debriefTracks.java = java;
+                g_debriefTracks = {pc, java};
             }
             continue;
-        }
-
-        if (pc.empty() && java.empty()) {
-            PlaylistPair gen = AutoGenerateLevelEntry(name, -1);
-            pc = gen.pc;
-            java = gen.java;
-        } else if (pc.empty()) {
-            pc = java;
-        } else if (java.empty()) {
-            java = pc;
         }
 
         std::string key = ToLowerAscii(name);
@@ -658,6 +779,9 @@ static std::string BuildPlaylistXmlText(
     out.reserve(16384);
     out += "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n";
     out += "<playlist>\r\n";
+    if (!g_xmlSoundFont.empty()) {
+        out += "  <soundfont path=\"" + EscapeXmlAttr(g_xmlSoundFont) + "\" />\r\n";
+    }
     out += "  <menu name=\"title\" pc=\"" + EscapeXmlAttr(g_titleTracks.pc) + "\" java=\"" + EscapeXmlAttr(g_titleTracks.java) + "\" />\r\n";
     out += "  <menu name=\"debrief\" pc=\"" + EscapeXmlAttr(g_debriefTracks.pc) + "\" java=\"" + EscapeXmlAttr(g_debriefTracks.java) + "\" />\r\n";
     out += "  <levels>\r\n";
@@ -686,6 +810,11 @@ static std::string BuildPlaylistXmlText(
 }
 
 static void GenerateFullPlaylistXml() {
+    if (FileExistsOnDisk(JoinExePath("music\\Bada_Mobile_0300_base.sf2"))) {
+        g_xmlSoundFont = "music\\Bada_Mobile_0300_base.sf2";
+    } else {
+        g_xmlSoundFont = kDefaultFallbackSoundFont;
+    }
     g_titleTracks   = {"00_Title", "100_menus"};
     g_debriefTracks = {"13_Debrief", "13_Debrief"};
     g_levelEntries.clear();
@@ -839,28 +968,38 @@ static void EnsureLevelInPlaylist(const std::string& levelName, int rawFileMusic
     AppendMissingLevelToXml(entry);
 }
 
-static std::string PickPlaylistStem(const PlaylistPair& pair, const char* fallbackStem) {
+static std::string PickPlaylistPath(const PlaylistPair& pair, const char* fallbackSpec) {
     const std::string& preferred = (g_musicPlaylist != 0) ? pair.java : pair.pc;
-    if (!preferred.empty() && MusicOggExists(preferred)) {
-        return preferred;
+    if (preferred.empty()) {
+        return {};
     }
-    if (!pair.pc.empty() && MusicOggExists(pair.pc)) {
-        return pair.pc;
+    std::string path = ResolveTrackFilePath(preferred);
+    if (!path.empty()) {
+        return path;
     }
-    if (!pair.java.empty() && MusicOggExists(pair.java)) {
-        return pair.java;
+    if (g_musicPlaylist != 0 && !pair.pc.empty()) {
+        path = ResolveTrackFilePath(pair.pc);
+        if (!path.empty()) {
+            return path;
+        }
     }
-    return fallbackStem;
+    if (fallbackSpec != nullptr && fallbackSpec[0] != '\0') {
+        path = ResolveTrackFilePath(fallbackSpec);
+        if (!path.empty()) {
+            return path;
+        }
+    }
+    return {};
 }
 
-static std::string ResolveStemForMusicId(int musicId) {
+static std::string ResolveTrackPathForMusicId(int musicId) {
     EnsurePlaylistLoaded();
 
     if (musicId == 0) {
-        return PickPlaylistStem(g_titleTracks, kVanillaMusic[0]);
+        return PickPlaylistPath(g_titleTracks, nullptr);
     }
     if (musicId == 13) {
-        return PickPlaylistStem(g_debriefTracks, kVanillaMusic[13]);
+        return PickPlaylistPath(g_debriefTracks, nullptr);
     }
     if (musicId == kActiveLevelMusicId) {
         if (!g_currentLevelName.empty()) {
@@ -870,37 +1009,110 @@ static std::string ResolveStemForMusicId(int musicId) {
                 entry = LookupLevelEntry(g_currentLevelName);
             }
             if (entry != nullptr) {
-                const char* fb = (g_currentLevelFileMusicId >= 0 && g_currentLevelFileMusicId < 25)
-                    ? kVanillaMusic[g_currentLevelFileMusicId]
-                    : "06_Kakkoi";
-                return PickPlaylistStem(entry->tracks, fb);
+                return PickPlaylistPath(entry->tracks, nullptr);
             }
         }
         if (g_currentLevelFileMusicId >= 0 && g_currentLevelFileMusicId < 25) {
-            return kVanillaMusic[g_currentLevelFileMusicId];
+            std::string p = ResolveTrackFilePath(kVanillaMusic[g_currentLevelFileMusicId]);
+            if (!p.empty()) return p;
         }
-        return "06_Kakkoi";
+        return ResolveTrackFilePath("06_Kakkoi");
     }
     if (musicId >= 0 && musicId < 25) {
-        return kVanillaMusic[musicId];
+        std::string p = ResolveTrackFilePath(kVanillaMusic[musicId]);
+        if (!p.empty()) return p;
     }
     // 25 is unused; 26 (0x1a) is edge.exe's uninitialized musicId sentinel.
     if (musicId >= 27 && musicId <= 255) {
         std::string custom = ResolveIdToStem(musicId);
-        if (!custom.empty()) return custom;
+        if (!custom.empty()) {
+            std::string p = ResolveTrackFilePath(custom);
+            if (!p.empty()) return p;
+        }
     }
-    return "06_Kakkoi";
+    return ResolveTrackFilePath("06_Kakkoi");
+}
+
+static bool __cdecl HasDebriefMusic() {
+    EnsurePlaylistLoaded();
+    return !ResolveTrackPathForMusicId(13).empty();
 }
 
 static const char* __cdecl GetMusicFilename_Impl(int musicId) {
-    static char s_outStem[MAX_PATH] = {};
-    std::string stem = ResolveStemForMusicId(musicId);
-    if (stem.size() >= sizeof(s_outStem)) {
-        stem.resize(sizeof(s_outStem) - 1);
+    static char s_outPath[MAX_PATH * 2] = {};
+    std::string path = ResolveTrackPathForMusicId(musicId);
+    if (path.empty()) {
+        g_lastPlayedPath.clear();
+        g_lastPlayedSoundFont.clear();
+        return nullptr;
     }
-    std::memcpy(s_outStem, stem.c_str(), stem.size() + 1);
-    g_lastPlayedStem = stem;
-    return s_outStem;
+    if (path.size() >= sizeof(s_outPath)) {
+        path.resize(sizeof(s_outPath) - 1);
+    }
+    std::memcpy(s_outPath, path.c_str(), path.size() + 1);
+    g_lastPlayedPath = path;
+    g_lastPlayedSoundFont = GetActiveSoundFontPath();
+    return s_outPath;
+}
+
+static void __cdecl AudioPlayMusicResolve_Impl(void* ap, int musicId) {
+    const char* path = GetMusicFilename_Impl(musicId);
+    if (path == nullptr) {
+        if (ap != nullptr) {
+            reinterpret_cast<void(__thiscall*)(void*, int)>(0x4743e0)(ap, 1);
+        }
+        return;
+    }
+    if (ap == nullptr) return;
+    uint8_t* mp = *reinterpret_cast<uint8_t**>(static_cast<uint8_t*>(ap) + 0x8);
+    if (mp == nullptr) return;
+
+    EdgeString es{};
+    es.ctor_cstr(path);
+    auto** vt = *reinterpret_cast<void***>(mp);
+    reinterpret_cast<bool(__thiscall*)(void*, const EdgeString*, uint8_t)>(vt[0x04 / 4])(mp, &es, 1);
+    es.dtor();
+}
+
+static void __declspec(naked) hk_audioPlayMusicResolve() {
+    // At 0x47417e (14B): replaces `call 0x473e60; mov esi, eax; add esp, 4; test esi, esi; je 0x4741f6`.
+    // On entry: [esp] = musicId (pushed at 0x47417d), edi = AudioPlayer*.
+    __asm {
+        mov eax, DWORD PTR [esp]
+        push eax
+        push edi
+        call AudioPlayMusicResolve_Impl
+        add esp, 12
+        mov eax, 0x4741f6
+        jmp eax
+    }
+}
+
+static void __declspec(naked) hk_conditionalFadeMusic() {
+    // Replaces `call 0x481560` at 0x48e08b (Cube::onWin duck) and 0x47c996 (enter debrief stop).
+    // __thiscall: ecx = ScreenMgr*, stack = [retAddr, fade, targetVol].
+    __asm {
+        push ecx
+        call HasDebriefMusic
+        pop ecx
+        test al, al
+        jz cfm_skip
+        mov eax, 0x481560
+        jmp eax
+    cfm_skip:
+        ret 8
+    }
+}
+
+static void __cdecl DebriefEnterMusic_Impl() {
+    if (!HasDebriefMusic()) {
+        return;
+    }
+    uint8_t* sm = GetScreenMgr();
+    if (sm != nullptr) {
+        // Start debrief music immediately at 100% volume (fadeIn = 0) instead of fading in.
+        reinterpret_cast<void(__thiscall*)(void*, int, int)>(0x481590)(sm, 13, 0);
+    }
 }
 
 static int __cdecl OnLevelLoadMusic_Impl(const EdgeString* levelName, int rawFileMusicId, uint32_t playMusic) {
@@ -940,6 +1152,23 @@ static void __declspec(naked) hk_levelLoadMusic() {
 
 namespace edgemod {
 
+std::string GetActiveSoundFontPath() {
+    EnsurePlaylistLoaded();
+    if (!g_xmlSoundFont.empty()) {
+        std::string resolved = ResolveSoundFontCandidate(g_xmlSoundFont);
+        if (!resolved.empty()) return resolved;
+    }
+    std::string localSf = JoinExePath("music\\Bada_Mobile_0300_base.sf2");
+    if (FileExistsOnDisk(localSf)) return localSf;
+    if (FileExistsOnDisk(kDefaultFallbackSoundFont)) return kDefaultFallbackSoundFont;
+    return {};
+}
+
+float GetActiveSoundFontGainDb() {
+    EnsurePlaylistLoaded();
+    return g_xmlSoundFontGainDb;
+}
+
 void EnsureMusicPlaylistReady() {
     EnsurePlaylistLoaded();
 }
@@ -968,8 +1197,19 @@ void OnMusicPlaylistChanged() {
         return;
     }
 
-    std::string newStem = ResolveStemForMusicId(curId);
-    if (_stricmp(newStem.c_str(), g_lastPlayedStem.c_str()) == 0) {
+    std::string newPath = ResolveTrackPathForMusicId(curId);
+    std::string newSf   = GetActiveSoundFontPath();
+    const bool sameTrack = (_stricmp(newPath.c_str(), g_lastPlayedPath.c_str()) == 0);
+    const bool isMidi = EndsWithNoCase(newPath, ".mid") || EndsWithNoCase(newPath, ".midi");
+    const bool sameSf = (_stricmp(newSf.c_str(), g_lastPlayedSoundFont.c_str()) == 0);
+    if (sameTrack && (!isMidi || sameSf)) {
+        return;
+    }
+
+    if (newPath.empty()) {
+        reinterpret_cast<void(__thiscall*)(void*, int)>(0x4743e0)(ap, 1);
+        g_lastPlayedPath.clear();
+        g_lastPlayedSoundFont.clear();
         return;
     }
 
@@ -986,9 +1226,29 @@ void RegisterMusicPlaylist() {
         RegRelJmp(0x473e60, expGetMusic, 9, 5, &GetMusicFilename_Impl, 0x90, 0x473f2c);
     }
 
-    // 2. Level::load musicId capture + playlist auto-generation (0x476205, 6B)
+    // 2. AudioPlayer::playMusic stem lookup + stop on explicit silence (0x47417e, 14B)
+    {
+        static const uint8_t expPlayStem[14] = {
+            0xe8, 0xdd, 0xfc, 0xff, 0xff, 0x8b, 0xf0, 0x83, 0xc4, 0x04, 0x85, 0xf6, 0x74, 0x6a
+        };
+        RegRelJmp(0x47417e, expPlayStem, 14, 5, &hk_audioPlayMusicResolve, 0x90, 0x47418c);
+    }
+
+    // 3. Level::load musicId capture + playlist auto-generation (0x476205, 6B)
     {
         static const uint8_t expLevelMusic[6] = {0x89, 0x86, 0x94, 0x00, 0x00, 0x00};
         RegRelCall(0x476205, expLevelMusic, 6, 6, &hk_levelLoadMusic, 0x90);
+    }
+
+    // 4. Debrief music: 100% initial volume (fadeIn=0) or continue level music without ducking
+    {
+        static const uint8_t expWinDuck[5] = {0xe8, 0xd0, 0x34, 0xff, 0xff};
+        RegRelCall(0x48e08b, expWinDuck, 5, 5, &hk_conditionalFadeMusic);
+
+        static const uint8_t expDebriefStop[5] = {0xe8, 0xc5, 0x4b, 0x00, 0x00};
+        RegRelCall(0x47c996, expDebriefStop, 5, 5, &hk_conditionalFadeMusic);
+
+        static const uint8_t expDebriefPlay[9] = {0x6a, 0x01, 0x6a, 0x0d, 0xe8, 0x34, 0x7d, 0xfd, 0xff};
+        RegRelCall(0x4a9853, expDebriefPlay, 9, 9, &DebriefEnterMusic_Impl, 0x90);
     }
 }

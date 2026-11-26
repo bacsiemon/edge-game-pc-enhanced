@@ -38,6 +38,7 @@ struct MenuHoverState {
     int  lastSlot         = 0;
     bool needsInitialSync = false;
     bool prevPopupOpen    = false;
+    bool prevScrollbarDrag = false;
 
     int32_t lsHoveredTile    = -1;
     int32_t lsPrevPlayedTile = -1;
@@ -421,6 +422,7 @@ static void __cdecl MenuSubUpdate_Impl(uint8_t* submenu, float dt) {
         g_hover.lsHoveredBtn = -1;
         g_hover.slotPressed = false;
         g_hover.prevPopupOpen = false;
+        g_hover.prevScrollbarDrag = false;
         g_hover.lastSlot = (selOff >= 0) ? *reinterpret_cast<const int32_t*>(submenu + selOff) : 0;
         if (vtbl == kVtblLevelSel) {
             g_hover.lsPrevScrollY = *reinterpret_cast<const int32_t*>(submenu + 0x50);
@@ -452,6 +454,21 @@ static void __cdecl MenuSubUpdate_Impl(uint8_t* submenu, float dt) {
             CallSubmenuUpdate(submenu, dt);
             g_hover.lastSlot = *reinterpret_cast<const int32_t*>(submenu + selOff);
             return;
+        }
+
+        if (inOpts && IsOptionsScrollbarDragging(inPauseOpts)) {
+            g_hover.prevScrollbarDrag = true;
+            g_hover.slotVisible = false;
+            g_hover.slotPressed = false;
+            g_hover.needsInitialSync = false;
+            CallSubmenuUpdate(submenu, dt);
+            return;
+        }
+        if (g_hover.prevScrollbarDrag) {
+            g_hover.prevScrollbarDrag = false;
+            if (g_hover.lastInputMode == HoverInputMode::Mouse) {
+                g_hover.needsInitialSync = true;
+            }
         }
 
         if (inOpts && IsOptionsPopupOpen(inPauseOpts)) {

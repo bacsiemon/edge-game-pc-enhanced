@@ -464,12 +464,14 @@ static int32_t __cdecl GetLsThumbY(const uint8_t* ls) {
 }
 static void __declspec(naked) hk_lsThumbEdx() {
     __asm {
+        push eax
         push ecx
         push edi
         call GetLsThumbY
         add esp, 4
         pop ecx
         mov edx, eax
+        pop eax
         lea ecx, [ebp - 0x40]
         ret
     }

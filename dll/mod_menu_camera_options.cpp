@@ -4123,11 +4123,11 @@ static void ComputeOptScrollMetrics(
         out->contentH = out->nScrollRows * out->stride;
         out->maxScroll = static_cast<float>((std::max)(0, out->contentH - out->viewH));
         out->hasScrollbar = (out->maxScroll > 0.5f);
-        out->sbW = 10;
-        out->sbX = paneLeft + menuW - 13;
+        out->sbW = 18;
+        out->sbX = paneLeft + menuW - 22;
         out->sbY = out->listTop;
         out->sbH = out->viewH;
-        out->rightBound = out->hasScrollbar ? (paneLeft + menuW - 18) : (paneLeft + menuW - 8);
+        out->rightBound = out->hasScrollbar ? (out->sbX - 6) : (paneLeft + menuW - 8);
     } else {
         uint8_t* sm = GetScreenMgr();
         int scrH = (sm != nullptr) ? *reinterpret_cast<int*>(sm + 0x28) : 720;
@@ -4145,17 +4145,17 @@ static void ComputeOptScrollMetrics(
         out->backTop = out->listBottom;
         out->maxScroll = static_cast<float>((std::max)(0, out->contentH - out->viewH));
         out->hasScrollbar = (out->maxScroll > 0.5f);
-        out->sbW = 10;
-        out->sbX = paneLeft + kMenuWideW - 13;
-        out->sbY = out->listTop + 2;
-        out->sbH = (std::max)(8, out->viewH - 4);
-        out->rightBound = out->hasScrollbar ? (paneLeft + kMenuWideW - 17) : (paneLeft + kMenuWideW - 6);
+        out->sbW = 18;
+        out->sbX = paneLeft + kMenuWideW - 22;
+        out->sbY = out->listTop;
+        out->sbH = out->viewH;
+        out->rightBound = out->hasScrollbar ? (out->sbX - 6) : (paneLeft + kMenuWideW - 6);
     }
 
     if (out->hasScrollbar && out->contentH > 0) {
-        out->thumbH = std::clamp((out->sbH * out->viewH) / out->contentH, 28, out->sbH);
+        out->thumbH = (std::min)(30, out->sbH);
         float frac = std::clamp(scrollY / out->maxScroll, 0.0f, 1.0f);
-        out->thumbYf = frac * static_cast<float>(out->sbH - out->thumbH);
+        out->thumbYf = frac * static_cast<float>((std::max)(0, out->sbH - out->thumbH));
         out->thumbY = out->sbY + static_cast<int>(std::lround(out->thumbYf));
     }
 }
@@ -4209,48 +4209,50 @@ static void AdvanceOptScrollRenderY(OptScrollState& st, float maxScroll) {
     }
 }
 
-static void DrawOptScrollbar(
-    const OptScrollMetrics& m, bool inPause, int screenOffsetX, bool isActive, bool dragActive
-) {
+struct EdgeStdString24 {
+    char buf[16];
+    uint32_t size;
+    uint32_t cap;
+};
+
+static void* g_optSliderSprite = nullptr;
+
+static void* GetOptSliderSprite() {
+    if (g_optSliderSprite == nullptr) {
+        EdgeStdString24 name{};
+        std::memcpy(name.buf, "slider", 7);
+        name.size = 6;
+        name.cap = 15;
+        g_optSliderSprite = reinterpret_cast<void*(__cdecl*)(const void*)>(0x4a88c0)(&name);
+    }
+    return g_optSliderSprite;
+}
+
+static void DrawOptScrollbar(const OptScrollMetrics& m, int fadePct) {
     if (!m.hasScrollbar || m.sbH <= 0) return;
 
-    int railW = 4;
-    int railX = m.sbX + (m.sbW - railW) / 2;
-    uint32_t railCol = RgbToRgbaOpaque(inPause ? 0xd8d8d8u : 0x525252u);
-    Game_DrawQuad(railX, m.sbY, railW, m.sbH, &railCol);
+    int clampedFade = std::clamp(fadePct, 0, 100);
+    uint32_t barRgb = (clampedFade >= 100) ? 0x7d7d7du : Game_ColorLerp(0xffffffu, 0x7d7d7du, clampedFade);
+    uint32_t barCol = RgbToRgbaOpaque(barRgb);
 
+    Game_DrawQuad(m.sbX + 4, m.sbY, 9, m.sbH, &barCol);
     if (m.thumbH <= 0) return;
-
-    bool hovered = false;
-    if (isActive) {
-        const uint8_t* sm = GetScreenMgr();
-        if (sm != nullptr && sm[0xa8] != 0) {
-            int mx = *reinterpret_cast<const int*>(sm + 0xa0);
-            int my = *reinterpret_cast<const int*>(sm + 0xa4);
-            int sbScreenX = m.sbX - screenOffsetX;
-            hovered = (mx >= sbScreenX - 3 && mx <= sbScreenX + m.sbW + 3 &&
-                       my >= m.thumbY - 2 && my <= m.thumbY + m.thumbH + 2);
-        }
-    }
-
-    uint32_t borderCol = RgbToRgbaOpaque(
-        dragActive ? 0x242424u : (hovered ? 0x343434u : (inPause ? 0x484848u : 0x2c2c2cu))
-    );
-    uint32_t fillCol = RgbToRgbaOpaque(
-        dragActive ? 0x3b3b3bu : (hovered ? 0x565656u : (inPause ? 0x707070u : 0xb8b8b8u))
-    );
-    uint32_t gripCol = RgbToRgbaOpaque(inPause ? 0xf6f6f6u : 0x3b3b3bu);
 
     int thumbBaseY = m.sbY + static_cast<int>(std::floor(m.thumbYf));
     float thumbSubY = m.thumbYf - std::floor(m.thumbYf);
 
     ScopedUiMatrixTranslate handleMat(0.0f, -thumbSubY);
-    Game_DrawQuad(m.sbX, thumbBaseY, m.sbW, m.thumbH, &borderCol);
-    Game_DrawQuad(m.sbX + 1, thumbBaseY + 1, m.sbW - 2, m.thumbH - 2, &fillCol);
+    Game_DrawQuad(m.sbX, thumbBaseY, m.sbW, m.thumbH, &barCol);
 
-    int gripMidY = thumbBaseY + (m.thumbH / 2);
-    for (int g = -1; g <= 1; ++g) {
-        Game_DrawQuad(m.sbX + 2, gripMidY + g * 3, m.sbW - 4, 1, &gripCol);
+    int spriteAlpha = (clampedFade * 255) / 100;
+    void* spr = GetOptSliderSprite();
+    void* renderer = *reinterpret_cast<void**>(0x5f8770);
+    if (spr != nullptr && renderer != nullptr && spriteAlpha > 0) {
+        Game_SetBlend(renderer, 0);
+        reinterpret_cast<void(__thiscall*)(void*, int, int, int, int)>(0x4a7bb0)(
+            spr, m.sbX, thumbBaseY, spriteAlpha, 0x14
+        );
+        Game_SetBlend(renderer, 3);
     }
 }
 
@@ -4582,11 +4584,11 @@ static int HandleOptMouseHitTest(
             g_optUi.suppressNextClickAction = true;
             return -1;
         }
-        return selRow;
+        return -1;
     }
 
     if (scrollM != nullptr && scrollM->scrollable && scrollM->hasScrollbar &&
-        px >= scrollM->sbX - 3 && px <= scrollM->sbX + scrollM->sbW + 3 &&
+        px >= scrollM->sbX - 2 && px <= scrollM->sbX + scrollM->sbW + 2 &&
         py >= scrollM->listTop && py < scrollM->listBottom) {
         if (isPress) {
             scrollSt.dragActive = true;
@@ -4624,7 +4626,8 @@ static int HandleOptMouseHitTest(
             if (scrollM != nullptr && scrollM->scrollable) {
                 if (row == scrollM->backIdx) {
                     rH = scrollM->backH + 2 * scrollM->slotPad;
-                } else if (py < scrollM->listTop || py >= scrollM->listBottom) {
+                } else if (py < scrollM->listTop || py >= scrollM->listBottom ||
+                           (scrollM->hasScrollbar && px >= scrollM->sbX - 2)) {
                     continue;
                 }
             }
@@ -5081,15 +5084,15 @@ static void __cdecl RenderMainOptionsBody_Impl(uint8_t* ebpFrame, uint32_t barOu
         ? effBarInnerRgb
         : barOuterRgb;
 
-    auto drawRowHighlight = [&](int topY, int rH) {
+    auto drawRowHighlight = [&](int topY, int rH, int rowW) {
         if (effBarInnerRgb != effBarOuterRgb) {
             uint32_t outerRgba = RgbToRgbaOpaque(effBarOuterRgb);
-            Game_DrawQuad(xBase + 2, topY - slotPad - 2, menuW - 4, rH + 2 * slotPad + 4, &outerRgba);
+            Game_DrawQuad(xBase + 2, topY - slotPad - 2, rowW, rH + 2 * slotPad + 4, &outerRgba);
             uint32_t innerRgba = RgbToRgbaOpaque(effBarInnerRgb);
-            Game_DrawQuad(xBase + 4, topY - slotPad, menuW - 8, rH + 2 * slotPad, &innerRgba);
+            Game_DrawQuad(xBase + 4, topY - slotPad, rowW - 4, rH + 2 * slotPad, &innerRgba);
         } else {
             uint32_t fillRgba = RgbToRgbaOpaque(effBarInnerRgb);
-            Game_DrawQuad(xBase + 2, topY - slotPad, menuW - 4, rH + 2 * slotPad, &fillRgba);
+            Game_DrawQuad(xBase + 2, topY - slotPad, rowW, rH + 2 * slotPad, &fillRgba);
         }
     };
 
@@ -5143,7 +5146,7 @@ static void __cdecl RenderMainOptionsBody_Impl(uint8_t* ebpFrame, uint32_t barOu
 
     if (!scrollM.scrollable) {
         if (selRow >= 0 && selRow < nRows) {
-            drawRowHighlight(getRowTopY(selRow), rowH);
+            drawRowHighlight(getRowTopY(selRow), rowH, menuW - 4);
         }
         for (int row = 0; row < nRows; ++row) {
             drawRowContent(row, getRowTopY(row), rowH);
@@ -5155,12 +5158,13 @@ static void __cdecl RenderMainOptionsBody_Impl(uint8_t* ebpFrame, uint32_t barOu
             );
         }
     } else {
+        int scrollRowW = scrollM.hasScrollbar ? (scrollM.sbX - 2 - (xBase + 2)) : (menuW - 4);
         {
-            ScopedUiScissor clip(xBase + 2, scrollM.listTop, menuW - 4, scrollM.viewH);
+            ScopedUiScissor clip(xBase + 2, scrollM.listTop, scrollRowW, scrollM.viewH);
             if (!clip.empty) {
                 ScopedUiMatrixTranslate scrollMat(0.0f, g_mainOptScroll.renderY);
                 if (selRow >= 0 && selRow < scrollM.nScrollRows) {
-                    drawRowHighlight(getRowTopY(selRow), rowH);
+                    drawRowHighlight(getRowTopY(selRow), rowH, scrollRowW);
                 }
                 for (int row = 0; row < scrollM.nScrollRows; ++row) {
                     int topY = getRowTopY(row);
@@ -5174,16 +5178,17 @@ static void __cdecl RenderMainOptionsBody_Impl(uint8_t* ebpFrame, uint32_t barOu
                 if (IsMenuRenderInteractive() && selRow >= 0 && selRow < scrollM.nScrollRows) {
                     Game_DrawRainbowRectBorder(
                         GetCurrentMenuRenderFrame(),
-                        xBase + 2, getRowTopY(selRow) - slotPad, menuW - 4, rowH + 2 * slotPad, 2, 255
+                        xBase + 2, getRowTopY(selRow) - slotPad, scrollRowW, rowH + 2 * slotPad, 2, 255
                     );
                 }
             }
         }
         if (scrollM.hasScrollbar && drawUnselected) {
-            DrawOptScrollbar(scrollM, false, 0, IsMenuRenderInteractive(), g_mainOptScroll.dragActive);
+            int sbFade = std::clamp((255 - static_cast<int>(normRgb & 0xffu)) * 100 / (255 - 0x80), 0, 100);
+            DrawOptScrollbar(scrollM, sbFade);
         }
         if (selRow == backIdx) {
-            drawRowHighlight(getRowTopY(backIdx), scrollM.backH);
+            drawRowHighlight(getRowTopY(backIdx), scrollM.backH, menuW - 4);
         }
         drawRowContent(backIdx, getRowTopY(backIdx), scrollM.backH);
         if (IsMenuRenderInteractive() && selRow == backIdx) {
@@ -5654,13 +5659,14 @@ static void DrawPauseOptionsPane(int cat, int selRow, int xBase, int yBase, int 
             );
         }
     } else {
+        int scrollInnerW = scrollM.hasScrollbar ? (scrollM.sbX - 2 - innerLeft) : innerW;
         {
-            ScopedUiScissor clip(innerLeft, scrollM.listTop, innerW, scrollM.viewH);
+            ScopedUiScissor clip(innerLeft, scrollM.listTop, scrollInnerW, scrollM.viewH);
             if (!clip.empty) {
                 ScopedUiMatrixTranslate scrollMat(0.0f, g_pauseOptScroll.renderY);
                 if (selRow >= 0 && selRow < scrollM.nScrollRows) {
                     int hlY = scrollM.listTop + selRow * scrollM.stride + 1;
-                    Game_DrawQuad(innerLeft, hlY, innerW, rowH, &rainbowRgba);
+                    Game_DrawQuad(innerLeft, hlY, scrollInnerW, rowH, &rainbowRgba);
                 }
                 for (int row = 0; row < scrollM.nScrollRows; ++row) {
                     int divAbsY = scrollM.listTop + row * scrollM.stride;
@@ -5673,17 +5679,14 @@ static void DrawPauseOptionsPane(int cat, int selRow, int xBase, int yBase, int 
                 }
                 if (isActivePane && IsMenuRenderInteractive() && selRow >= 0 && selRow < scrollM.nScrollRows) {
                     Game_DrawRainbowRectBorder(
-                        frame, innerLeft, scrollM.listTop + selRow * scrollM.stride + 1, innerW, rowH, 2, 255
+                        frame, innerLeft, scrollM.listTop + selRow * scrollM.stride + 1, scrollInnerW, rowH, 2, 255
                     );
                 }
             }
         }
         Game_DrawQuad(paneLeft, scrollM.listTop, paneW, 1, dividerCol);
         if (scrollM.hasScrollbar) {
-            DrawOptScrollbar(
-                scrollM, true, kMenuWideW + xOffset,
-                isActivePane && IsMenuRenderInteractive(), g_pauseOptScroll.dragActive
-            );
+            DrawOptScrollbar(scrollM, 100);
         }
         if (selRow == scrollM.backIdx) {
             Game_DrawQuad(innerLeft, scrollM.backTop + 1, innerW, scrollM.backH, &rainbowRgba);
@@ -7585,8 +7588,11 @@ bool __cdecl IsOptionsPopupOpen(bool inPause) {
 }
 
 bool __cdecl IsOptionsSliderDragging(bool inPause) {
-    return (g_optUi.dragActive && g_optUi.dragInPause == inPause)
-        || GetOptScrollState(inPause).dragActive;
+    return g_optUi.dragActive && g_optUi.dragInPause == inPause;
+}
+
+bool __cdecl IsOptionsScrollbarDragging(bool inPause) {
+    return GetOptScrollState(inPause).dragActive;
 }
 
 void __cdecl OnOptionsMouseWheel(int32_t wheelDelta) {
@@ -7638,7 +7644,7 @@ int __cdecl HitTestOptionsSlot(bool inPause, int mx, int my) {
         int minX = basePt[0] + 2;
         int maxX = basePt[0] + paneW - 2;
         if (mx < minX || mx >= maxX) return -1;
-        if (scrollM.hasScrollbar && mx >= scrollM.sbX - 3 && mx <= scrollM.sbX + scrollM.sbW + 3 &&
+        if (scrollM.hasScrollbar && mx >= scrollM.sbX - 2 && mx <= scrollM.sbX + scrollM.sbW + 2 &&
             my >= scrollM.listTop && my < scrollM.listBottom) {
             return -1;
         }
@@ -7646,6 +7652,7 @@ int __cdecl HitTestOptionsSlot(bool inPause, int mx, int my) {
         if (my >= backTop && my < backTop + scrollM.backH + 2 * scrollM.slotPad) {
             return scrollM.backIdx;
         }
+        if (scrollM.hasScrollbar && mx >= scrollM.sbX - 2) return -1;
         if (my < scrollM.listTop || my >= scrollM.listBottom) return -1;
         int scrollOff = static_cast<int>(std::lround(scrollSt.renderY));
         for (int row = 0; row < scrollM.nScrollRows; ++row) {

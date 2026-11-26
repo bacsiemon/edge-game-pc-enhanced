@@ -289,6 +289,7 @@ int      __cdecl GetActiveOptionsCategory(bool inPause);
 int      __cdecl HitTestOptionsSlot(bool inPause, int mx, int my);
 bool     __cdecl IsOptionsPopupOpen(bool inPause);
 bool     __cdecl IsOptionsSliderDragging(bool inPause);
+bool     __cdecl IsOptionsScrollbarDragging(bool inPause);
 bool     __cdecl IsOptionsMenuReadyForHover(const uint8_t* menuObj, bool inPause);
 void     __cdecl OnOptionsMouseWheel(int32_t wheelDelta);
 uint32_t __cdecl GetOptionsScrollRevision(bool inPause);

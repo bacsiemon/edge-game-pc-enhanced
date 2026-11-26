@@ -225,16 +225,8 @@ static const Rgb8 kJavaPrismTop[9] = {
 
 constexpr uint32_t kTexturesFolderHash = 0x039573F7u;
 constexpr uint32_t kRainbowCubeHash    = 0x7D4C829Bu;
-constexpr uint32_t kShrinkerTexHash    = 0x06B90684u;
 constexpr uint32_t kFlickeringStarHash = 0xDBC9C60Au;
 constexpr int kTargetTexCount = 14;
-
-// Exact Java to_mini.spr 12-step cyclic blue-cyan gradient
-static const Rgb8 kJavaShrinkerColors[12] = {
-    {0x88, 0xaf, 0xbf}, {0x6d, 0x98, 0xaf}, {0x52, 0x81, 0x9f}, {0x37, 0x62, 0x8b},
-    {0x1c, 0x42, 0x76}, {0x00, 0x22, 0x61}, {0x00, 0x11, 0x38}, {0x00, 0x22, 0x61},
-    {0x1c, 0x42, 0x76}, {0x37, 0x62, 0x8b}, {0x52, 0x81, 0x9f}, {0x6d, 0x98, 0xaf}
-};
 
 // Exact PC rainbowcube.img bottom pastel band (rows 43..63) 13-color cycle
 static const Rgb8 kPcHoloSwitchColors[13] = {
@@ -298,8 +290,6 @@ static IDirect3DTexture9* g_themeTex[2][kTargetTexCount] = {};
 static IDirect3DTexture9* g_javaMovingPlatTex[4] = {};
 static IDirect3DTexture9* g_javaBumperTex[4] = {};
 static IDirect3DTexture9* g_platEdgeTex[2][4] = {};
-static IDirect3DTexture9* g_javaShrinkerTex = nullptr;
-static IDirect3DTexture9* g_androidShrinkerTex[4] = {};
 static IDirect3DTexture9* g_holoSwitchTex[3] = {};
 static IDirect3DTexture9* g_javaStarTex[2] = {};
 static IDirect3DTexture9* g_mobileFallingTex[4][16] = {};
@@ -307,7 +297,6 @@ static int                g_mobileFallingBucket = -1;
 static bool               g_inJavaBumperRender = false;
 static bool               g_inJavaMovingPlatformRender = false;
 static bool               g_inMovingPlatEdgeRender = false;
-static bool               g_inShrinkerRender = false;
 static bool               g_inHoloSwitchRender = false;
 
 static inline uint32_t PackArgb(uint8_t a, Rgb8 c) {
@@ -406,7 +395,7 @@ static IDirect3DTexture9* CreatePlatEdgeTexture(IDirect3DDevice9* dev, const Rgb
 }
 
 static IDirect3DTexture9* CreateHorizontalCycleTexture(
-    IDirect3DDevice9* dev, const Rgb8* cols, int count, bool whiteBottomRow
+    IDirect3DDevice9* dev, const Rgb8* cols, int count
 ) {
     if (dev == nullptr || cols == nullptr || count <= 0) return nullptr;
     IDirect3DTexture9* tex = nullptr;
@@ -424,15 +413,8 @@ static IDirect3DTexture9* CreateHorizontalCycleTexture(
             float frac = phase - std::floor(phase);
             row[x] = PackArgb(0xffu, LerpRgb8(cols[i0], cols[i1], frac));
         }
-        int fillRows = whiteBottomRow ? 63 : 64;
-        for (int y = 0; y < fillRows; ++y) {
+        for (int y = 0; y < 64; ++y) {
             std::memcpy(base + y * lr.Pitch, row, sizeof(row));
-        }
-        if (whiteBottomRow) {
-            uint32_t* lastRow = reinterpret_cast<uint32_t*>(base + 63 * lr.Pitch);
-            for (int x = 0; x < 256; ++x) {
-                lastRow[x] = 0xffffffffu;
-            }
         }
         tex->UnlockRect(0);
     } else {
@@ -614,9 +596,8 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
     bool isJava = (g_colorTheme == 2u);
     uint8_t* lvl = GetLevel();
     bool isPlatEdge = (g_inMovingPlatEdgeRender && hash0 == kRainbowCubeHash);
-    bool isShrinker = (g_inShrinkerRender && hash0 == kShrinkerTexHash);
     bool isJavaStar = (isJava && hash0 == kFlickeringStarHash && lvl != nullptr);
-    bool isCustom = isPlatEdge || isHolo || isShrinker || isJavaStar;
+    bool isCustom = isPlatEdge || isHolo || isJavaStar;
 
     int slot = -1;
     if (!isCustom) {
@@ -653,20 +634,12 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
                 g_javaBumperTex[i]->Release();
                 g_javaBumperTex[i] = nullptr;
             }
-            if (g_androidShrinkerTex[i] != nullptr) {
-                g_androidShrinkerTex[i]->Release();
-                g_androidShrinkerTex[i] = nullptr;
-            }
             for (int b = 0; b < 16; ++b) {
                 if (g_mobileFallingTex[i][b] != nullptr) {
                     g_mobileFallingTex[i][b]->Release();
                     g_mobileFallingTex[i][b] = nullptr;
                 }
             }
-        }
-        if (g_javaShrinkerTex != nullptr) {
-            g_javaShrinkerTex->Release();
-            g_javaShrinkerTex = nullptr;
         }
         for (int i = 0; i < 3; ++i) {
             if (g_holoSwitchTex[i] != nullptr) {
@@ -699,32 +672,14 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
         uint8_t mode = (g_colorTheme <= 2u) ? g_colorTheme : 0u;
         if (g_holoSwitchTex[mode] == nullptr) {
             if (mode == 0u) {
-                g_holoSwitchTex[mode] = CreateHorizontalCycleTexture(d3dDev, kPcHoloSwitchColors, 13, false);
+                g_holoSwitchTex[mode] = CreateHorizontalCycleTexture(d3dDev, kPcHoloSwitchColors, 13);
             } else if (mode == 1u) {
-                g_holoSwitchTex[mode] = CreateHorizontalCycleTexture(d3dDev, kAndroidHoloSwitchColors, 8, false);
+                g_holoSwitchTex[mode] = CreateHorizontalCycleTexture(d3dDev, kAndroidHoloSwitchColors, 8);
             } else {
-                g_holoSwitchTex[mode] = CreateHorizontalCycleTexture(d3dDev, kJavaHoloSwitchColors, 4, false);
+                g_holoSwitchTex[mode] = CreateHorizontalCycleTexture(d3dDev, kJavaHoloSwitchColors, 4);
             }
         }
         return g_holoSwitchTex[mode] != nullptr ? static_cast<void*>(g_holoSwitchTex[mode]) : defaultTex;
-    } else if (isShrinker) {
-        if (isJava) {
-            if (g_javaShrinkerTex == nullptr) {
-                g_javaShrinkerTex = CreateHorizontalCycleTexture(d3dDev, kJavaShrinkerColors, 12, true);
-            }
-            return g_javaShrinkerTex != nullptr ? static_cast<void*>(g_javaShrinkerTex) : defaultTex;
-        }
-        uint8_t themeIdx = (lvl != nullptr) ? (lvl[0x6c] & 3u) : 0u;
-        if (g_androidShrinkerTex[themeIdx] == nullptr) {
-            Rgb8 cols9[9];
-            for (int i = 0; i < 9; ++i) {
-                cols9[i] = kAndroidPlatEdgePalette[themeIdx][i][1];
-            }
-            g_androidShrinkerTex[themeIdx] = CreateHorizontalCycleTexture(d3dDev, cols9, 9, true);
-        }
-        return g_androidShrinkerTex[themeIdx] != nullptr
-            ? static_cast<void*>(g_androidShrinkerTex[themeIdx])
-            : defaultTex;
     } else if (isJavaStar) {
         uint8_t themeIdx = lvl[0x6c] & 3u;
         int idx = (themeIdx == 3u) ? 1 : 0;
@@ -2191,19 +2146,181 @@ static void __fastcall Hook_HoloSwitchRender(uint8_t* holo) {
     }
 }
 
+static void EmitTopQuad(
+    BumperFlashVert* out, float x0, float x1, float z0, float z1, float y, D3DCOLOR col
+) {
+    out[0] = {x0, y, z0, col};
+    out[1] = {x1, y, z0, col};
+    out[2] = {x1, y, z1, col};
+    out[3] = {x0, y, z0, col};
+    out[4] = {x1, y, z1, col};
+    out[5] = {x0, y, z1, col};
+}
+
+static int EmitTopRing(
+    BumperFlashVert* out, float cx, float cz, float y, float halfOuter, float halfInner, D3DCOLOR col
+) {
+    if (halfInner <= 0.001f) {
+        EmitTopQuad(out, cx - halfOuter, cx + halfOuter, cz - halfOuter, cz + halfOuter, y, col);
+        return 6;
+    }
+    float ox0 = cx - halfOuter, ox1 = cx + halfOuter;
+    float oz0 = cz - halfOuter, oz1 = cz + halfOuter;
+    float ix0 = cx - halfInner, ix1 = cx + halfInner;
+    float iz0 = cz - halfInner, iz1 = cz + halfInner;
+    EmitTopQuad(out + 0,  ox0, ox1, oz0, iz0, y, col); // top strip
+    EmitTopQuad(out + 6,  ox0, ox1, iz1, oz1, y, col); // bottom strip
+    EmitTopQuad(out + 12, ox0, ix0, iz0, iz1, y, col); // left strip
+    EmitTopQuad(out + 18, ix1, ox1, iz0, iz1, y, col); // right strip
+    return 24;
+}
+
+static void RenderMobileShrinker(
+    IDirect3DDevice9* dev, const uint8_t* shrinker, const uint8_t* lvl, const uint8_t* ws
+) {
+    float cx   = static_cast<float>(*reinterpret_cast<const int32_t*>(shrinker + 0x04)) + 15.0f;
+    float cz   = static_cast<float>(*reinterpret_cast<const int32_t*>(shrinker + 0x08)) + 15.0f;
+    float topY = static_cast<float>(*reinterpret_cast<const int32_t*>(shrinker + 0x0c)) + 0.45f;
+    bool isToBig = (*reinterpret_cast<const int32_t*>(shrinker + 0x14) != 0);
+
+    float smoothFrame = (ws != nullptr) ? GetSmoothWsFrame(ws) : 0.0f;
+    float u = std::fmod(smoothFrame, 50.0f) / 50.0f;
+    if (u < 0.0f) u += 1.0f;
+    float raw = isToBig ? u : (1.0f - u);
+    float s1 = (std::max)(raw * 1.1f, 0.3f);
+
+    float alpha = 1.0f;
+    float scale = s1;
+    if (s1 > 1.0f) {
+        alpha = std::clamp((1.1f - s1) / 0.1f, 0.0f, 1.0f);
+        scale = 1.0f;
+    } else if (s1 < 0.4f) {
+        alpha = std::clamp((s1 - 0.3f) / 0.1f, 0.0f, 1.0f);
+    }
+    int alphaByte = std::clamp(static_cast<int>(std::lround(alpha * 255.0f)), 0, 255);
+    if (alphaByte <= 0) return;
+
+    uint8_t themeIdx = (lvl != nullptr) ? (lvl[0x6c] & 3u) : 0u;
+    float cPhase = std::fmod(smoothFrame, 9.0f);
+    if (cPhase < 0.0f) cPhase += 9.0f;
+    int i0 = static_cast<int>(cPhase) % 9;
+    int i1 = (i0 + 1) % 9;
+    float frac = cPhase - std::floor(cPhase);
+    Rgb8 rgb = LerpRgb8(kAndroidPlatEdgePalette[themeIdx][i0][1], kAndroidPlatEdgePalette[themeIdx][i1][1], frac);
+    D3DCOLOR col = PackArgb(static_cast<uint8_t>(alphaByte), rgb);
+
+    float halfOuter = scale * 15.0f;
+    float thick = scale * 4.0f + 1.0f;
+    float halfInner = (std::max)(0.0f, halfOuter - thick);
+
+    BumperFlashVert verts[24];
+    int vertCount = EmitTopRing(verts, cx, cz, topY, halfOuter, halfInner, col);
+    ScopedBumperFlashD3DState guard(dev);
+    dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, static_cast<UINT>(vertCount / 3), verts, sizeof(BumperFlashVert));
+}
+
+static void RenderJavaShrinker(IDirect3DDevice9* dev, const uint8_t* shrinker, const uint8_t* ws) {
+    float cx   = static_cast<float>(*reinterpret_cast<const int32_t*>(shrinker + 0x04)) + 15.0f;
+    float cz   = static_cast<float>(*reinterpret_cast<const int32_t*>(shrinker + 0x08)) + 15.0f;
+    float topY = static_cast<float>(*reinterpret_cast<const int32_t*>(shrinker + 0x0c)) + 0.45f;
+    bool isToBig = (*reinterpret_cast<const int32_t*>(shrinker + 0x14) != 0);
+
+    constexpr float kJavaFullHalf = 14.95f;
+    constexpr float kJavaCoreHalf = kJavaFullHalf * (14.0f / 50.0f);
+    static const Rgb8 kJavaShrinkerDark = {0x00, 0x1d, 0x54};
+    static const Rgb8 kJavaShrinkerMid  = {0x37, 0x62, 0x8b};
+    static const Rgb8 kJavaFlashOuter[4] = {
+        {0x88, 0xaf, 0xbf}, {0x6d, 0x98, 0xaf}, {0x52, 0x81, 0x9f}, {0x1c, 0x42, 0x76}
+    };
+    static const Rgb8 kJavaFlashInner[4] = {
+        {0x37, 0x62, 0x8b}, {0x29, 0x52, 0x80}, {0x1c, 0x42, 0x76}, {0x00, 0x22, 0x61}
+    };
+    static const float kJavaShrinkScales[5] = {
+        42.0f / 50.0f, 36.0f / 50.0f, 30.0f / 50.0f, 22.0f / 50.0f, 14.0f / 50.0f
+    };
+
+    float smoothFrame = (ws != nullptr) ? GetSmoothWsFrame(ws) : 0.0f;
+    float t = std::fmod(smoothFrame * (22.0f / 30.0f), 22.0f);
+    if (t < 0.0f) t += 22.0f;
+    float tEff = isToBig ? (22.0f - t) : t;
+    if (tEff >= 22.0f) tEff -= 22.0f;
+
+    BumperFlashVert verts[30];
+    int vertCount = 0;
+    if (tEff < 4.0f) {
+        EmitTopQuad(
+            verts, cx - kJavaFullHalf, cx + kJavaFullHalf, cz - kJavaFullHalf, cz + kJavaFullHalf,
+            topY, PackArgb(0xffu, kJavaShrinkerDark)
+        );
+        vertCount = 6;
+    } else if (tEff < 14.0f) {
+        float pos = ((tEff - 4.0f) / 10.0f) * 4.0f;
+        int idx = std::clamp(static_cast<int>(pos), 0, 3);
+        float frac = std::clamp(pos - static_cast<float>(idx), 0.0f, 1.0f);
+        float sc = kJavaShrinkScales[idx] + (kJavaShrinkScales[idx + 1] - kJavaShrinkScales[idx]) * frac;
+        float h = sc * kJavaFullHalf;
+        EmitTopQuad(verts, cx - h, cx + h, cz - h, cz + h, topY, PackArgb(0xffu, kJavaShrinkerMid));
+        vertCount = 6;
+    } else {
+        float pos = ((tEff - 14.0f) / 8.0f) * 3.0f;
+        int idx = std::clamp(static_cast<int>(pos), 0, 2);
+        float frac = std::clamp(pos - static_cast<float>(idx), 0.0f, 1.0f);
+        D3DCOLOR cOuter = PackArgb(0xffu, LerpRgb8(kJavaFlashOuter[idx], kJavaFlashOuter[idx + 1], frac));
+        D3DCOLOR cInner = PackArgb(0xffu, LerpRgb8(kJavaFlashInner[idx], kJavaFlashInner[idx + 1], frac));
+        vertCount = EmitTopRing(verts, cx, cz, topY, kJavaFullHalf, kJavaCoreHalf, cOuter);
+        EmitTopQuad(
+            verts + vertCount, cx - kJavaCoreHalf, cx + kJavaCoreHalf, cz - kJavaCoreHalf, cz + kJavaCoreHalf,
+            topY, cInner
+        );
+        vertCount += 6;
+    }
+
+    ScopedBumperFlashD3DState guard(dev);
+    dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, static_cast<UINT>(vertCount / 3), verts, sizeof(BumperFlashVert));
+}
+
+static void SyncShrinkerNodeTimer(const uint8_t* shrinker) {
+    if (shrinker == nullptr) return;
+    uint8_t* model = *reinterpret_cast<uint8_t* const*>(shrinker + 0x18);
+    if (model == nullptr) return;
+    uint8_t* rootNode = *reinterpret_cast<uint8_t* const*>(model + 0x00);
+    if (rootNode == nullptr) return;
+    rootNode[0x1ad] = 0; // clear Node::updateTimer updated-this-frame guard (0x42539d / 0x425721)
+    uint8_t* nodeTimer = *reinterpret_cast<uint8_t* const*>(rootNode + 0xdc);
+    if (nodeTimer != nullptr) {
+        *reinterpret_cast<float*>(nodeTimer + 0x10) = *reinterpret_cast<const float*>(model + 0x20);
+    }
+}
+
 static void __fastcall Hook_ShrinkerRender(uint8_t* shrinker) {
     using OrigFn = void(__thiscall*)(void*);
     auto orig = reinterpret_cast<OrigFn>(0x486f50);
+    if (shrinker != nullptr) {
+        SyncShrinkerNodeTimer(shrinker);
+    }
     if (g_colorTheme == 0u || shrinker == nullptr) {
         orig(shrinker);
         return;
     }
+    if (shrinker[0x10] == 0) return;
 
-    OnColorThemeChanged();
-    g_inShrinkerRender = true;
-    orig(shrinker);
-    g_inShrinkerRender = false;
-    OnColorThemeChanged();
+    const uint8_t* model = *reinterpret_cast<const uint8_t* const*>(shrinker + 0x18);
+    if (model != nullptr && ((*reinterpret_cast<const uint32_t*>(model + 0x2c) & 0x800u) != 0u)) {
+        return;
+    }
+
+    IDirect3DDevice9* dev = GetD3DDevice();
+    if (dev == nullptr) {
+        orig(shrinker);
+        return;
+    }
+
+    uint8_t* ws = GetWorldScreen();
+    if (g_colorTheme == 1u) {
+        RenderMobileShrinker(dev, shrinker, GetLevel(), ws);
+    } else {
+        RenderJavaShrinker(dev, shrinker, ws);
+    }
 }
 
 static void __fastcall Hook_FallingPlatformRender(uint8_t* plat) {

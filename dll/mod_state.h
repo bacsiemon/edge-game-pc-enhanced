@@ -44,8 +44,35 @@ extern uint8_t g_chromaAb;    // 0=off, 1=on
 extern int32_t g_aaSamples;   // 0=off, 2/4/8/16 MSAA samples
 extern uint8_t g_finishEffect;   // 0=pc, 1=mobile, 2=java
 extern uint8_t g_finishPlatform; // 0=pc, 1=mobile, 2=java
-extern uint8_t g_colorTheme;     // 0=pc, 1=mobile, 2=java
+extern uint8_t g_colorTheme;     // 0=pc, 1=mobile, 2=java, 3=custom
 extern uint8_t g_cubeDistortion; // 0=off, 1=on
+
+struct CustomThemeSettings {
+    uint8_t terrain;          // 0=pc, 1=mobile, 2=java
+    uint8_t wallGradient;     // 0=pc/java (4-tile), 1=mobile (full-level)
+    uint8_t planets;          // 0=pc, 1=mobile, 2=java
+    uint8_t stars;            // 0=pc/mobile, 1=java
+    uint8_t playerCube;       // 0=pc, 1=mobile, 2=java
+    uint8_t darkCube;         // 0=pc, 1=mobile, 2=java
+    uint8_t cubeDistortion;   // 0=off, 1=on
+    uint8_t prisms;           // 0=pc, 1=mobile, 2=java
+    uint8_t movingPlatforms;  // 0=pc, 1=mobile, 2=java
+    uint8_t platformBorders;  // 0=pc, 1=mobile, 2=java
+    uint8_t fallingPlatforms; // 0=pc, 1=mobile, 2=java
+    uint8_t bumpers;          // 0=pc, 1=mobile, 2=java
+    uint8_t switches;         // 0=pc, 1=mobile, 2=java
+    uint8_t holoSwitches;     // 0=pc, 1=mobile, 2=java
+    uint8_t shrinkers;        // 0=pc, 1=mobile, 2=java
+    uint8_t finishPlatform;   // 0=pc, 1=mobile, 2=java
+    uint8_t finishEffect;     // 0=pc, 1=mobile, 2=java
+};
+
+extern CustomThemeSettings g_customTheme;
+extern uint8_t g_customThemeInited;
+
+CustomThemeSettings MakePresetThemeSettings(uint8_t preset);
+CustomThemeSettings GetEffectiveTheme();
+void SyncEffectiveThemeGlobals();
 extern uint8_t g_timerMode;   // 0=off, 1=level, 2=rank, 3=both
 extern float   g_timerSize;   // 0.25..2.0 (presets: 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2)
 extern uint8_t g_timerPos;    // 0=TL, 1=TR, 2=BL, 3=BR
@@ -263,5 +290,7 @@ int      __cdecl HitTestOptionsSlot(bool inPause, int mx, int my);
 bool     __cdecl IsOptionsPopupOpen(bool inPause);
 bool     __cdecl IsOptionsSliderDragging(bool inPause);
 bool     __cdecl IsOptionsMenuReadyForHover(const uint8_t* menuObj, bool inPause);
+void     __cdecl OnOptionsMouseWheel(int32_t wheelDelta);
+uint32_t __cdecl GetOptionsScrollRevision(bool inPause);
 
 } // namespace edgemod

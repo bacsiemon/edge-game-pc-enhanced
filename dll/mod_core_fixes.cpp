@@ -490,6 +490,9 @@ static LRESULT CALLBACK hk_GameWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         updateFocus = true;
         focused = (wParam == SIZE_MINIMIZED) ? false : QueryWindowFocused(hwnd);
         break;
+    case WM_MOUSEWHEEL:
+        OnOptionsMouseWheel(static_cast<int32_t>(GET_WHEEL_DELTA_WPARAM(wParam)));
+        break;
     default:
         break;
     }

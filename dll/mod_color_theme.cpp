@@ -9,7 +9,86 @@
 
 namespace edgemod {
 
-uint8_t g_colorTheme = 0; // 0=pc, 1=mobile, 2=java
+uint8_t g_colorTheme = 0; // 0=pc, 1=mobile, 2=java, 3=custom
+CustomThemeSettings g_customTheme{};
+uint8_t g_customThemeInited = 0;
+
+CustomThemeSettings MakePresetThemeSettings(uint8_t preset) {
+    CustomThemeSettings s{};
+    if (preset == 1u) {
+        s.terrain          = 1;
+        s.wallGradient     = 1;
+        s.planets          = 1;
+        s.stars            = 0;
+        s.playerCube       = 1;
+        s.darkCube         = 1;
+        s.cubeDistortion   = 0;
+        s.prisms           = 1;
+        s.movingPlatforms  = 1;
+        s.platformBorders  = 1;
+        s.fallingPlatforms = 1;
+        s.bumpers          = 1;
+        s.switches         = 1;
+        s.holoSwitches     = 1;
+        s.shrinkers        = 1;
+        s.finishPlatform   = 1;
+        s.finishEffect     = 1;
+    } else if (preset == 2u) {
+        s.terrain          = 2;
+        s.wallGradient     = 0;
+        s.planets          = 2;
+        s.stars            = 1;
+        s.playerCube       = 2;
+        s.darkCube         = 2;
+        s.cubeDistortion   = 1;
+        s.prisms           = 2;
+        s.movingPlatforms  = 2;
+        s.platformBorders  = 2;
+        s.fallingPlatforms = 2;
+        s.bumpers          = 2;
+        s.switches         = 2;
+        s.holoSwitches     = 2;
+        s.shrinkers        = 2;
+        s.finishPlatform   = 2;
+        s.finishEffect     = 2;
+    }
+    return s;
+}
+
+CustomThemeSettings GetEffectiveTheme() {
+    if (g_colorTheme <= 2u) {
+        return MakePresetThemeSettings(g_colorTheme);
+    }
+    CustomThemeSettings s = g_customTheme;
+    auto clamp3 = [](uint8_t v) -> uint8_t { return (v <= 2u) ? v : 0u; };
+    auto clamp2 = [](uint8_t v) -> uint8_t { return (v != 0u) ? 1u : 0u; };
+    s.terrain          = clamp3(s.terrain);
+    s.wallGradient     = clamp2(s.wallGradient);
+    s.planets          = clamp3(s.planets);
+    s.stars            = clamp2(s.stars);
+    s.playerCube       = clamp3(s.playerCube);
+    s.darkCube         = clamp3(s.darkCube);
+    s.cubeDistortion   = clamp2(s.cubeDistortion);
+    s.prisms           = clamp3(s.prisms);
+    s.movingPlatforms  = clamp3(s.movingPlatforms);
+    s.platformBorders  = clamp3(s.platformBorders);
+    s.fallingPlatforms = clamp3(s.fallingPlatforms);
+    s.bumpers          = clamp3(s.bumpers);
+    s.switches         = clamp3(s.switches);
+    s.holoSwitches     = clamp3(s.holoSwitches);
+    s.shrinkers        = clamp3(s.shrinkers);
+    s.finishPlatform   = clamp3(s.finishPlatform);
+    s.finishEffect     = clamp3(s.finishEffect);
+    return s;
+}
+
+void SyncEffectiveThemeGlobals() {
+    CustomThemeSettings eff = GetEffectiveTheme();
+    g_finishEffect   = eff.finishEffect;
+    g_finishPlatform = eff.finishPlatform;
+    g_cubeDistortion = eff.cubeDistortion;
+    OnColorThemeChanged();
+}
 
 void OnColorThemeChanged() {
     uint8_t count = *reinterpret_cast<uint8_t*>(0x5f87c9);
@@ -293,11 +372,16 @@ static IDirect3DTexture9* g_platEdgeTex[2][4] = {};
 static IDirect3DTexture9* g_holoSwitchTex[3] = {};
 static IDirect3DTexture9* g_javaStarTex[2] = {};
 static IDirect3DTexture9* g_mobileFallingTex[4][16] = {};
-static int                g_mobileFallingBucket = -1;
-static bool               g_inJavaBumperRender = false;
-static bool               g_inJavaMovingPlatformRender = false;
-static bool               g_inMovingPlatEdgeRender = false;
-static bool               g_inHoloSwitchRender = false;
+enum WallDrawTarget : uint8_t {
+    WALL_TARGET_TERRAIN     = 0,
+    WALL_TARGET_MOVING_PLAT = 1,
+    WALL_TARGET_BUMPER      = 2
+};
+
+static int            g_mobileFallingBucket    = -1;
+static WallDrawTarget g_wallDrawTarget         = WALL_TARGET_TERRAIN;
+static bool           g_inMovingPlatEdgeRender = false;
+static bool           g_inHoloSwitchRender     = false;
 
 static inline uint32_t PackArgb(uint8_t a, Rgb8 c) {
     return (static_cast<uint32_t>(a) << 24)
@@ -589,14 +673,12 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
     if (d3dDev == nullptr) return defaultTex;
     if (*reinterpret_cast<const uint32_t*>(texObj + 0x08) != kTexturesFolderHash) return defaultTex;
 
+    const CustomThemeSettings eff = GetEffectiveTheme();
     uint32_t hash0 = *reinterpret_cast<const uint32_t*>(texObj + 0x04);
-    bool isHolo = (g_inHoloSwitchRender && hash0 == kRainbowCubeHash);
-    if (g_colorTheme == 0 && !isHolo) return defaultTex;
-
-    bool isJava = (g_colorTheme == 2u);
     uint8_t* lvl = GetLevel();
+    bool isHolo = (g_inHoloSwitchRender && hash0 == kRainbowCubeHash);
     bool isPlatEdge = (g_inMovingPlatEdgeRender && hash0 == kRainbowCubeHash);
-    bool isJavaStar = (isJava && hash0 == kFlickeringStarHash && lvl != nullptr);
+    bool isJavaStar = (eff.stars != 0u && hash0 == kFlickeringStarHash && lvl != nullptr);
     bool isCustom = isPlatEdge || isHolo || isJavaStar;
 
     int slot = -1;
@@ -657,10 +739,12 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
     }
 
     if (isPlatEdge) {
+        if (eff.platformBorders == 0u) return defaultTex;
+        bool isJavaEdge = (eff.platformBorders == 2u);
         uint8_t themeIdx = (lvl != nullptr) ? (lvl[0x6c] & 3u) : 0u;
-        int modeSlot = isJava ? 1 : 0;
+        int modeSlot = isJavaEdge ? 1 : 0;
         if (g_platEdgeTex[modeSlot][themeIdx] == nullptr) {
-            const Rgb8 (*pal)[3] = isJava
+            const Rgb8 (*pal)[3] = isJavaEdge
                 ? kJavaPlatEdgePalette[(themeIdx == 3u) ? 1 : 0]
                 : kAndroidPlatEdgePalette[themeIdx];
             g_platEdgeTex[modeSlot][themeIdx] = CreatePlatEdgeTexture(d3dDev, pal);
@@ -669,7 +753,7 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
             ? static_cast<void*>(g_platEdgeTex[modeSlot][themeIdx])
             : defaultTex;
     } else if (isHolo) {
-        uint8_t mode = (g_colorTheme <= 2u) ? g_colorTheme : 0u;
+        uint8_t mode = (eff.holoSwitches <= 2u) ? eff.holoSwitches : 0u;
         if (g_holoSwitchTex[mode] == nullptr) {
             if (mode == 0u) {
                 g_holoSwitchTex[mode] = CreateHorizontalCycleTexture(d3dDev, kPcHoloSwitchColors, 13);
@@ -690,8 +774,30 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
         }
         return g_javaStarTex[idx] != nullptr ? static_cast<void*>(g_javaStarTex[idx]) : defaultTex;
     }
-    if (!isJava && g_mobileFallingBucket >= 0 && kTargetTexSpecs[slot].kind == TEX_FALLING_PLATFORM) {
-        uint8_t themeIdx = kTargetTexSpecs[slot].themeIdx;
+
+    const TargetTexSpec& spec = kTargetTexSpecs[slot];
+    uint8_t style = 0;
+    if (spec.kind == TEX_LEVELWALL) {
+        if (g_wallDrawTarget == WALL_TARGET_MOVING_PLAT) {
+            style = eff.movingPlatforms;
+        } else if (g_wallDrawTarget == WALL_TARGET_BUMPER) {
+            style = eff.bumpers;
+        } else {
+            style = eff.terrain;
+        }
+    } else if (spec.kind == TEX_PLANET) {
+        style = eff.planets;
+    } else if (spec.kind == TEX_FALLING_PLATFORM) {
+        style = eff.fallingPlatforms;
+    } else {
+        style = eff.switches;
+    }
+
+    if (style == 0u) return defaultTex;
+    bool isJava = (style == 2u);
+
+    if (!isJava && g_mobileFallingBucket >= 0 && spec.kind == TEX_FALLING_PLATFORM) {
+        uint8_t themeIdx = spec.themeIdx;
         int b = std::clamp(g_mobileFallingBucket, 0, 15);
         if (g_mobileFallingTex[themeIdx][b] == nullptr) {
             g_mobileFallingTex[themeIdx][b] = CreateMobileFallingTexture(d3dDev, themeIdx, b);
@@ -700,16 +806,16 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
             return static_cast<void*>(g_mobileFallingTex[themeIdx][b]);
         }
     }
-    if (isJava && kTargetTexSpecs[slot].kind == TEX_LEVELWALL) {
-        uint8_t themeIdx = kTargetTexSpecs[slot].themeIdx;
-        if (g_inJavaMovingPlatformRender) {
+    if (isJava && spec.kind == TEX_LEVELWALL) {
+        uint8_t themeIdx = spec.themeIdx;
+        if (g_wallDrawTarget == WALL_TARGET_MOVING_PLAT) {
             if (g_javaMovingPlatTex[themeIdx] == nullptr) {
                 g_javaMovingPlatTex[themeIdx] = CreateJavaSolidWallTexture(d3dDev, kJavaMovingPlatPalette[themeIdx]);
             }
             if (g_javaMovingPlatTex[themeIdx] != nullptr) {
                 return static_cast<void*>(g_javaMovingPlatTex[themeIdx]);
             }
-        } else if (g_inJavaBumperRender) {
+        } else if (g_wallDrawTarget == WALL_TARGET_BUMPER) {
             if (g_javaBumperTex[themeIdx] == nullptr) {
                 g_javaBumperTex[themeIdx] = CreateJavaSolidWallTexture(d3dDev, kJavaBumperPalette[themeIdx]);
             }
@@ -721,7 +827,7 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
 
     int themeSlot = isJava ? 1 : 0;
     if (g_themeTex[themeSlot][slot] == nullptr) {
-        g_themeTex[themeSlot][slot] = CreateThemeTexture(d3dDev, kTargetTexSpecs[slot], isJava);
+        g_themeTex[themeSlot][slot] = CreateThemeTexture(d3dDev, spec, isJava);
     }
     return g_themeTex[themeSlot][slot] != nullptr ? static_cast<void*>(g_themeTex[themeSlot][slot]) : defaultTex;
 }
@@ -743,61 +849,145 @@ static void __declspec(naked) Hook_TextureApplyLoadTex() {
     }
 }
 
-static uint8_t GetJavaLight0Byte() {
-    return 194u;
+static D3DLIGHT9 g_pcLight0{};
+static D3DLIGHT9 g_pcLight1{};
+static BOOL      g_pcLight1Enabled = FALSE;
+static bool      g_hasPcLight0     = false;
+static bool      g_hasPcLight1     = false;
+
+static D3DLIGHT9 MakeThemeLight0Template(const D3DLIGHT9& base, D3DCOLORVALUE diffuse, D3DVECTOR dir) {
+    D3DLIGHT9 out = base;
+    out.Diffuse   = diffuse;
+    out.Direction = dir;
+    return out;
 }
+
+static void FillWorldStyleLight0(uint8_t style, D3DLIGHT9* light0) {
+    if (light0 == nullptr) return;
+    if (style == 2u) {
+        float c = 194.0f / 255.0f;
+        light0->Diffuse   = {c, c, c, 1.0f};
+        light0->Direction = {-0.3600000f, -0.7500000f, -0.5548874f};
+    } else {
+        float c = 205.0f / 255.0f;
+        light0->Diffuse   = {c, c, c, 1.0f};
+        light0->Direction = {-0.4327311f, -0.7212185f, -0.5409138f};
+    }
+}
+
+struct ScopedThemeLight {
+    IDirect3DDevice9* dev = nullptr;
+    D3DLIGHT9 saved0{};
+    D3DLIGHT9 saved1{};
+    BOOL saved1En = FALSE;
+    bool hasSaved0 = false;
+    bool hasSaved1 = false;
+
+    void BeginRestorePc() {
+        dev = reinterpret_cast<IDirect3DDevice9*(__cdecl*)()>(0x40e6c0)();
+        if (dev == nullptr) return;
+        if (g_hasPcLight0 && SUCCEEDED(dev->GetLight(0, &saved0))) {
+            hasSaved0 = true;
+            dev->SetLight(0, &g_pcLight0);
+        }
+        if (g_hasPcLight1 && SUCCEEDED(dev->GetLight(1, &saved1)) && SUCCEEDED(dev->GetLightEnable(1, &saved1En))) {
+            hasSaved1 = true;
+            dev->SetLight(1, &g_pcLight1);
+            dev->LightEnable(1, g_pcLight1Enabled);
+        }
+    }
+
+    void BeginSingle(D3DCOLORVALUE diffuse, D3DVECTOR dir) {
+        dev = reinterpret_cast<IDirect3DDevice9*(__cdecl*)()>(0x40e6c0)();
+        if (dev == nullptr) return;
+        if (SUCCEEDED(dev->GetLight(0, &saved0))) {
+            hasSaved0 = true;
+            D3DLIGHT9 l0 = MakeThemeLight0Template(saved0, diffuse, dir);
+            dev->SetLight(0, &l0);
+        }
+        if (SUCCEEDED(dev->GetLightEnable(1, &saved1En))) {
+            hasSaved1 = true;
+            dev->LightEnable(1, FALSE);
+        }
+    }
+
+    void BeginWorldStyle(uint8_t style) {
+        if (style == 0u) {
+            if (GetEffectiveTheme().playerCube != 0u) {
+                BeginRestorePc();
+            }
+            return;
+        }
+        dev = reinterpret_cast<IDirect3DDevice9*(__cdecl*)()>(0x40e6c0)();
+        if (dev == nullptr) return;
+        if (SUCCEEDED(dev->GetLight(0, &saved0))) {
+            hasSaved0 = true;
+            D3DLIGHT9 l0 = saved0;
+            FillWorldStyleLight0(style, &l0);
+            dev->SetLight(0, &l0);
+        }
+        if (SUCCEEDED(dev->GetLightEnable(1, &saved1En))) {
+            hasSaved1 = true;
+            dev->LightEnable(1, FALSE);
+        }
+    }
+
+    ~ScopedThemeLight() {
+        if (dev == nullptr) return;
+        if (hasSaved0) dev->SetLight(0, &saved0);
+        if (hasSaved1) {
+            if (hasSaved0 && g_hasPcLight1 && saved1En) {
+                dev->SetLight(1, &saved1);
+            }
+            dev->LightEnable(1, saved1En);
+        }
+    }
+};
 
 static void __fastcall Hook_LightApply(uint8_t* light) {
     using OrigFn = void(__thiscall*)(void*);
     auto orig = reinterpret_cast<OrigFn>(0x4e9810);
-    if (g_colorTheme == 0 || light == nullptr) {
+    if (light == nullptr) {
         orig(light);
         return;
     }
 
-    uint8_t savedColor[4];
-    float savedDir[3];
-    std::memcpy(savedColor, light + 0x00, sizeof(savedColor));
-    std::memcpy(savedDir, light + 0x08, sizeof(savedDir));
+    orig(light);
+
+    IDirect3DDevice9* dev = reinterpret_cast<IDirect3DDevice9*(__cdecl*)()>(0x40e6c0)();
+    if (dev == nullptr) return;
 
     // LightD3D starts at light + 0x3c; D3D light slot index is at LightD3D + 0x68 (= light + 0xa4)
     int32_t d3dIdx = *reinterpret_cast<const int32_t*>(light + 0xa4);
     if (d3dIdx == 0) {
-        bool isJava = (g_colorTheme == 2u);
-        uint8_t intensity = isJava ? GetJavaLight0Byte() : 205u;
-        light[0] = intensity;
-        light[1] = intensity;
-        light[2] = intensity;
-        light[3] = 255;
-        float* dir = reinterpret_cast<float*>(light + 0x08);
-        if (isJava) {
-            // Balanced isometric cube light matching 0.spr am[8]:am[11]:am[14] (Top=1.00, Left=0.87, Right=0.74)
-            dir[0] = -0.3600000f;
-            dir[1] = -0.7500000f;
-            dir[2] = -0.5548874f;
-        } else {
-            dir[0] = -0.4327311f;
-            dir[1] = -0.7212185f;
-            dir[2] = -0.5409138f;
+        if (SUCCEEDED(dev->GetLight(0, &g_pcLight0))) {
+            g_hasPcLight0 = true;
         }
-    } else {
-        light[0] = 0;
-        light[1] = 0;
-        light[2] = 0;
-        light[3] = 255;
+    } else if (d3dIdx == 1) {
+        if (SUCCEEDED(dev->GetLight(1, &g_pcLight1)) && SUCCEEDED(dev->GetLightEnable(1, &g_pcLight1Enabled))) {
+            g_hasPcLight1 = true;
+        }
     }
 
-    orig(light);
+    uint8_t playerCubeStyle = GetEffectiveTheme().playerCube;
+    if (playerCubeStyle == 0u) return;
 
-    std::memcpy(light + 0x00, savedColor, sizeof(savedColor));
-    std::memcpy(light + 0x08, savedDir, sizeof(savedDir));
+    if (d3dIdx == 0) {
+        D3DLIGHT9 l0{};
+        if (SUCCEEDED(dev->GetLight(0, &l0))) {
+            FillWorldStyleLight0(playerCubeStyle, &l0);
+            dev->SetLight(0, &l0);
+        }
+    } else {
+        dev->LightEnable(static_cast<DWORD>(d3dIdx), FALSE);
+    }
 }
 
 static bool         g_prismMatOverride       = false;
 static bool         g_anyNormalPrismRendered = false;
 static D3DMATERIAL9 g_prismMat{};
 
-static void PreparePrismMaterial(int32_t animTick) {
+static void PreparePrismMaterial(int32_t animTick, uint8_t prismStyle) {
     uint8_t* sm = GetScreenMgr();
     float alpha = (sm != nullptr && *reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x11u)
         ? std::clamp(g_uiAlpha, 0.0f, 1.0f)
@@ -807,7 +997,7 @@ static void PreparePrismMaterial(int32_t animTick) {
     g_prismMat.Diffuse.a = 1.0f;
     g_prismMat.Ambient.a = 1.0f;
 
-    if (g_colorTheme == 1u) {
+    if (prismStyle == 1u) {
         int i0 = ((animTick % 18) + 18) % 18;
         int i1 = (i0 + 1) % 18;
         Rgb8 base = LerpRgb8(kAndroidPrismColors[i0], kAndroidPrismColors[i1], alpha);
@@ -843,44 +1033,30 @@ static void PreparePrismMaterial(int32_t animTick) {
     }
 }
 
-struct ScopedJavaPrismLight {
-    IDirect3DDevice9* dev = nullptr;
-    D3DLIGHT9 saved{};
-    bool active = false;
-
-    explicit ScopedJavaPrismLight(bool enable) {
-        if (!enable) return;
-        dev = reinterpret_cast<IDirect3DDevice9*(__cdecl*)()>(0x40e6c0)();
-        if (dev != nullptr && SUCCEEDED(dev->GetLight(0, &saved))) {
-            D3DLIGHT9 prismLight = saved;
-            prismLight.Diffuse   = {1.0f, 1.0f, 1.0f, 1.0f};
-            prismLight.Direction = {0.2500000f, -0.8700000f, -0.4249706f};
-            dev->SetLight(0, &prismLight);
-            active = true;
-        }
-    }
-
-    ~ScopedJavaPrismLight() {
-        if (active && dev != nullptr) {
-            dev->SetLight(0, &saved);
-        }
-    }
-};
-
 static void __fastcall Hook_PrismRender(uint8_t* prism) {
     using OrigFn = void(__thiscall*)(void*);
     auto orig = reinterpret_cast<OrigFn>(0x487800);
-    if (g_colorTheme == 0 || prism == nullptr || *reinterpret_cast<void* const*>(prism + 0x24) != nullptr) {
+    const CustomThemeSettings eff = GetEffectiveTheme();
+    if (eff.prisms == 0u || prism == nullptr || *reinterpret_cast<void* const*>(prism + 0x24) != nullptr) {
+        ScopedThemeLight lightGuard;
+        if (eff.prisms == 0u && eff.playerCube != 0u) {
+            lightGuard.BeginRestorePc();
+        }
         orig(prism);
         return;
     }
 
     int32_t animTick = *reinterpret_cast<const int32_t*>(prism + 0x14);
-    PreparePrismMaterial(animTick);
+    PreparePrismMaterial(animTick, eff.prisms);
     g_prismMatOverride = true;
     g_anyNormalPrismRendered = true;
     {
-        ScopedJavaPrismLight keyLight(g_colorTheme == 2u);
+        ScopedThemeLight keyLight;
+        if (eff.prisms == 2u) {
+            keyLight.BeginSingle({1.0f, 1.0f, 1.0f, 1.0f}, {0.2500000f, -0.8700000f, -0.4249706f});
+        } else {
+            keyLight.BeginWorldStyle(1u);
+        }
         orig(prism);
     }
     g_prismMatOverride = false;
@@ -889,14 +1065,24 @@ static void __fastcall Hook_PrismRender(uint8_t* prism) {
 static void __fastcall Hook_PrismRenderTransparents(void* renderer) {
     using OrigFn = void(__thiscall*)(void*);
     auto orig = reinterpret_cast<OrigFn>(0x407410);
+    const CustomThemeSettings eff = GetEffectiveTheme();
     uint8_t* sm = GetScreenMgr();
     bool inDebrief = (sm != nullptr && *reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x13u);
-    bool overrideMat = (g_colorTheme != 0 && g_anyNormalPrismRendered && !inDebrief);
+    bool overrideMat = (eff.prisms != 0u && g_anyNormalPrismRendered && !inDebrief);
     if (overrideMat) {
         g_prismMatOverride = true;
     }
     {
-        ScopedJavaPrismLight keyLight(overrideMat && g_colorTheme == 2u);
+        ScopedThemeLight keyLight;
+        if (overrideMat) {
+            if (eff.prisms == 2u) {
+                keyLight.BeginSingle({1.0f, 1.0f, 1.0f, 1.0f}, {0.2500000f, -0.8700000f, -0.4249706f});
+            } else {
+                keyLight.BeginWorldStyle(1u);
+            }
+        } else if (eff.prisms == 0u && eff.playerCube != 0u) {
+            keyLight.BeginRestorePc();
+        }
         orig(renderer);
     }
     g_prismMatOverride = false;
@@ -926,7 +1112,7 @@ static void __declspec(naked) Hook_MaterialLoadD3DMat() {
 }
 
 static const uint32_t* __cdecl SelectCubePaletteTable_Impl(int theme) {
-    if (g_colorTheme == 2u) {
+    if (GetEffectiveTheme().playerCube == 2u) {
         return (theme >= 0 && theme <= 1)
             ? kJavaRainbowMenu
             : reinterpret_cast<const uint32_t*>(0x589b50);
@@ -952,7 +1138,8 @@ static int g_javaCubeDeltaTopRight[3] = {55, 55, 55};
 
 static void __cdecl Hook_ComputeCubePalette(int theme) {
     reinterpret_cast<void(__cdecl*)(int)>(0x48b980)(theme);
-    if (g_colorTheme == 2u) {
+    const CustomThemeSettings eff = GetEffectiveTheme();
+    if (eff.playerCube == 2u || eff.darkCube == 2u) {
         uint8_t* ws = *reinterpret_cast<uint8_t**>(0x5f9064);
         bool isRainbow = (ws != nullptr && ws[0xb5] != 0);
         int t = (theme >= 0 && theme <= 3) ? theme : 2;
@@ -974,9 +1161,11 @@ static void __cdecl Hook_ComputeCubePalette(int theme) {
         int rg = std::clamp(mg + dRight, 0, 255);
         int rb = std::clamp(mb + dRight, 0, 255);
 
-        pal[15] = (static_cast<uint32_t>(rr) << 16)
-                | (static_cast<uint32_t>(rg) << 8)
-                | static_cast<uint32_t>(rb);
+        if (eff.playerCube == 2u) {
+            pal[15] = (static_cast<uint32_t>(rr) << 16)
+                    | (static_cast<uint32_t>(rg) << 8)
+                    | static_cast<uint32_t>(rb);
+        }
 
         // Preserve full Top-to-Right contrast using unclamped target Top delta vs clamped Right base
         g_javaCubeDeltaTopRight[0] = (std::max)(0, mr + dTop - rr);
@@ -1009,7 +1198,7 @@ struct CachedWallSubMesh {
 
 static uint8_t* s_cachedLevelModel  = nullptr;
 static int      s_cachedHeightTiles = 0;
-static uint8_t  s_appliedLevelTheme = 0;
+static uint8_t  s_appliedWallGrad   = 0;
 static std::vector<CachedWallSubMesh> s_wallSubMeshes;
 
 static void CollectLevelWallSubMeshes(uint8_t* nodePtr, std::vector<CachedWallSubMesh>& out) {
@@ -1093,10 +1282,11 @@ static void __fastcall Hook_StaticLevelRender(uint8_t* model, void*, int arg) {
         }
         s_cachedLevelModel = model;
         s_cachedHeightTiles = heightTiles;
-        s_appliedLevelTheme = 0;
+        s_appliedWallGrad = 0;
     }
 
-    if (s_appliedLevelTheme != g_colorTheme && !s_wallSubMeshes.empty()) {
+    uint8_t wantWallGrad = GetEffectiveTheme().wallGradient;
+    if (s_appliedWallGrad != wantWallGrad && !s_wallSubMeshes.empty()) {
         float span = (static_cast<float>(heightTiles) - 0.5f) * 10.0f;
         if (span < 10.0f) span = 10.0f;
         for (auto& entry : s_wallSubMeshes) {
@@ -1106,7 +1296,7 @@ static void __fastcall Hook_StaticLevelRender(uint8_t* model, void*, int arg) {
                 uint8_t* basePtr = static_cast<uint8_t*>(ptr);
                 for (uint32_t i = 0; i < entry.numVerts; ++i) {
                     uint8_t* vptr = basePtr + i * entry.stride;
-                    if (g_colorTheme == 1u) {
+                    if (wantWallGrad != 0u) {
                         float y = *reinterpret_cast<const float*>(vptr + 4u);
                         float u = *reinterpret_cast<const float*>(vptr + entry.uvOff);
                         if (u < 0.5f) {
@@ -1121,7 +1311,7 @@ static void __fastcall Hook_StaticLevelRender(uint8_t* model, void*, int arg) {
                 entry.vb->Unlock();
             }
         }
-        s_appliedLevelTheme = g_colorTheme;
+        s_appliedWallGrad = wantWallGrad;
     }
 
     orig(model, arg);
@@ -1130,7 +1320,7 @@ static void __fastcall Hook_StaticLevelRender(uint8_t* model, void*, int arg) {
 static void __cdecl Hook_SetHeightUV(void* model, int y) {
     float vScale = 1.0f;
     float vOff = 0.0f;
-    if (g_colorTheme != 1u) {
+    if (GetEffectiveTheme().wallGradient == 0u) {
         vOff = static_cast<float>(-static_cast<double>(y) * (1.0 / 120.0));
     } else {
         int hTiles = GetLevelHeightTiles();
@@ -1400,10 +1590,19 @@ static void __fastcall Hook_BumperRender(uint8_t* bumper) {
         return;
     }
 
+    const CustomThemeSettings eff = GetEffectiveTheme();
+    uint8_t bumperStyle = eff.bumpers;
     uint8_t* roofMesh  = *reinterpret_cast<uint8_t**>(bumper + 0x74);
     uint8_t* flashNode = GetBumperRoofFlashNode(roofMesh);
 
-    if (g_colorTheme == 0) {
+    if (bumperStyle == 0u) {
+        bool diffTex = (eff.terrain != 0u);
+        ScopedThemeLight lightGuard;
+        if (eff.playerCube != 0u) {
+            lightGuard.BeginRestorePc();
+        }
+        if (diffTex) OnColorThemeChanged();
+        g_wallDrawTarget = WALL_TARGET_BUMPER;
         uint8_t savedVis = 0;
         if (flashNode != nullptr) {
             savedVis = flashNode[0x1a1];
@@ -1413,6 +1612,8 @@ static void __fastcall Hook_BumperRender(uint8_t* bumper) {
         if (flashNode != nullptr) {
             flashNode[0x1a1] = savedVis;
         }
+        g_wallDrawTarget = WALL_TARGET_TERRAIN;
+        if (diffTex) OnColorThemeChanged();
         RenderSmoothBumperRoofFlash(bumper);
         return;
     }
@@ -1421,11 +1622,9 @@ static void __fastcall Hook_BumperRender(uint8_t* bumper) {
     using DrawMeshFn    = void(__thiscall*)(void*, int);
 
     uint8_t* renderer = GetRenderer();
-    bool isJava = (g_colorTheme == 2u);
-    if (isJava) {
-        OnColorThemeChanged();
-        g_inJavaBumperRender = true;
-    }
+    bool diffTex = (bumperStyle != eff.terrain);
+    if (diffTex) OnColorThemeChanged();
+    g_wallDrawTarget = WALL_TARGET_BUMPER;
 
     int param = *reinterpret_cast<const int*>(bumper + 0x10);
     for (int i = 0; i < 4; ++i) {
@@ -1433,6 +1632,10 @@ static void __fastcall Hook_BumperRender(uint8_t* bumper) {
         if (sideMesh != nullptr) {
             bool triggered = (*reinterpret_cast<const int*>(sideMesh + 0x1c) != 5)
                           && (*reinterpret_cast<const int*>(sideMesh + 0x08) != 0);
+            ScopedThemeLight sideLight;
+            if (triggered) {
+                sideLight.BeginWorldStyle(bumperStyle);
+            }
             if (renderer != nullptr) {
                 reinterpret_cast<SetLightingFn>(0x405e40)(renderer, triggered ? 1 : 0);
             }
@@ -1457,10 +1660,8 @@ static void __fastcall Hook_BumperRender(uint8_t* bumper) {
         }
     }
 
-    g_inJavaBumperRender = false;
-    if (isJava) {
-        OnColorThemeChanged();
-    }
+    g_wallDrawTarget = WALL_TARGET_TERRAIN;
+    if (diffTex) OnColorThemeChanged();
 
     if (renderer != nullptr) {
         reinterpret_cast<SetLightingFn>(0x405e40)(renderer, 1);
@@ -1793,9 +1994,13 @@ static void __fastcall Hook_MovingPlatformRender(uint8_t* plat) {
         s_anyPlatEdgeVbModified = false;
     }
 
+    const CustomThemeSettings eff = GetEffectiveTheme();
+    uint8_t bodyStyle = eff.movingPlatforms;
+    uint8_t borderStyle = eff.platformBorders;
+
     MovingPlatDepthPlan plan = ResolveMovingPlatformDepthPlan(plat);
     if (plan.skip) {
-        if (g_colorTheme == 0 && s_anyPlatEdgeVbModified) {
+        if (borderStyle == 0u && s_anyPlatEdgeVbModified) {
             uint8_t* edgeModel = *reinterpret_cast<uint8_t**>(plat + 0x60);
             if (edgeModel != nullptr) {
                 SyncMovingPlatEdgeUVs(edgeModel, false);
@@ -1807,7 +2012,7 @@ static void __fastcall Hook_MovingPlatformRender(uint8_t* plat) {
     float bias = static_cast<float>(1u + plan.layer) * kPlatformDepthBiasStep;
     ScopedDepthBias depthGuard(GetD3DDevice(), bias);
 
-    if (g_colorTheme == 0) {
+    if (bodyStyle == 0u && borderStyle == 0u && eff.terrain == 0u && eff.wallGradient == 0u) {
         if (s_anyPlatEdgeVbModified) {
             uint8_t* edgeModel = *reinterpret_cast<uint8_t**>(plat + 0x60);
             if (edgeModel != nullptr) {
@@ -1820,7 +2025,6 @@ static void __fastcall Hook_MovingPlatformRender(uint8_t* plat) {
 
     using DrawMeshFn   = void(__thiscall*)(void*, int);
     using SetUvMatFn   = void(__cdecl*)(void*, const float*);
-    bool isJava = (g_colorTheme == 2u);
 
     int32_t state = *reinterpret_cast<const int32_t*>(plat + 0x6c);
     if (state >= 0 && state <= 1) {
@@ -1829,45 +2033,50 @@ static void __fastcall Hook_MovingPlatformRender(uint8_t* plat) {
             double yVal = static_cast<double>(*reinterpret_cast<const float*>(bodyModel + 0x34))
                         - *reinterpret_cast<const double*>(0x585020);
             int yInt = static_cast<int>(yVal);
-            if (isJava) {
-                OnColorThemeChanged();
-                g_inJavaMovingPlatformRender = true;
-            }
+            bool diffTex = (bodyStyle != eff.terrain);
+            if (diffTex) OnColorThemeChanged();
+            g_wallDrawTarget = WALL_TARGET_MOVING_PLAT;
             Hook_SetHeightUV(bodyModel, yInt);
             reinterpret_cast<DrawMeshFn>(0x421460)(bodyModel, 0);
-            if (isJava) {
-                g_inJavaMovingPlatformRender = false;
-                OnColorThemeChanged();
-            }
+            g_wallDrawTarget = WALL_TARGET_TERRAIN;
+            if (diffTex) OnColorThemeChanged();
         }
     }
 
     uint8_t* edgeModel = *reinterpret_cast<uint8_t**>(plat + 0x60);
     if (state == 1 && edgeModel != nullptr) {
-        SyncMovingPlatEdgeUVs(edgeModel, true);
-
         int32_t animTick = *reinterpret_cast<const int32_t*>(plat + 0x68);
-        uint8_t* sm = GetScreenMgr();
-        float alpha = (sm != nullptr && *reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x11u)
-            ? std::clamp(g_uiAlpha, 0.0f, 1.0f)
-            : 0.0f;
-        float ticksPerColor = isJava ? 2.7f : 1.0f;
-        float phase = std::fmod((static_cast<float>(animTick) + alpha) / (9.0f * ticksPerColor), 1.0f);
-        if (phase < 0.0f) phase += 1.0f;
+        if (borderStyle == 0u) {
+            if (s_anyPlatEdgeVbModified) {
+                SyncMovingPlatEdgeUVs(edgeModel, false);
+            }
+            reinterpret_cast<void(__cdecl*)(void*, int32_t, int)>(0x495c50)(edgeModel, animTick, 0xd);
+            reinterpret_cast<DrawMeshFn>(0x421460)(edgeModel, 0);
+        } else {
+            SyncMovingPlatEdgeUVs(edgeModel, true);
 
-        float mat[16] = {
-            1.0f, 0.0f, 0.0f, 0.0f,
-            0.0f, 1.0f, 0.0f, 0.0f,
-            phase, 0.0f, 1.0f, 0.0f,
-            phase, 0.0f, 0.0f, 1.0f
-        };
-        reinterpret_cast<SetUvMatFn>(0x495a70)(edgeModel, mat);
+            uint8_t* sm = GetScreenMgr();
+            float alpha = (sm != nullptr && *reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x11u)
+                ? std::clamp(g_uiAlpha, 0.0f, 1.0f)
+                : 0.0f;
+            float ticksPerColor = (borderStyle == 2u) ? 2.7f : 1.0f;
+            float phase = std::fmod((static_cast<float>(animTick) + alpha) / (9.0f * ticksPerColor), 1.0f);
+            if (phase < 0.0f) phase += 1.0f;
 
-        OnColorThemeChanged();
-        g_inMovingPlatEdgeRender = true;
-        reinterpret_cast<DrawMeshFn>(0x421460)(edgeModel, 0);
-        g_inMovingPlatEdgeRender = false;
-        OnColorThemeChanged();
+            float mat[16] = {
+                1.0f, 0.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f, 0.0f,
+                phase, 0.0f, 1.0f, 0.0f,
+                phase, 0.0f, 0.0f, 1.0f
+            };
+            reinterpret_cast<SetUvMatFn>(0x495a70)(edgeModel, mat);
+
+            OnColorThemeChanged();
+            g_inMovingPlatEdgeRender = true;
+            reinterpret_cast<DrawMeshFn>(0x421460)(edgeModel, 0);
+            g_inMovingPlatEdgeRender = false;
+            OnColorThemeChanged();
+        }
     }
 }
 
@@ -2026,7 +2235,7 @@ static void __fastcall Hook_SwitchRender(uint8_t* sw) {
         s_anySwitchVbModified = false;
     }
 
-    uint8_t targetTheme = g_colorTheme;
+    uint8_t targetTheme = GetEffectiveTheme().switches;
     if (targetTheme == 0u && !s_anySwitchVbModified) {
         orig(sw);
         return;
@@ -2104,14 +2313,15 @@ static void __fastcall Hook_HoloSwitchRender(uint8_t* holo) {
         return;
     }
 
+    uint8_t holoStyle = GetEffectiveTheme().holoSwitches;
     uint8_t* ws = *reinterpret_cast<uint8_t**>(0x5f9064);
     float smoothFrame = (ws != nullptr) ? GetSmoothWsFrame(ws) : 0.0f;
     float phase = 0.0f;
-    if (g_colorTheme == 0u) {
+    if (holoStyle == 0u) {
         // PC: 13 pastel colors over 65 ticks (5 ticks/color, matching holoswitch.ema)
         phase = std::fmod(smoothFrame / 65.0f, 1.0f);
         if (phase < 0.0f) phase += 1.0f;
-    } else if (g_colorTheme == 1u) {
+    } else if (holoStyle == 1u) {
         // Android: max(0, ((tick / 2) % (8 + 2)) - 2) @ 30 Hz (20 ticks total: 4-tick #78a8e8 hold + 16-tick 8-color sweep)
         float step = std::fmod(smoothFrame / 2.0f, 10.0f);
         if (step < 0.0f) step += 10.0f;
@@ -2298,7 +2508,8 @@ static void __fastcall Hook_ShrinkerRender(uint8_t* shrinker) {
     if (shrinker != nullptr) {
         SyncShrinkerNodeTimer(shrinker);
     }
-    if (g_colorTheme == 0u || shrinker == nullptr) {
+    uint8_t shrinkerStyle = GetEffectiveTheme().shrinkers;
+    if (shrinkerStyle == 0u || shrinker == nullptr) {
         orig(shrinker);
         return;
     }
@@ -2316,7 +2527,7 @@ static void __fastcall Hook_ShrinkerRender(uint8_t* shrinker) {
     }
 
     uint8_t* ws = GetWorldScreen();
-    if (g_colorTheme == 1u) {
+    if (shrinkerStyle == 1u) {
         RenderMobileShrinker(dev, shrinker, GetLevel(), ws);
     } else {
         RenderJavaShrinker(dev, shrinker, ws);
@@ -2332,7 +2543,7 @@ static void __fastcall Hook_FallingPlatformRender(uint8_t* plat) {
     }
 
     ScopedDepthBias depthGuard(GetD3DDevice(), kFallingPlatformDepthBias);
-    if (g_colorTheme != 1u) {
+    if (GetEffectiveTheme().fallingPlatforms != 1u) {
         orig(plat);
         return;
     }
@@ -2381,67 +2592,38 @@ static void __declspec(naked) Hook_LitMeshColorOp() {
     }
 }
 
-struct ScopedJavaCubeLight {
-    IDirect3DDevice9* dev = nullptr;
-    D3DLIGHT9 saved{};
-    bool active = false;
-
-    explicit ScopedJavaCubeLight(bool enable) {
-        if (!enable) return;
-        dev = reinterpret_cast<IDirect3DDevice9*(__cdecl*)()>(0x40e6c0)();
-        if (dev != nullptr && SUCCEEDED(dev->GetLight(0, &saved))) {
-            D3DLIGHT9 cubeLight = saved;
-            cubeLight.Diffuse   = {1.0f, 1.0f, 1.0f, 1.0f};
-            cubeLight.Direction = {0.0f, -0.8819171f, -0.4714045f};
-            dev->SetLight(0, &cubeLight);
-            active = true;
+static void BeginDarkCubeLight(ScopedThemeLight& guard, const CustomThemeSettings& eff, bool isSolid) {
+    if (eff.darkCube == 0u) {
+        if (eff.playerCube != 0u) {
+            guard.BeginRestorePc();
         }
-    }
-
-    ~ScopedJavaCubeLight() {
-        if (active && dev != nullptr) {
-            dev->SetLight(0, &saved);
-        }
-    }
-};
-
-struct ScopedMobileDarkCubeLight {
-    IDirect3DDevice9* dev = nullptr;
-    D3DLIGHT9 saved{};
-    bool active = false;
-
-    explicit ScopedMobileDarkCubeLight(bool enable) {
-        if (!enable) return;
-        dev = reinterpret_cast<IDirect3DDevice9*(__cdecl*)()>(0x40e6c0)();
-        if (dev != nullptr && SUCCEEDED(dev->GetLight(0, &saved))) {
+    } else if (eff.darkCube == 1u) {
+        if (isSolid) {
             uint8_t themeIdx = 0;
             uint8_t* lvl = GetLevel();
             if (lvl != nullptr) themeIdx = lvl[0x6c] & 3u;
-            D3DLIGHT9 darkLight = saved;
             if (themeIdx < 2u) {
-                // Android themes 0..1: Top=71, Left=32, Right=20 (224 * 0.35895 * dot)
-                darkLight.Diffuse   = {0.35895f, 0.35895f, 0.35895f, 1.0f};
-                darkLight.Direction = {-0.24874f, -0.88303f, -0.39798f};
+                guard.BeginSingle({0.35895f, 0.35895f, 0.35895f, 1.0f}, {-0.24874f, -0.88303f, -0.39798f});
             } else {
-                // Android themes 2..3: Top=51, Left=18, Right=11 (224 * 0.24639 * dot)
-                darkLight.Diffuse   = {0.24639f, 0.24639f, 0.24639f, 1.0f};
-                darkLight.Direction = {-0.19931f, -0.92407f, -0.32614f};
+                guard.BeginSingle({0.24639f, 0.24639f, 0.24639f, 1.0f}, {-0.19931f, -0.92407f, -0.32614f});
             }
-            dev->SetLight(0, &darkLight);
-            active = true;
+        } else {
+            guard.BeginWorldStyle(1u);
+        }
+    } else {
+        if (isSolid) {
+            guard.BeginWorldStyle(2u);
+        } else {
+            guard.BeginSingle({1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, -0.8819171f, -0.4714045f});
         }
     }
-
-    ~ScopedMobileDarkCubeLight() {
-        if (active && dev != nullptr) {
-            dev->SetLight(0, &saved);
-        }
-    }
-};
+}
 
 static void __fastcall Hook_DarkCubeRender(void* cube) {
     using OrigFn = void(__thiscall*)(void*);
-    ScopedMobileDarkCubeLight darkLight(g_colorTheme == 1u);
+    const CustomThemeSettings eff = GetEffectiveTheme();
+    ScopedThemeLight darkLight;
+    BeginDarkCubeLight(darkLight, eff, true);
     reinterpret_cast<OrigFn>(0x48c630)(cube);
 }
 
@@ -2462,21 +2644,28 @@ struct ScopedGhostCubeDistort {
 
 static void __fastcall Hook_GhostCubeTransparents(void* renderer) {
     using OrigFn = void(__thiscall*)(void*);
+    const CustomThemeSettings eff = GetEffectiveTheme();
     uint8_t* ws = *reinterpret_cast<uint8_t**>(0x5f9064);
     bool isGhostDarkCube = (ws != nullptr && ws[0x48] == 0);
     bool isSolidDarkCube = (ws != nullptr && ws[0x48] != 0);
-    ScopedJavaCubeLight cubeLight(g_colorTheme == 2u && isGhostDarkCube);
-    ScopedMobileDarkCubeLight darkLight(g_colorTheme == 1u && isSolidDarkCube);
+    ScopedThemeLight darkLight;
+    if (isGhostDarkCube || isSolidDarkCube) {
+        BeginDarkCubeLight(darkLight, eff, isSolidDarkCube);
+    }
     ScopedGhostCubeDistort ghostDistort(ws, isGhostDarkCube);
     reinterpret_cast<OrigFn>(0x407410)(renderer);
 }
+
+static int32_t g_curMatCubeType = 0;
 
 static void* __cdecl Hook_ComputeCubeDiffuse(
     uint8_t* out, const uint8_t* baseColor,
     int multR, int multG, int multB,
     int addR, int addG, int addB
 ) {
-    if (g_colorTheme == 2u) {
+    const CustomThemeSettings eff = GetEffectiveTheme();
+    uint8_t style = (g_curMatCubeType == 0) ? eff.playerCube : eff.darkCube;
+    if (style == 2u) {
         constexpr float kInvDenom = 1.0f / (2.0f * 0.8819171f);
         for (int c = 0; c < 3; ++c) {
             int v = static_cast<int>(std::lround(static_cast<float>(g_javaCubeDeltaTopRight[c]) * kInvDenom));
@@ -2489,13 +2678,23 @@ static void* __cdecl Hook_ComputeCubeDiffuse(
     return reinterpret_cast<OrigFn>(0x490e30)(out, baseColor, multR, multG, multB, addR, addG, addB);
 }
 
+static void __declspec(naked) Hook_ComputeCubeDiffuse_Naked() {
+    __asm {
+        mov eax, dword ptr [esi]
+        mov g_curMatCubeType, eax
+        jmp Hook_ComputeCubeDiffuse
+    }
+}
+
 static void* __cdecl Hook_ComputeCubeMatColor(
     uint8_t* out, const uint8_t* baseColor,
     int multR, int multG, int multB,
     int addR, int addG, int addB
 ) {
-    if (g_colorTheme != 0) {
-        int targetScale = (g_colorTheme == 2u) ? 254 : 255;
+    const CustomThemeSettings eff = GetEffectiveTheme();
+    uint8_t style = (g_curMatCubeType == 0) ? eff.playerCube : eff.darkCube;
+    if (style != 0u) {
+        int targetScale = (style == 2u) ? 254 : 255;
         auto scaleMult = [targetScale](int m) -> int {
             if (m <= 0) return 0;
             return (std::min)(255, (m * targetScale + 111) / 223);
@@ -2508,6 +2707,14 @@ static void* __cdecl Hook_ComputeCubeMatColor(
     return reinterpret_cast<OrigFn>(0x490e30)(out, baseColor, multR, multG, multB, addR, addG, addB);
 }
 
+static void __declspec(naked) Hook_ComputeCubeMatColor_Naked() {
+    __asm {
+        mov eax, dword ptr [esi]
+        mov g_curMatCubeType, eax
+        jmp Hook_ComputeCubeMatColor
+    }
+}
+
 } // namespace
 
 namespace edgemod {
@@ -2516,7 +2723,7 @@ void __cdecl ResetColorThemeLevelCaches() {
     s_wallSubMeshes.clear();
     s_cachedLevelModel = nullptr;
     s_cachedHeightTiles = 0;
-    s_appliedLevelTheme = 0;
+    s_appliedWallGrad = 0;
 
     g_bumperFlashStates.clear();
     g_bumperFlashLevel = nullptr;
@@ -2540,7 +2747,10 @@ uint32_t __fastcall RenderPlayerCubeWithColorTheme(void* cube) {
     using OrigFn = uint32_t(__thiscall*)(void*);
     uint32_t ret = 0;
     {
-        ScopedJavaCubeLight cubeLight(g_colorTheme == 2u);
+        ScopedThemeLight cubeLight;
+        if (GetEffectiveTheme().playerCube == 2u) {
+            cubeLight.BeginSingle({1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, -0.8819171f, -0.4714045f});
+        }
         ScopedPlayerCubeDistort cubeDistort(cube);
         ret = reinterpret_cast<OrigFn>(0x48c630)(cube);
     }
@@ -2564,7 +2774,7 @@ void RegisterColorTheme() {
 
     // 4. Cube::update Cube::computeMaterialColor (0x490c82, 5B)
     static const uint8_t exCubeMat[5] = {0xe8, 0xa9, 0x01, 0x00, 0x00};
-    RegRelCall(0x490c82, exCubeMat, 5, 5, &Hook_ComputeCubeMatColor);
+    RegRelCall(0x490c82, exCubeMat, 5, 5, &Hook_ComputeCubeMatColor_Naked);
 
     // 5. WorldScreen::render static level Model::render (0x47b220, 5B)
     static const uint8_t exStaticLvl[5] = {0xe8, 0x3b, 0x62, 0xfa, 0xff};
@@ -2616,7 +2826,7 @@ void RegisterColorTheme() {
 
     // 16. Cube::update Diffuse computeMaterialColor (0x490bd5, 5B)
     static const uint8_t exCubeDiff[5] = {0xe8, 0x56, 0x02, 0x00, 0x00};
-    RegRelCall(0x490bd5, exCubeDiff, 5, 5, &Hook_ComputeCubeDiffuse);
+    RegRelCall(0x490bd5, exCubeDiff, 5, 5, &Hook_ComputeCubeDiffuse_Naked);
 
     // 17. WorldScreen::render Ghost Cube::render Transparents (0x47b406, 5B)
     static const uint8_t exGhostCubeTransp[5] = {0xe8, 0x05, 0xc0, 0xf8, 0xff};

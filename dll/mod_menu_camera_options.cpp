@@ -1,5 +1,7 @@
 #include "mod_state.h"
+#include "mod_smooth_shared.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -306,13 +308,96 @@ int __cdecl DrawTextAutoFit(
     return maxWidth;
 }
 
+struct ScopedUiScissor {
+    void* dev = nullptr;
+    HRESULT(__stdcall* setRS)(void*, uint32_t, uint32_t) = nullptr;
+    HRESULT(__stdcall* setScissor)(void*, const RECT*) = nullptr;
+    bool hasOldScissor = false;
+    RECT oldRect{};
+    bool active = false;
+    bool empty = false;
+
+    ScopedUiScissor(int x, int y, int w, int h) {
+        if (w <= 0 || h <= 0) {
+            empty = true;
+            return;
+        }
+        uint8_t* renderer = GetRenderer();
+        uint8_t* mstack   = GetMatrixStack();
+        dev = (renderer != nullptr) ? *reinterpret_cast<void**>(renderer + 0xcc) : nullptr;
+        if (renderer == nullptr || mstack == nullptr || dev == nullptr) {
+            return;
+        }
+
+        float scaleX = 1.0f, scaleY = 1.0f, transX = 0.0f, transY = 0.0f;
+        const uint8_t* beginPtr = *reinterpret_cast<const uint8_t* const*>(mstack + 0x8);
+        const uint8_t* endPtr   = *reinterpret_cast<const uint8_t* const*>(mstack + 0xc);
+        if (beginPtr != nullptr && endPtr != nullptr && endPtr >= beginPtr + 0x40) {
+            const float* topMat = reinterpret_cast<const float*>(endPtr - 0x40);
+            scaleX = topMat[0];
+            scaleY = topMat[5];
+            transX = topMat[12];
+            transY = topMat[13];
+        }
+
+        int32_t scrLeft   = static_cast<int32_t>(std::floor(static_cast<float>(x) * scaleX + transX));
+        int32_t scrTop    = static_cast<int32_t>(std::floor(static_cast<float>(y) * scaleY - transY));
+        int32_t scrRight  = static_cast<int32_t>(std::ceil(static_cast<float>(x + w) * scaleX + transX));
+        int32_t scrBottom = static_cast<int32_t>(std::ceil(static_cast<float>(y + h) * scaleY - transY));
+        if (scrRight <= scrLeft || scrBottom <= scrTop) {
+            empty = true;
+            return;
+        }
+
+        int32_t ltrb[4]{};
+        int32_t drawW = 0, drawH = 0;
+        VirtualRectToUiScissorLtrb(renderer, scrLeft, scrTop, scrRight - scrLeft, scrBottom - scrTop, ltrb, &drawW, &drawH);
+
+        auto** vt = *reinterpret_cast<void***>(dev);
+        setRS      = reinterpret_cast<HRESULT(__stdcall*)(void*, uint32_t, uint32_t)>(vt[0xe4 / 4]);
+        auto getRS = reinterpret_cast<HRESULT(__stdcall*)(void*, uint32_t, DWORD*)>(vt[0xe8 / 4]);
+        setScissor = reinterpret_cast<HRESULT(__stdcall*)(void*, const RECT*)>(vt[0x12c / 4]);
+        auto getSc = reinterpret_cast<HRESULT(__stdcall*)(void*, RECT*)>(vt[0x130 / 4]);
+
+        DWORD oldEn = 0;
+        if (getRS(dev, 0xae, &oldEn) >= 0 && oldEn != 0 && getSc(dev, &oldRect) >= 0) {
+            hasOldScissor = true;
+        }
+
+        RECT clipRect{ltrb[0], ltrb[1], ltrb[2], ltrb[3]};
+        if (hasOldScissor) {
+            if (oldRect.left   > clipRect.left)   clipRect.left   = oldRect.left;
+            if (oldRect.top    > clipRect.top)    clipRect.top    = oldRect.top;
+            if (oldRect.right  < clipRect.right)  clipRect.right  = oldRect.right;
+            if (oldRect.bottom < clipRect.bottom) clipRect.bottom = oldRect.bottom;
+        }
+        if (clipRect.left >= clipRect.right || clipRect.top >= clipRect.bottom) {
+            empty = true;
+            return;
+        }
+
+        setScissor(dev, &clipRect);
+        setRS(dev, 0xae, 1);
+        active = true;
+    }
+
+    ~ScopedUiScissor() {
+        if (!active || dev == nullptr) return;
+        if (hasOldScissor) {
+            setScissor(dev, &oldRect);
+        } else {
+            setRS(dev, 0xae, 0);
+        }
+    }
+};
+
 } // namespace edgemod
 
 namespace {
 
 using namespace edgemod;
 
-constexpr int kMaxOptRows = 16;
+constexpr int kMaxOptRows = 24;
 
 uint8_t g_graphicsLoaded   = 0;
 float   g_prismOverrideSec = 0.0f;
@@ -368,10 +453,28 @@ EDGE_STATIC_WSTR(g_wstrFall,         "fall");
 EDGE_STATIC_WSTR(g_wstrPc,           "pc");
 EDGE_STATIC_WSTR(g_wstrMobile,       "mobile");
 EDGE_STATIC_WSTR(g_wstrJava,         "java");
+EDGE_STATIC_WSTR(g_wstrCustom,       "custom");
 EDGE_STATIC_WSTR(g_wstrFinishEffect,   "finish effect");
 EDGE_STATIC_WSTR(g_wstrFinishPlatform, "finish platform");
-EDGE_STATIC_WSTR(g_wstrColorTheme,     "color theme");
-EDGE_STATIC_WSTR(g_wstrCubeDistortion, "cube distortion");
+EDGE_STATIC_WSTR(g_wstrColorTheme,     "theme");
+EDGE_STATIC_WSTR(g_wstrCustomizeTheme, "customize theme");
+EDGE_STATIC_WSTR(g_wstrCubeDistortion, "cube idle distortion");
+EDGE_STATIC_WSTR(g_wstrThemeTerrain,   "terrain");
+EDGE_STATIC_WSTR(g_wstrThemeWallGrad,  "wall gradient");
+EDGE_STATIC_WSTR(g_wstrThemePcJava,    "pc/java");
+EDGE_STATIC_WSTR(g_wstrThemePlanets,   "planets");
+EDGE_STATIC_WSTR(g_wstrThemeStars,     "stars");
+EDGE_STATIC_WSTR(g_wstrThemePcMobile,  "pc/mobile");
+EDGE_STATIC_WSTR(g_wstrThemePlayerCube,"player cube");
+EDGE_STATIC_WSTR(g_wstrThemeDarkCube,  "dark cube");
+EDGE_STATIC_WSTR(g_wstrThemePrisms,    "prisms");
+EDGE_STATIC_WSTR(g_wstrThemeMovPlat,   "moving platforms");
+EDGE_STATIC_WSTR(g_wstrThemePlatEdge,  "platform borders");
+EDGE_STATIC_WSTR(g_wstrThemeFallPlat,  "falling platforms");
+EDGE_STATIC_WSTR(g_wstrThemeBumpers,   "bumpers");
+EDGE_STATIC_WSTR(g_wstrThemeSwitches,  "switches");
+EDGE_STATIC_WSTR(g_wstrThemeHoloSwitch,"holo switches");
+EDGE_STATIC_WSTR(g_wstrThemeShrinkers, "shrinkers");
 EDGE_STATIC_WSTR(g_wstrDef,          "def");
 EDGE_STATIC_WSTR(g_wstrNew,          "new");
 EDGE_STATIC_WSTR(g_wstrDot,          ".");
@@ -435,6 +538,7 @@ enum OptCategory : int {
     OPT_CAT_ROOT = 0,
     OPT_CAT_DISPLAY,
     OPT_CAT_GRAPHICS,
+    OPT_CAT_CUSTOMIZE_THEME,
     OPT_CAT_AUDIO,
     OPT_CAT_UI,
     OPT_CAT_TIMER,
@@ -448,6 +552,7 @@ enum OptItem : int {
     OPT_NONE = 0,
     OPT_CAT_BTN_DISPLAY,
     OPT_CAT_BTN_GRAPHICS,
+    OPT_CAT_BTN_CUSTOMIZE_THEME,
     OPT_CAT_BTN_AUDIO,
     OPT_CAT_BTN_UI,
     OPT_CAT_BTN_TIMER,
@@ -467,6 +572,20 @@ enum OptItem : int {
     OPT_FINISH_PLATFORM,
     OPT_COLOR_THEME,
     OPT_CUBE_DISTORTION,
+    OPT_THEME_TERRAIN,
+    OPT_THEME_WALL_GRADIENT,
+    OPT_THEME_PLANETS,
+    OPT_THEME_STARS,
+    OPT_THEME_PLAYER_CUBE,
+    OPT_THEME_DARK_CUBE,
+    OPT_THEME_PRISMS,
+    OPT_THEME_MOVING_PLATFORMS,
+    OPT_THEME_PLATFORM_BORDERS,
+    OPT_THEME_FALLING_PLATFORMS,
+    OPT_THEME_BUMPERS,
+    OPT_THEME_SWITCHES,
+    OPT_THEME_HOLO_SWITCHES,
+    OPT_THEME_SHRINKERS,
     OPT_SOUNDS,
     OPT_MUSIC,
     OPT_MUSIC_START,
@@ -554,6 +673,62 @@ struct OptUiState {
 };
 
 OptUiState g_optUi{};
+
+struct OptScrollState {
+    float    targetY = 0.0f;
+    float    renderY = 0.0f;
+    float    maxScroll = 0.0f;
+    double   lastRenderSec = 0.0;
+    bool     dragActive = false;
+    int      dragGrabOffsetY = 0;
+    int      dragTrackY = 0;
+    int      dragTrackH = 1;
+    int      dragThumbH = 28;
+    uint32_t revision = 0;
+
+    void Reset() {
+        targetY = 0.0f;
+        renderY = 0.0f;
+        maxScroll = 0.0f;
+        lastRenderSec = 0.0;
+        dragActive = false;
+        ++revision;
+    }
+};
+
+struct OptScrollMetrics {
+    bool  scrollable = false;
+    int   nRows = 0;
+    int   nScrollRows = 0;
+    int   backIdx = 0;
+    int   stride = 0;
+    int   rowH = 0;
+    int   slotPad = 0;
+    int   listTop = 0;
+    int   listBottom = 0;
+    int   viewH = 0;
+    int   contentH = 0;
+    int   backTop = 0;
+    int   backH = 0;
+    float maxScroll = 0.0f;
+    bool  hasScrollbar = false;
+    int   sbX = 0, sbY = 0, sbW = 10, sbH = 0;
+    int   thumbY = 0, thumbH = 0;
+    float thumbYf = 0.0f;
+    int   rightBound = 0;
+};
+
+OptScrollState g_mainOptScroll{};
+OptScrollState g_pauseOptScroll{};
+std::atomic<int32_t> g_optWheelAccum{0};
+
+static bool IsOptCategoryScrollable(int cat) {
+    return cat == OPT_CAT_CUSTOMIZE_THEME;
+}
+
+static OptScrollState& GetOptScrollState(bool inPause) {
+    return inPause ? g_pauseOptScroll : g_mainOptScroll;
+}
 
 static void ResetAllScores_Impl();
 static void ApplyOptionScaleChange();
@@ -920,10 +1095,11 @@ static void SaveModSettings() {
     uint8_t prismVfx = (g_prismVfx <= 3u) ? g_prismVfx : 1u;
     uint8_t chromaAb = (g_chromaAb != 0) ? 1u : 0u;
     int32_t aaSamples = (g_aaSamples >= 0 && g_aaSamples <= 16) ? g_aaSamples : 0;
-    uint8_t finishEffect = (g_finishEffect <= 2u) ? g_finishEffect : 0u;
-    uint8_t finishPlatform = (g_finishPlatform <= 2u) ? g_finishPlatform : 0u;
-    uint8_t colorTheme = (g_colorTheme <= 2u) ? g_colorTheme : 0u;
-    uint8_t cubeDistortion = (g_cubeDistortion != 0) ? 1u : 0u;
+    uint8_t themeMode = (g_colorTheme <= 3u) ? g_colorTheme : 0u;
+    uint8_t colorTheme = (themeMode <= 2u) ? themeMode : 0u;
+    uint8_t customThemeInited = (g_customThemeInited != 0) ? 1u : 0u;
+    CustomThemeSettings effTheme = GetEffectiveTheme();
+    uint8_t cubeDistortion = (effTheme.cubeDistortion != 0) ? 1u : 0u;
     uint8_t timerMode = (g_timerMode <= 3u) ? g_timerMode : 3u;
     float timerSize = std::isfinite(g_timerSize) ? g_timerSizePresets[NearestTimerSizeIdx(g_timerSize)] : 1.0f;
     uint8_t timerPos = (g_timerPos <= 3u) ? g_timerPos : 1u;
@@ -996,10 +1172,29 @@ static void SaveModSettings() {
     writeInt("prism_vfx", prismVfx);
     writeInt("chroma_ab", chromaAb);
     writeInt("aa_samples", aaSamples);
-    writeInt("finish_effect", finishEffect);
-    writeInt("finish_platform", finishPlatform);
+    writeInt("finish_effect", effTheme.finishEffect);
+    writeInt("finish_platform", effTheme.finishPlatform);
     writeInt("color_theme", colorTheme);
     writeInt("cube_distortion", cubeDistortion);
+    writeInt("theme_mode", themeMode);
+    writeInt("theme_custom_inited", customThemeInited);
+    writeInt("theme_custom_terrain", std::clamp<int>(g_customTheme.terrain, 0, 2));
+    writeInt("theme_custom_wall_gradient", g_customTheme.wallGradient ? 1 : 0);
+    writeInt("theme_custom_planets", std::clamp<int>(g_customTheme.planets, 0, 2));
+    writeInt("theme_custom_stars", g_customTheme.stars ? 1 : 0);
+    writeInt("theme_custom_player_cube", std::clamp<int>(g_customTheme.playerCube, 0, 2));
+    writeInt("theme_custom_dark_cube", std::clamp<int>(g_customTheme.darkCube, 0, 2));
+    writeInt("theme_custom_cube_distortion", g_customTheme.cubeDistortion ? 1 : 0);
+    writeInt("theme_custom_prisms", std::clamp<int>(g_customTheme.prisms, 0, 2));
+    writeInt("theme_custom_moving_platforms", std::clamp<int>(g_customTheme.movingPlatforms, 0, 2));
+    writeInt("theme_custom_platform_borders", std::clamp<int>(g_customTheme.platformBorders, 0, 2));
+    writeInt("theme_custom_falling_platforms", std::clamp<int>(g_customTheme.fallingPlatforms, 0, 2));
+    writeInt("theme_custom_bumpers", std::clamp<int>(g_customTheme.bumpers, 0, 2));
+    writeInt("theme_custom_switches", std::clamp<int>(g_customTheme.switches, 0, 2));
+    writeInt("theme_custom_holo_switches", std::clamp<int>(g_customTheme.holoSwitches, 0, 2));
+    writeInt("theme_custom_shrinkers", std::clamp<int>(g_customTheme.shrinkers, 0, 2));
+    writeInt("theme_custom_finish_platform", std::clamp<int>(g_customTheme.finishPlatform, 0, 2));
+    writeInt("theme_custom_finish_effect", std::clamp<int>(g_customTheme.finishEffect, 0, 2));
     writeInt("timer_mode", timerMode);
     writeFloat("timer_size", timerSize);
     writeInt("timer_pos", timerPos);
@@ -1148,7 +1343,11 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
     bool inEdgeModSec = false;
     int32_t schemaVer = 0;
     uint64_t seenMask = 0;
+    uint64_t seenMask2 = 0;
     constexpr uint64_t kAllModKeysMask = (1ull << 54) - 1ull;
+    constexpr uint64_t kAllModKeysMask2 = (1ull << 19) - 1ull;
+    uint8_t legacyColorTheme = 0;
+    bool hasThemeMode = false;
 
     while (pos < data.size()) {
         size_t nl = data.find('\n', pos);
@@ -1287,9 +1486,55 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
             }
         } else if (AsciiEqIc(kP, kE, "color_theme")) {
             if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) {
-                g_colorTheme = static_cast<uint8_t>(iv);
+                legacyColorTheme = static_cast<uint8_t>(iv);
+                if (!hasThemeMode) g_colorTheme = legacyColorTheme;
                 seenMask |= (1u << 17);
             }
+        } else if (AsciiEqIc(kP, kE, "theme_mode")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 3) {
+                g_colorTheme = static_cast<uint8_t>(iv);
+                hasThemeMode = true;
+                seenMask2 |= (1ull << 0);
+            }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_inited")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_customThemeInited = (iv != 0) ? 1u : 0u;
+                seenMask2 |= (1ull << 1);
+            }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_terrain")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.terrain = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 2); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_wall_gradient")) {
+            if (ParseAsciiInt(vP, vE, &iv)) { g_customTheme.wallGradient = (iv != 0) ? 1u : 0u; seenMask2 |= (1ull << 3); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_planets")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.planets = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 4); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_stars")) {
+            if (ParseAsciiInt(vP, vE, &iv)) { g_customTheme.stars = (iv != 0) ? 1u : 0u; seenMask2 |= (1ull << 5); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_player_cube")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.playerCube = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 6); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_dark_cube")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.darkCube = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 7); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_cube_distortion")) {
+            if (ParseAsciiInt(vP, vE, &iv)) { g_customTheme.cubeDistortion = (iv != 0) ? 1u : 0u; seenMask2 |= (1ull << 8); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_prisms")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.prisms = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 9); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_moving_platforms")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.movingPlatforms = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 10); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_platform_borders")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.platformBorders = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 11); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_falling_platforms")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.fallingPlatforms = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 12); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_bumpers")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.bumpers = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 13); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_switches")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.switches = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 14); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_holo_switches")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.holoSwitches = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 15); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_shrinkers")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.shrinkers = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 16); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_finish_platform")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.finishPlatform = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 17); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_finish_effect")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.finishEffect = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 18); }
         } else if (AsciiEqIc(kP, kE, "timer_mode")) {
             if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 3) {
                 g_timerMode = static_cast<uint8_t>(iv);
@@ -1480,8 +1725,25 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
         }
     }
 
+    if (!hasThemeMode) {
+        g_customTheme = MakePresetThemeSettings(legacyColorTheme);
+        g_customTheme.finishEffect   = (g_finishEffect <= 2u) ? g_finishEffect : 0u;
+        g_customTheme.finishPlatform = (g_finishPlatform <= 2u) ? g_finishPlatform : 0u;
+        g_customTheme.cubeDistortion = (g_cubeDistortion != 0) ? 1u : 0u;
+        bool isExactPc     = (legacyColorTheme == 0u && g_customTheme.finishEffect == 0u && g_customTheme.finishPlatform == 0u && g_customTheme.cubeDistortion == 0u);
+        bool isExactMobile = (legacyColorTheme == 1u && g_customTheme.finishEffect == 1u && g_customTheme.finishPlatform == 1u && g_customTheme.cubeDistortion == 0u);
+        bool isExactJava   = (legacyColorTheme == 2u && g_customTheme.finishEffect == 2u && g_customTheme.finishPlatform == 2u && g_customTheme.cubeDistortion == 1u);
+        if (isExactPc || isExactMobile || isExactJava) {
+            g_colorTheme = legacyColorTheme;
+            g_customThemeInited = 0;
+        } else {
+            g_colorTheme = 3u;
+            g_customThemeInited = 1u;
+        }
+    }
+
     if (outNeedsResave != nullptr) {
-        *outNeedsResave = (schemaVer != kModIniSchemaVersion) || (seenMask != kAllModKeysMask);
+        *outNeedsResave = (schemaVer != kModIniSchemaVersion) || (seenMask != kAllModKeysMask) || (seenMask2 != kAllModKeysMask2);
     }
     return true;
 }
@@ -1661,6 +1923,8 @@ static void LoadModSettingsOnStartup_Impl(uint8_t* userSettings) {
     g_finishPlatform= 0;
     g_colorTheme    = 0;
     g_cubeDistortion= 0;
+    g_customTheme   = MakePresetThemeSettings(0);
+    g_customThemeInited = 0;
     g_timerMode     = 3;
     g_timerSize     = 1.0f;
     g_timerPos      = 1;
@@ -1702,6 +1966,17 @@ static void LoadModSettingsOnStartup_Impl(uint8_t* userSettings) {
 
     if (!fileExisted && g_legacyTtsavCaptured) {
         ApplyLegacyTtsavSnapshot();
+        g_customTheme = MakePresetThemeSettings((g_colorTheme <= 2u) ? g_colorTheme : 0u);
+        g_customTheme.finishEffect   = (g_finishEffect <= 2u) ? g_finishEffect : 0u;
+        g_customTheme.finishPlatform = (g_finishPlatform <= 2u) ? g_finishPlatform : 0u;
+        g_customTheme.cubeDistortion = (g_cubeDistortion != 0) ? 1u : 0u;
+        bool isExactPc     = (g_colorTheme == 0u && g_customTheme.finishEffect == 0u && g_customTheme.finishPlatform == 0u && g_customTheme.cubeDistortion == 0u);
+        bool isExactMobile = (g_colorTheme == 1u && g_customTheme.finishEffect == 1u && g_customTheme.finishPlatform == 1u && g_customTheme.cubeDistortion == 0u);
+        bool isExactJava   = (g_colorTheme == 2u && g_customTheme.finishEffect == 2u && g_customTheme.finishPlatform == 2u && g_customTheme.cubeDistortion == 1u);
+        if (!isExactPc && !isExactMobile && !isExactJava) {
+            g_colorTheme = 3u;
+            g_customThemeInited = 1u;
+        }
         dirty = true;
     }
 
@@ -1804,6 +2079,7 @@ static void LoadModSettingsOnStartup_Impl(uint8_t* userSettings) {
     }
 
     g_graphicsLoaded = 1;
+    SyncEffectiveThemeGlobals();
 
     if (dirty) {
         SaveModSettings();
@@ -2119,7 +2395,9 @@ static void ChromaAbAction_Impl(int sfxId) {
 
 static void CubeDistortionAction_Impl(int sfxId) {
     uint8_t* sm = GetScreenMgr();
-    g_cubeDistortion ^= 1u;
+    g_customTheme.cubeDistortion = (g_customTheme.cubeDistortion != 0u) ? 0u : 1u;
+    g_customThemeInited = 1u;
+    SyncEffectiveThemeGlobals();
     if (sm != nullptr && sfxId > 0) {
         Game_PlaySfx(sm, sfxId);
     }
@@ -2156,16 +2434,17 @@ static void MuteUnfocusedAction_Impl(int sfxId) {
 // ------------------------------------------------------------------
 static int GetOptTargetCategory(OptItem item) {
     switch (item) {
-    case OPT_CAT_BTN_DISPLAY:       return OPT_CAT_DISPLAY;
-    case OPT_CAT_BTN_GRAPHICS:      return OPT_CAT_GRAPHICS;
-    case OPT_CAT_BTN_AUDIO:         return OPT_CAT_AUDIO;
-    case OPT_CAT_BTN_UI:            return OPT_CAT_UI;
-    case OPT_CAT_BTN_TIMER:         return OPT_CAT_TIMER;
-    case OPT_CAT_BTN_PRISM_COUNTER: return OPT_CAT_PRISM_COUNTER;
-    case OPT_CAT_BTN_MINIMAP:       return OPT_CAT_MINIMAP;
-    case OPT_CAT_BTN_SPEEDOMETER:   return OPT_CAT_SPEEDOMETER;
-    case OPT_CAT_BTN_GAMEPLAY:      return OPT_CAT_GAMEPLAY;
-    default:                        return -1;
+    case OPT_CAT_BTN_DISPLAY:         return OPT_CAT_DISPLAY;
+    case OPT_CAT_BTN_GRAPHICS:        return OPT_CAT_GRAPHICS;
+    case OPT_CAT_BTN_CUSTOMIZE_THEME: return OPT_CAT_CUSTOMIZE_THEME;
+    case OPT_CAT_BTN_AUDIO:           return OPT_CAT_AUDIO;
+    case OPT_CAT_BTN_UI:              return OPT_CAT_UI;
+    case OPT_CAT_BTN_TIMER:           return OPT_CAT_TIMER;
+    case OPT_CAT_BTN_PRISM_COUNTER:   return OPT_CAT_PRISM_COUNTER;
+    case OPT_CAT_BTN_MINIMAP:         return OPT_CAT_MINIMAP;
+    case OPT_CAT_BTN_SPEEDOMETER:     return OPT_CAT_SPEEDOMETER;
+    case OPT_CAT_BTN_GAMEPLAY:        return OPT_CAT_GAMEPLAY;
+    default:                          return -1;
     }
 }
 
@@ -2175,6 +2454,8 @@ static bool IsOptSubmenuItem(OptItem item) {
 
 static int GetOptParentCategory(int cat) {
     switch (cat) {
+    case OPT_CAT_CUSTOMIZE_THEME:
+        return OPT_CAT_GRAPHICS;
     case OPT_CAT_TIMER:
     case OPT_CAT_PRISM_COUNTER:
     case OPT_CAT_MINIMAP:
@@ -2193,23 +2474,27 @@ static int GetOptParentCategory(int cat) {
 }
 
 static int GetOptCategoryDepth(int cat) {
-    if (cat == OPT_CAT_ROOT)  return 0;
-    if (cat == OPT_CAT_TIMER || cat == OPT_CAT_PRISM_COUNTER || cat == OPT_CAT_MINIMAP || cat == OPT_CAT_SPEEDOMETER) return 2;
+    if (cat == OPT_CAT_ROOT) return 0;
+    if (cat == OPT_CAT_CUSTOMIZE_THEME || cat == OPT_CAT_TIMER ||
+        cat == OPT_CAT_PRISM_COUNTER || cat == OPT_CAT_MINIMAP || cat == OPT_CAT_SPEEDOMETER) {
+        return 2;
+    }
     return 1;
 }
 
 static int GetOptParentRowForCategory(int cat) {
     switch (cat) {
-    case OPT_CAT_DISPLAY:       return 0;
-    case OPT_CAT_GRAPHICS:      return 1;
-    case OPT_CAT_AUDIO:         return 2;
-    case OPT_CAT_UI:            return 3;
-    case OPT_CAT_GAMEPLAY:      return 4;
-    case OPT_CAT_TIMER:         return 2; // row 2 in OPT_CAT_UI (below time format & edge timer)
-    case OPT_CAT_PRISM_COUNTER: return 3; // row 3 in OPT_CAT_UI (below timer)
-    case OPT_CAT_MINIMAP:       return 4; // row 4 in OPT_CAT_UI (below prism counter)
-    case OPT_CAT_SPEEDOMETER:   return 5; // row 5 in OPT_CAT_UI (below minimap)
-    default:                    return 0;
+    case OPT_CAT_DISPLAY:         return 0;
+    case OPT_CAT_GRAPHICS:        return 1;
+    case OPT_CAT_AUDIO:           return 2;
+    case OPT_CAT_UI:              return 3;
+    case OPT_CAT_GAMEPLAY:        return 4;
+    case OPT_CAT_CUSTOMIZE_THEME: return 5; // row 5 in OPT_CAT_GRAPHICS (below theme)
+    case OPT_CAT_TIMER:           return 1; // row 1 in OPT_CAT_UI (below time format)
+    case OPT_CAT_PRISM_COUNTER:   return 2; // row 2 in OPT_CAT_UI (below timer)
+    case OPT_CAT_MINIMAP:         return 3; // row 3 in OPT_CAT_UI (below prism counter)
+    case OPT_CAT_SPEEDOMETER:     return 4; // row 4 in OPT_CAT_UI (below minimap)
+    default:                      return 0;
     }
 }
 
@@ -2221,16 +2506,39 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         outItems[2] = OPT_AUTO_SCALE;
         outItems[3] = OPT_BACK;
         return 4;
-    case OPT_CAT_GRAPHICS:
-        outItems[0] = OPT_AA;
-        outItems[1] = OPT_CHROMA_AB;
-        outItems[2] = OPT_PRISM_VFX;
-        outItems[3] = OPT_COLOR_THEME;
-        outItems[4] = OPT_CUBE_DISTORTION;
-        outItems[5] = OPT_FINISH_EFFECT;
-        outItems[6] = OPT_FINISH_PLATFORM;
-        outItems[7] = OPT_BACK;
-        return 8;
+    case OPT_CAT_GRAPHICS: {
+        int n = 0;
+        outItems[n++] = OPT_AA;
+        outItems[n++] = OPT_CHROMA_AB;
+        outItems[n++] = OPT_PRISM_VFX;
+        outItems[n++] = OPT_EDGE_TIMER;
+        outItems[n++] = OPT_COLOR_THEME;
+        if (g_colorTheme == 3u) {
+            outItems[n++] = OPT_CAT_BTN_CUSTOMIZE_THEME;
+        }
+        outItems[n++] = OPT_BACK;
+        return n;
+    }
+    case OPT_CAT_CUSTOMIZE_THEME:
+        outItems[0]  = OPT_THEME_TERRAIN;
+        outItems[1]  = OPT_THEME_WALL_GRADIENT;
+        outItems[2]  = OPT_THEME_PLANETS;
+        outItems[3]  = OPT_THEME_STARS;
+        outItems[4]  = OPT_THEME_PLAYER_CUBE;
+        outItems[5]  = OPT_THEME_DARK_CUBE;
+        outItems[6]  = OPT_CUBE_DISTORTION;
+        outItems[7]  = OPT_THEME_PRISMS;
+        outItems[8]  = OPT_THEME_MOVING_PLATFORMS;
+        outItems[9]  = OPT_THEME_PLATFORM_BORDERS;
+        outItems[10] = OPT_THEME_FALLING_PLATFORMS;
+        outItems[11] = OPT_THEME_BUMPERS;
+        outItems[12] = OPT_THEME_SWITCHES;
+        outItems[13] = OPT_THEME_HOLO_SWITCHES;
+        outItems[14] = OPT_THEME_SHRINKERS;
+        outItems[15] = OPT_FINISH_PLATFORM;
+        outItems[16] = OPT_FINISH_EFFECT;
+        outItems[17] = OPT_BACK;
+        return 18;
     case OPT_CAT_AUDIO:
         outItems[0] = OPT_SOUNDS;
         outItems[1] = OPT_MUSIC;
@@ -2241,13 +2549,12 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         return 6;
     case OPT_CAT_UI:
         outItems[0] = OPT_TIME_FMT;
-        outItems[1] = OPT_EDGE_TIMER;
-        outItems[2] = OPT_CAT_BTN_TIMER;
-        outItems[3] = OPT_CAT_BTN_PRISM_COUNTER;
-        outItems[4] = OPT_CAT_BTN_MINIMAP;
-        outItems[5] = OPT_CAT_BTN_SPEEDOMETER;
-        outItems[6] = OPT_BACK;
-        return 7;
+        outItems[1] = OPT_CAT_BTN_TIMER;
+        outItems[2] = OPT_CAT_BTN_PRISM_COUNTER;
+        outItems[3] = OPT_CAT_BTN_MINIMAP;
+        outItems[4] = OPT_CAT_BTN_SPEEDOMETER;
+        outItems[5] = OPT_BACK;
+        return 6;
     case OPT_CAT_TIMER:
         outItems[0] = OPT_TIMER;
         outItems[1] = OPT_TIMER_SIZE;
@@ -2328,6 +2635,20 @@ static bool IsOptItemAdjustable(OptItem item) {
     case OPT_FINISH_PLATFORM:
     case OPT_COLOR_THEME:
     case OPT_CUBE_DISTORTION:
+    case OPT_THEME_TERRAIN:
+    case OPT_THEME_WALL_GRADIENT:
+    case OPT_THEME_PLANETS:
+    case OPT_THEME_STARS:
+    case OPT_THEME_PLAYER_CUBE:
+    case OPT_THEME_DARK_CUBE:
+    case OPT_THEME_PRISMS:
+    case OPT_THEME_MOVING_PLATFORMS:
+    case OPT_THEME_PLATFORM_BORDERS:
+    case OPT_THEME_FALLING_PLATFORMS:
+    case OPT_THEME_BUMPERS:
+    case OPT_THEME_SWITCHES:
+    case OPT_THEME_HOLO_SWITCHES:
+    case OPT_THEME_SHRINKERS:
     case OPT_SOUNDS:
     case OPT_MUSIC:
     case OPT_MUSIC_START:
@@ -2367,9 +2688,10 @@ static bool IsOptItemAdjustable(OptItem item) {
 static const EdgeWString* GetOptHeaderWstr(int cat, EdgeWString* tmp, bool* outFreeHeap) {
     *outFreeHeap = false;
     switch (cat) {
-    case OPT_CAT_DISPLAY:       return &g_wstrCatDisplay;
-    case OPT_CAT_GRAPHICS:      return &g_wstrCatGraphics;
-    case OPT_CAT_AUDIO:         return &g_wstrCatAudio;
+    case OPT_CAT_DISPLAY:         return &g_wstrCatDisplay;
+    case OPT_CAT_GRAPHICS:        return &g_wstrCatGraphics;
+    case OPT_CAT_CUSTOMIZE_THEME: return &g_wstrCustomizeTheme;
+    case OPT_CAT_AUDIO:           return &g_wstrCatAudio;
     case OPT_CAT_UI:            return &g_wstrCatUi;
     case OPT_CAT_TIMER:         return &g_wstrTimer;
     case OPT_CAT_PRISM_COUNTER: return &g_wstrPrismCounter;
@@ -2387,9 +2709,10 @@ static const EdgeWString* GetOptHeaderWstr(int cat, EdgeWString* tmp, bool* outF
 static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* outFreeHeap) {
     *outFreeHeap = false;
     switch (item) {
-    case OPT_CAT_BTN_DISPLAY:       return &g_wstrCatDisplay;
-    case OPT_CAT_BTN_GRAPHICS:      return &g_wstrCatGraphics;
-    case OPT_CAT_BTN_AUDIO:         return &g_wstrCatAudio;
+    case OPT_CAT_BTN_DISPLAY:         return &g_wstrCatDisplay;
+    case OPT_CAT_BTN_GRAPHICS:        return &g_wstrCatGraphics;
+    case OPT_CAT_BTN_CUSTOMIZE_THEME: return &g_wstrCustomizeTheme;
+    case OPT_CAT_BTN_AUDIO:           return &g_wstrCatAudio;
     case OPT_CAT_BTN_UI:            return &g_wstrCatUi;
     case OPT_CAT_BTN_TIMER:         return &g_wstrTimer;
     case OPT_CAT_BTN_PRISM_COUNTER: return &g_wstrPrismCounter;
@@ -2403,10 +2726,24 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_AUTO_SCALE:       return &g_wstrAuto;
     case OPT_CAM_DIST:         return &g_wstrCamDist;
     case OPT_DOLLY_ZOOM:       return &g_wstrCamFov;
-    case OPT_FINISH_EFFECT:    return &g_wstrFinishEffect;
-    case OPT_FINISH_PLATFORM:  return &g_wstrFinishPlatform;
-    case OPT_COLOR_THEME:      return &g_wstrColorTheme;
-    case OPT_CUBE_DISTORTION:  return &g_wstrCubeDistortion;
+    case OPT_FINISH_EFFECT:           return &g_wstrFinishEffect;
+    case OPT_FINISH_PLATFORM:         return &g_wstrFinishPlatform;
+    case OPT_COLOR_THEME:             return &g_wstrColorTheme;
+    case OPT_CUBE_DISTORTION:         return &g_wstrCubeDistortion;
+    case OPT_THEME_TERRAIN:           return &g_wstrThemeTerrain;
+    case OPT_THEME_WALL_GRADIENT:     return &g_wstrThemeWallGrad;
+    case OPT_THEME_PLANETS:           return &g_wstrThemePlanets;
+    case OPT_THEME_STARS:             return &g_wstrThemeStars;
+    case OPT_THEME_PLAYER_CUBE:       return &g_wstrThemePlayerCube;
+    case OPT_THEME_DARK_CUBE:         return &g_wstrThemeDarkCube;
+    case OPT_THEME_PRISMS:            return &g_wstrThemePrisms;
+    case OPT_THEME_MOVING_PLATFORMS:  return &g_wstrThemeMovPlat;
+    case OPT_THEME_PLATFORM_BORDERS:  return &g_wstrThemePlatEdge;
+    case OPT_THEME_FALLING_PLATFORMS: return &g_wstrThemeFallPlat;
+    case OPT_THEME_BUMPERS:           return &g_wstrThemeBumpers;
+    case OPT_THEME_SWITCHES:          return &g_wstrThemeSwitches;
+    case OPT_THEME_HOLO_SWITCHES:     return &g_wstrThemeHoloSwitch;
+    case OPT_THEME_SHRINKERS:         return &g_wstrThemeShrinkers;
     case OPT_MUSIC_START:      return &g_wstrMusicStart;
     case OPT_MUSIC_PLAYLIST:   return &g_wstrMusicPlaylist;
     case OPT_MUTE_UNFOCUSED:   return &g_wstrMuteUnfocused;
@@ -2465,6 +2802,8 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_CHROMA_AB:
     case OPT_AUTO_SCALE:
     case OPT_CUBE_DISTORTION:
+    case OPT_THEME_WALL_GRADIENT:
+    case OPT_THEME_STARS:
     case OPT_MUSIC_START:
     case OPT_MUSIC_PLAYLIST:
     case OPT_MUTE_UNFOCUSED:
@@ -2480,6 +2819,18 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_COLOR_THEME:
     case OPT_FINISH_EFFECT:
     case OPT_FINISH_PLATFORM:
+    case OPT_THEME_TERRAIN:
+    case OPT_THEME_PLANETS:
+    case OPT_THEME_PLAYER_CUBE:
+    case OPT_THEME_DARK_CUBE:
+    case OPT_THEME_PRISMS:
+    case OPT_THEME_MOVING_PLATFORMS:
+    case OPT_THEME_PLATFORM_BORDERS:
+    case OPT_THEME_FALLING_PLATFORMS:
+    case OPT_THEME_BUMPERS:
+    case OPT_THEME_SWITCHES:
+    case OPT_THEME_HOLO_SWITCHES:
+    case OPT_THEME_SHRINKERS:
     case OPT_EDGE_TIMER:
     case OPT_TIMER:
     case OPT_TIMER_POS:
@@ -2557,6 +2908,9 @@ static void ResetOptUiState(bool commitUiScale) {
     g_optUi.popupNeedsInitialSync = false;
     g_optUi.dragActive = false;
     g_optUi.suppressNextClickAction = false;
+    g_mainOptScroll.dragActive = false;
+    g_pauseOptScroll.dragActive = false;
+    g_optWheelAccum.store(0, std::memory_order_release);
     if (commitUiScale) {
         CommitPendingUiScale();
     } else {
@@ -2577,6 +2931,29 @@ static uint8_t GetMinimapDisplayPos() {
     return static_cast<uint8_t>(cx | cy);
 }
 
+static uint8_t* GetCustomThemeFieldPtr(OptItem item) {
+    switch (item) {
+    case OPT_THEME_TERRAIN:           return &g_customTheme.terrain;
+    case OPT_THEME_WALL_GRADIENT:     return &g_customTheme.wallGradient;
+    case OPT_THEME_PLANETS:           return &g_customTheme.planets;
+    case OPT_THEME_STARS:             return &g_customTheme.stars;
+    case OPT_THEME_PLAYER_CUBE:       return &g_customTheme.playerCube;
+    case OPT_THEME_DARK_CUBE:         return &g_customTheme.darkCube;
+    case OPT_CUBE_DISTORTION:         return &g_customTheme.cubeDistortion;
+    case OPT_THEME_PRISMS:            return &g_customTheme.prisms;
+    case OPT_THEME_MOVING_PLATFORMS:  return &g_customTheme.movingPlatforms;
+    case OPT_THEME_PLATFORM_BORDERS:  return &g_customTheme.platformBorders;
+    case OPT_THEME_FALLING_PLATFORMS: return &g_customTheme.fallingPlatforms;
+    case OPT_THEME_BUMPERS:           return &g_customTheme.bumpers;
+    case OPT_THEME_SWITCHES:          return &g_customTheme.switches;
+    case OPT_THEME_HOLO_SWITCHES:     return &g_customTheme.holoSwitches;
+    case OPT_THEME_SHRINKERS:         return &g_customTheme.shrinkers;
+    case OPT_FINISH_PLATFORM:         return &g_customTheme.finishPlatform;
+    case OPT_FINISH_EFFECT:           return &g_customTheme.finishEffect;
+    default:                          return nullptr;
+    }
+}
+
 static int GetToggleState(OptItem item) {
     uint8_t* sm = GetScreenMgr();
     switch (item) {
@@ -2588,7 +2965,9 @@ static int GetToggleState(OptItem item) {
     }
     case OPT_CHROMA_AB:       return g_chromaAb ? 1 : 0;
     case OPT_AUTO_SCALE:      return g_autoScale ? 1 : 0;
-    case OPT_CUBE_DISTORTION: return g_cubeDistortion ? 1 : 0;
+    case OPT_CUBE_DISTORTION:     return g_customTheme.cubeDistortion ? 1 : 0;
+    case OPT_THEME_WALL_GRADIENT: return g_customTheme.wallGradient ? 1 : 0;
+    case OPT_THEME_STARS:         return g_customTheme.stars ? 1 : 0;
     case OPT_MUSIC_START:     return g_musicStart ? 1 : 0;
     case OPT_MUSIC_PLAYLIST:  return g_musicPlaylist ? 1 : 0;
     case OPT_MUTE_UNFOCUSED:  return g_muteUnfocused ? 1 : 0;
@@ -2606,24 +2985,39 @@ static int GetPopupChoiceCount(OptItem item) {
     case OPT_AA:
         if (g_aaLevelCount <= 0) ProbeSupportedAaLevels();
         return (g_aaLevelCount > 0) ? g_aaLevelCount : 1;
-    case OPT_CAM_DIST:     return 8;
-    case OPT_DOLLY_ZOOM:   return 11;
-    case OPT_COLOR_THEME:  return 3;
-    case OPT_FINISH_EFFECT:   return 3;
-    case OPT_FINISH_PLATFORM: return 3;
-    case OPT_EDGE_TIMER:         return 3;
-    case OPT_TIMER:              return 4;
-    case OPT_TIMER_POS:          return 4;
-    case OPT_PRISM_COUNTER_TYPE: return 3;
-    case OPT_PRISM_COUNTER_POS:  return 4;
-    case OPT_MINIMAP_POS:        return 4;
-    case OPT_SPEEDOMETER_POS:    return 4;
-    case OPT_RESET_SCORE:        return 2;
-    default:                     return 0;
+    case OPT_CAM_DIST:                return 8;
+    case OPT_DOLLY_ZOOM:              return 11;
+    case OPT_COLOR_THEME:             return 4;
+    case OPT_FINISH_EFFECT:
+    case OPT_FINISH_PLATFORM:
+    case OPT_THEME_TERRAIN:
+    case OPT_THEME_PLANETS:
+    case OPT_THEME_PLAYER_CUBE:
+    case OPT_THEME_DARK_CUBE:
+    case OPT_THEME_PRISMS:
+    case OPT_THEME_MOVING_PLATFORMS:
+    case OPT_THEME_PLATFORM_BORDERS:
+    case OPT_THEME_FALLING_PLATFORMS:
+    case OPT_THEME_BUMPERS:
+    case OPT_THEME_SWITCHES:
+    case OPT_THEME_HOLO_SWITCHES:
+    case OPT_THEME_SHRINKERS:         return 3;
+    case OPT_EDGE_TIMER:              return 3;
+    case OPT_TIMER:                   return 4;
+    case OPT_TIMER_POS:               return 4;
+    case OPT_PRISM_COUNTER_TYPE:      return 3;
+    case OPT_PRISM_COUNTER_POS:       return 4;
+    case OPT_MINIMAP_POS:             return 4;
+    case OPT_SPEEDOMETER_POS:         return 4;
+    case OPT_RESET_SCORE:             return 2;
+    default:                          return 0;
     }
 }
 
 static int GetPopupCurrentChoice(OptItem item) {
+    if (const uint8_t* field = GetCustomThemeFieldPtr(item)) {
+        return (*field <= 2u) ? static_cast<int>(*field) : 0;
+    }
     switch (item) {
     case OPT_AA: {
         int cnt = GetPopupChoiceCount(OPT_AA);
@@ -2655,9 +3049,7 @@ static int GetPopupCurrentChoice(OptItem item) {
         }
         return best;
     }
-    case OPT_COLOR_THEME:        return (g_colorTheme <= 2u) ? static_cast<int>(g_colorTheme) : 0;
-    case OPT_FINISH_EFFECT:      return (g_finishEffect <= 2u) ? static_cast<int>(g_finishEffect) : 0;
-    case OPT_FINISH_PLATFORM:    return (g_finishPlatform <= 2u) ? static_cast<int>(g_finishPlatform) : 0;
+    case OPT_COLOR_THEME:        return (g_colorTheme <= 3u) ? static_cast<int>(g_colorTheme) : 0;
     case OPT_EDGE_TIMER:         return (g_edgeTimerMode <= 2u) ? static_cast<int>(g_edgeTimerMode) : 0;
     case OPT_TIMER:              return std::clamp<int>(g_timerMode, 0, 3);
     case OPT_TIMER_POS:          return std::clamp<int>(g_timerPos, 0, 3);
@@ -2731,8 +3123,25 @@ static const EdgeWString* GetPopupChoiceWstr(OptItem item, int idx, EdgeWString*
         if (g_fovPresets[idx] == -2.0f) return &g_wstrMobile;
         return FmtFloatWstr(g_fovPresets[idx], tmp);
     case OPT_COLOR_THEME:
+        idx = std::clamp(idx, 0, 3);
+        if (idx == 1) return &g_wstrMobile;
+        if (idx == 2) return &g_wstrJava;
+        if (idx == 3) return &g_wstrCustom;
+        return &g_wstrPc;
     case OPT_FINISH_EFFECT:
     case OPT_FINISH_PLATFORM:
+    case OPT_THEME_TERRAIN:
+    case OPT_THEME_PLANETS:
+    case OPT_THEME_PLAYER_CUBE:
+    case OPT_THEME_DARK_CUBE:
+    case OPT_THEME_PRISMS:
+    case OPT_THEME_MOVING_PLATFORMS:
+    case OPT_THEME_PLATFORM_BORDERS:
+    case OPT_THEME_FALLING_PLATFORMS:
+    case OPT_THEME_BUMPERS:
+    case OPT_THEME_SWITCHES:
+    case OPT_THEME_HOLO_SWITCHES:
+    case OPT_THEME_SHRINKERS:
         idx = std::clamp(idx, 0, 2);
         if (idx == 1) return &g_wstrMobile;
         if (idx == 2) return &g_wstrJava;
@@ -2832,21 +3241,40 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
         g_camFov = g_fovPresets[idx];
         ApplyOptionScaleChange(sfxId);
         break;
-    case OPT_COLOR_THEME:
-        g_colorTheme = static_cast<uint8_t>(idx);
-        OnColorThemeChanged();
+    case OPT_COLOR_THEME: {
+        uint8_t prev = (g_colorTheme <= 3u) ? g_colorTheme : 0u;
+        uint8_t next = static_cast<uint8_t>(std::clamp(idx, 0, 3));
+        if (next == 3u && g_customThemeInited == 0u) {
+            g_customTheme = MakePresetThemeSettings((prev <= 2u) ? prev : 0u);
+            g_customThemeInited = 1u;
+        }
+        g_colorTheme = next;
+        SyncEffectiveThemeGlobals();
         if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
         SaveModSettings();
         break;
+    }
     case OPT_FINISH_EFFECT:
-        g_finishEffect = static_cast<uint8_t>(idx);
-        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
-        SaveModSettings();
-        break;
     case OPT_FINISH_PLATFORM:
-        g_finishPlatform = static_cast<uint8_t>(idx);
-        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
-        SaveModSettings();
+    case OPT_THEME_TERRAIN:
+    case OPT_THEME_PLANETS:
+    case OPT_THEME_PLAYER_CUBE:
+    case OPT_THEME_DARK_CUBE:
+    case OPT_THEME_PRISMS:
+    case OPT_THEME_MOVING_PLATFORMS:
+    case OPT_THEME_PLATFORM_BORDERS:
+    case OPT_THEME_FALLING_PLATFORMS:
+    case OPT_THEME_BUMPERS:
+    case OPT_THEME_SWITCHES:
+    case OPT_THEME_HOLO_SWITCHES:
+    case OPT_THEME_SHRINKERS:
+        if (uint8_t* field = GetCustomThemeFieldPtr(item)) {
+            *field = static_cast<uint8_t>(std::clamp(idx, 0, 2));
+            g_customThemeInited = 1u;
+            SyncEffectiveThemeGlobals();
+            if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+            SaveModSettings();
+        }
         break;
     case OPT_EDGE_TIMER:
         g_edgeTimerMode = static_cast<uint8_t>(idx);
@@ -3395,22 +3823,38 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
         if (std::memcmp(&g_camFov, "\x00\x00\x80\xbf", 4) == 0 || g_camFov == -1.0f) return &g_wstrPc;
         if (g_camFov == -2.0f) return &g_wstrMobile;
         return FmtFloatWstr(g_camFov, tmp);
-    case OPT_FINISH_EFFECT:
-        if (g_finishEffect == 1) return &g_wstrMobile;
-        if (g_finishEffect == 2) return &g_wstrJava;
-        return &g_wstrPc;
-    case OPT_FINISH_PLATFORM:
-        if (g_finishPlatform == 1) return &g_wstrMobile;
-        if (g_finishPlatform == 2) return &g_wstrJava;
-        return &g_wstrPc;
     case OPT_COLOR_THEME:
         if (g_colorTheme == 1) return &g_wstrMobile;
         if (g_colorTheme == 2) return &g_wstrJava;
+        if (g_colorTheme == 3) return &g_wstrCustom;
         return &g_wstrPc;
+    case OPT_THEME_WALL_GRADIENT:
+        return g_customTheme.wallGradient ? &g_wstrMobile : &g_wstrThemePcJava;
+    case OPT_THEME_STARS:
+        return g_customTheme.stars ? &g_wstrJava : &g_wstrThemePcMobile;
     case OPT_CUBE_DISTORTION:
-        Game_GetLocalizedWString(tmp, g_cubeDistortion ? 0xb : 0xc);
+        Game_GetLocalizedWString(tmp, g_customTheme.cubeDistortion ? 0xb : 0xc);
         *outFreeHeap = true;
         return tmp;
+    case OPT_FINISH_EFFECT:
+    case OPT_FINISH_PLATFORM:
+    case OPT_THEME_TERRAIN:
+    case OPT_THEME_PLANETS:
+    case OPT_THEME_PLAYER_CUBE:
+    case OPT_THEME_DARK_CUBE:
+    case OPT_THEME_PRISMS:
+    case OPT_THEME_MOVING_PLATFORMS:
+    case OPT_THEME_PLATFORM_BORDERS:
+    case OPT_THEME_FALLING_PLATFORMS:
+    case OPT_THEME_BUMPERS:
+    case OPT_THEME_SWITCHES:
+    case OPT_THEME_HOLO_SWITCHES:
+    case OPT_THEME_SHRINKERS:
+        if (const uint8_t* field = GetCustomThemeFieldPtr(item)) {
+            if (*field == 1) return &g_wstrMobile;
+            if (*field == 2) return &g_wstrJava;
+        }
+        return &g_wstrPc;
     case OPT_SOUNDS:
         FmtInt0to100Wstr((sm != nullptr) ? *reinterpret_cast<int*>(sm + 0x2b0) : 100, tmp);
         return tmp;
@@ -3567,10 +4011,22 @@ static void SpeedometerEnableAction_Impl(int sfxId) {
 
 static void ExecuteOptToggle(OptItem item, int sfxId) {
     switch (item) {
-    case OPT_FULLSCREEN:      ToggleFullscreenWithSfx(sfxId); break;
-    case OPT_CHROMA_AB:       ChromaAbAction_Impl(sfxId); break;
-    case OPT_AUTO_SCALE:      AutoScaleAction_Impl(sfxId); break;
-    case OPT_CUBE_DISTORTION: CubeDistortionAction_Impl(sfxId); break;
+    case OPT_FULLSCREEN:         ToggleFullscreenWithSfx(sfxId); break;
+    case OPT_CHROMA_AB:          ChromaAbAction_Impl(sfxId); break;
+    case OPT_AUTO_SCALE:         AutoScaleAction_Impl(sfxId); break;
+    case OPT_CUBE_DISTORTION:    CubeDistortionAction_Impl(sfxId); break;
+    case OPT_THEME_WALL_GRADIENT:
+    case OPT_THEME_STARS:
+        if (uint8_t* field = GetCustomThemeFieldPtr(item)) {
+            *field = (*field != 0u) ? 0u : 1u;
+            g_customThemeInited = 1u;
+            SyncEffectiveThemeGlobals();
+            if (uint8_t* sm = GetScreenMgr()) {
+                if (sfxId > 0) Game_PlaySfx(sm, sfxId);
+            }
+            SaveModSettings();
+        }
+        break;
     case OPT_MUSIC_START:     MusicStartAction_Impl(sfxId); break;
     case OPT_MUSIC_PLAYLIST:  MusicPlaylistAction_Impl(sfxId); break;
     case OPT_MUTE_UNFOCUSED:  MuteUnfocusedAction_Impl(sfxId); break;
@@ -3641,6 +4097,162 @@ static void __cdecl DrawMenuRainbowBorder_Impl(int frame) {
 constexpr int kMenuWideW         = 0x170; // 368px (320 + 48 leftward expansion)
 constexpr int kMainOptValRelX    = 0xf0;  // 120px value column (rightBound - valX)
 constexpr int kPauseOptValRelX   = 0x101; // 105px value column (rightBound - valX)
+
+static void ComputeOptScrollMetrics(
+    bool inPause, int cat, int nRows, int paneLeft, int topOriginY, int menuW, float scrollY, OptScrollMetrics* out
+) {
+    if (out == nullptr) return;
+    *out = OptScrollMetrics{};
+    if (!IsOptCategoryScrollable(cat) || nRows < 2) return;
+
+    out->scrollable = true;
+    out->nRows = nRows;
+    out->nScrollRows = nRows - 1;
+    out->backIdx = nRows - 1;
+
+    if (!inPause) {
+        int virtH = reinterpret_cast<int(__cdecl*)()>(0x496060)();
+        out->rowH = 0x26;
+        out->stride = 0x2a;
+        out->slotPad = 2;
+        out->listTop = topOriginY + 0x56;
+        out->backH = kMainOptRowH;
+        out->backTop = topOriginY + (std::max)(0x56 + out->stride, virtH - 0x3b);
+        out->listBottom = (std::max)(out->listTop + out->stride, out->backTop - 6);
+        out->viewH = out->listBottom - out->listTop;
+        out->contentH = out->nScrollRows * out->stride;
+        out->maxScroll = static_cast<float>((std::max)(0, out->contentH - out->viewH));
+        out->hasScrollbar = (out->maxScroll > 0.5f);
+        out->sbW = 10;
+        out->sbX = paneLeft + menuW - 13;
+        out->sbY = out->listTop;
+        out->sbH = out->viewH;
+        out->rightBound = out->hasScrollbar ? (paneLeft + menuW - 18) : (paneLeft + menuW - 8);
+    } else {
+        uint8_t* sm = GetScreenMgr();
+        int scrH = (sm != nullptr) ? *reinterpret_cast<int*>(sm + 0x28) : 720;
+        out->rowH = kPauseOptRowH;
+        out->stride = kPauseOptRowH;
+        out->slotPad = 0;
+        out->listTop = topOriginY + 0x75;
+        out->backH = kPauseOptRowH;
+        int maxBottom = scrH - 8;
+        int availH = (std::max)(2 * kPauseOptRowH, maxBottom - out->listTop);
+        int maxVisScroll = (std::max)(kPauseOptRowH, availH - out->backH);
+        out->contentH = out->nScrollRows * out->stride;
+        out->viewH = (std::min)(out->contentH, maxVisScroll);
+        out->listBottom = out->listTop + out->viewH;
+        out->backTop = out->listBottom;
+        out->maxScroll = static_cast<float>((std::max)(0, out->contentH - out->viewH));
+        out->hasScrollbar = (out->maxScroll > 0.5f);
+        out->sbW = 10;
+        out->sbX = paneLeft + kMenuWideW - 13;
+        out->sbY = out->listTop + 2;
+        out->sbH = (std::max)(8, out->viewH - 4);
+        out->rightBound = out->hasScrollbar ? (paneLeft + kMenuWideW - 17) : (paneLeft + kMenuWideW - 6);
+    }
+
+    if (out->hasScrollbar && out->contentH > 0) {
+        out->thumbH = std::clamp((out->sbH * out->viewH) / out->contentH, 28, out->sbH);
+        float frac = std::clamp(scrollY / out->maxScroll, 0.0f, 1.0f);
+        out->thumbYf = frac * static_cast<float>(out->sbH - out->thumbH);
+        out->thumbY = out->sbY + static_cast<int>(std::lround(out->thumbYf));
+    }
+}
+
+static void EnsureOptRowVisible(bool inPause, int cat, int selRow) {
+    if (!IsOptCategoryScrollable(cat)) return;
+    int nRows = GetOptRowCount(cat, inPause);
+    int basePt[2] = {0, 0};
+    reinterpret_cast<void(__cdecl*)(int*)>(0x496030)(basePt);
+    int menuW = *reinterpret_cast<const int*>(0x589ddc);
+    int topOriginY = inPause ? (basePt[1] + GetPauseContentShiftY()) : basePt[1];
+    OptScrollState& st = GetOptScrollState(inPause);
+    OptScrollMetrics m{};
+    ComputeOptScrollMetrics(inPause, cat, nRows, basePt[0], topOriginY, menuW, st.targetY, &m);
+    if (!m.scrollable || m.maxScroll <= 0.5f || selRow < 0 || selRow >= m.nScrollRows) return;
+
+    float rowTop = static_cast<float>(selRow * m.stride);
+    float rowBot = rowTop + static_cast<float>(m.stride);
+    if (rowTop < st.targetY) {
+        st.targetY = rowTop;
+    } else if (rowBot > st.targetY + static_cast<float>(m.viewH)) {
+        st.targetY = rowBot - static_cast<float>(m.viewH);
+    }
+    st.targetY = std::clamp(st.targetY, 0.0f, m.maxScroll);
+}
+
+static void AdvanceOptScrollRenderY(OptScrollState& st, float maxScroll) {
+    double nowSec = GetMarqueeTimeSec();
+    float dt = (st.lastRenderSec > 0.0)
+        ? std::clamp(static_cast<float>(nowSec - st.lastRenderSec), 0.0f, 0.05f)
+        : 0.0f;
+    st.lastRenderSec = nowSec;
+
+    st.maxScroll = maxScroll;
+    st.targetY = std::clamp(st.targetY, 0.0f, maxScroll);
+    st.renderY = std::clamp(st.renderY, 0.0f, maxScroll);
+
+    int prevPx = static_cast<int>(std::floor(st.renderY));
+    if (std::fabs(st.targetY - st.renderY) <= 0.02f) {
+        st.renderY = st.targetY;
+    } else if (dt > 0.0f) {
+        float rate = st.dragActive ? 30.0f : 14.0f;
+        float alpha = 1.0f - std::exp(-dt * rate);
+        st.renderY += (st.targetY - st.renderY) * alpha;
+        if (std::fabs(st.targetY - st.renderY) <= 0.02f) {
+            st.renderY = st.targetY;
+        }
+    }
+    if (static_cast<int>(std::floor(st.renderY)) != prevPx) {
+        ++st.revision;
+    }
+}
+
+static void DrawOptScrollbar(
+    const OptScrollMetrics& m, bool inPause, int screenOffsetX, bool isActive, bool dragActive
+) {
+    if (!m.hasScrollbar || m.sbH <= 0) return;
+
+    int railW = 4;
+    int railX = m.sbX + (m.sbW - railW) / 2;
+    uint32_t railCol = RgbToRgbaOpaque(inPause ? 0xd8d8d8u : 0x525252u);
+    Game_DrawQuad(railX, m.sbY, railW, m.sbH, &railCol);
+
+    if (m.thumbH <= 0) return;
+
+    bool hovered = false;
+    if (isActive) {
+        const uint8_t* sm = GetScreenMgr();
+        if (sm != nullptr && sm[0xa8] != 0) {
+            int mx = *reinterpret_cast<const int*>(sm + 0xa0);
+            int my = *reinterpret_cast<const int*>(sm + 0xa4);
+            int sbScreenX = m.sbX - screenOffsetX;
+            hovered = (mx >= sbScreenX - 3 && mx <= sbScreenX + m.sbW + 3 &&
+                       my >= m.thumbY - 2 && my <= m.thumbY + m.thumbH + 2);
+        }
+    }
+
+    uint32_t borderCol = RgbToRgbaOpaque(
+        dragActive ? 0x242424u : (hovered ? 0x343434u : (inPause ? 0x484848u : 0x2c2c2cu))
+    );
+    uint32_t fillCol = RgbToRgbaOpaque(
+        dragActive ? 0x3b3b3bu : (hovered ? 0x565656u : (inPause ? 0x707070u : 0xb8b8b8u))
+    );
+    uint32_t gripCol = RgbToRgbaOpaque(inPause ? 0xf6f6f6u : 0x3b3b3bu);
+
+    int thumbBaseY = m.sbY + static_cast<int>(std::floor(m.thumbYf));
+    float thumbSubY = m.thumbYf - std::floor(m.thumbYf);
+
+    ScopedUiMatrixTranslate handleMat(0.0f, -thumbSubY);
+    Game_DrawQuad(m.sbX, thumbBaseY, m.sbW, m.thumbH, &borderCol);
+    Game_DrawQuad(m.sbX + 1, thumbBaseY + 1, m.sbW - 2, m.thumbH - 2, &fillCol);
+
+    int gripMidY = thumbBaseY + (m.thumbH / 2);
+    for (int g = -1; g <= 1; ++g) {
+        Game_DrawQuad(m.sbX + 2, gripMidY + g * 3, m.sbW - 4, 1, &gripCol);
+    }
+}
 
 static void DrawOptRowControlIndicator(
     OptItem item, int trackX, int rightBound, int trackY,
@@ -3771,6 +4383,49 @@ static void UpdateOptControlsPerFrame(bool inPause, int cat, int selRow, int val
     if (sm == nullptr) return;
     int trackW = rightBoundScreen - valXScreen;
 
+    OptScrollState& scrollSt = GetOptScrollState(inPause);
+    int32_t wheelDelta = g_optWheelAccum.exchange(0, std::memory_order_acq_rel);
+    bool scrollableCat = IsOptCategoryScrollable(cat);
+    if (!scrollableCat) {
+        scrollSt.dragActive = false;
+    } else {
+        int basePt[2] = {0, 0};
+        reinterpret_cast<void(__cdecl*)(int*)>(0x496030)(basePt);
+        int menuW = *reinterpret_cast<const int*>(0x589ddc);
+        int nRows = GetOptRowCount(cat, inPause);
+        int topOriginY = inPause ? (basePt[1] + GetPauseContentShiftY()) : basePt[1];
+        OptScrollMetrics m{};
+        ComputeOptScrollMetrics(inPause, cat, nRows, basePt[0], topOriginY, menuW, scrollSt.renderY, &m);
+        scrollSt.maxScroll = m.maxScroll;
+
+        if (scrollSt.dragActive) {
+            if ((sm[0] != 0 || sm[0xca] != 0) && m.hasScrollbar) {
+                int my = *reinterpret_cast<int*>(sm + 0xa4);
+                float trackRange = static_cast<float>((std::max)(1, scrollSt.dragTrackH - scrollSt.dragThumbH));
+                float frac = std::clamp(
+                    static_cast<float>(my - scrollSt.dragGrabOffsetY - scrollSt.dragTrackY) / trackRange,
+                    0.0f, 1.0f
+                );
+                scrollSt.targetY = frac * m.maxScroll;
+                ++scrollSt.revision;
+            } else {
+                scrollSt.dragActive = false;
+            }
+        } else if (wheelDelta != 0 && m.hasScrollbar &&
+                   !(g_optUi.popupOpen && g_optUi.popupInPause == inPause) &&
+                   !(g_optUi.dragActive && g_optUi.dragInPause == inPause)) {
+            float stepPx = static_cast<float>(m.stride) * 2.0f;
+            float nextY = std::clamp(
+                scrollSt.targetY - (static_cast<float>(wheelDelta) / 120.0f) * stepPx,
+                0.0f, m.maxScroll
+            );
+            if (std::fabs(nextY - scrollSt.targetY) > 0.01f) {
+                scrollSt.targetY = nextY;
+                ++scrollSt.revision;
+            }
+        }
+    }
+
     if (g_optUi.dragActive && g_optUi.dragInPause == inPause) {
         if (sm[0] != 0 || sm[0xca] != 0) {
             int mx = *reinterpret_cast<int*>(sm + 0xa0);
@@ -3853,7 +4508,8 @@ static void UpdateOptControlsPerFrame(bool inPause, int cat, int selRow, int val
 static int HandleOptMouseHitTest(
     bool inPause, int cat, int& selRow, const int* pt,
     int nRows, const OptItem* items, const int* rowTops, int rowH,
-    int minX, int maxX, int valXScreen, int rightBoundScreen
+    int minX, int maxX, int valXScreen, int rightBoundScreen,
+    const OptScrollMetrics* scrollM = nullptr
 ) {
     uint8_t* sm = GetScreenMgr();
     if (sm == nullptr || pt == nullptr) return -1;
@@ -3861,6 +4517,7 @@ static int HandleOptMouseHitTest(
     int py = pt[1];
     bool isPress = (sm[0xcb] != 0);
     bool isRelease = (sm[0xca] == 0 && sm[0xcc] != 0);
+    OptScrollState& scrollSt = GetOptScrollState(inPause);
 
     if (g_optUi.popupOpen && g_optUi.popupInPause == inPause) {
         if (g_optUi.popupItemH > 0 &&
@@ -3910,6 +4567,52 @@ static int HandleOptMouseHitTest(
         return g_optUi.dragRow;
     }
 
+    if (scrollSt.dragActive) {
+        if (scrollM != nullptr && scrollM->hasScrollbar) {
+            float trackRange = static_cast<float>((std::max)(1, scrollSt.dragTrackH - scrollSt.dragThumbH));
+            float frac = std::clamp(
+                static_cast<float>(py - scrollSt.dragGrabOffsetY - scrollSt.dragTrackY) / trackRange,
+                0.0f, 1.0f
+            );
+            scrollSt.targetY = frac * scrollM->maxScroll;
+            ++scrollSt.revision;
+        }
+        if (isRelease) {
+            scrollSt.dragActive = false;
+            g_optUi.suppressNextClickAction = true;
+            return -1;
+        }
+        return selRow;
+    }
+
+    if (scrollM != nullptr && scrollM->scrollable && scrollM->hasScrollbar &&
+        px >= scrollM->sbX - 3 && px <= scrollM->sbX + scrollM->sbW + 3 &&
+        py >= scrollM->listTop && py < scrollM->listBottom) {
+        if (isPress) {
+            scrollSt.dragActive = true;
+            scrollSt.dragTrackY = scrollM->sbY;
+            scrollSt.dragTrackH = scrollM->sbH;
+            scrollSt.dragThumbH = scrollM->thumbH;
+            scrollSt.maxScroll = scrollM->maxScroll;
+            if (py >= scrollM->thumbY && py < scrollM->thumbY + scrollM->thumbH) {
+                scrollSt.dragGrabOffsetY = py - scrollM->thumbY;
+            } else {
+                scrollSt.dragGrabOffsetY = scrollM->thumbH / 2;
+                float trackRange = static_cast<float>((std::max)(1, scrollSt.dragTrackH - scrollSt.dragThumbH));
+                float frac = std::clamp(
+                    static_cast<float>(py - scrollSt.dragGrabOffsetY - scrollSt.dragTrackY) / trackRange,
+                    0.0f, 1.0f
+                );
+                scrollSt.targetY = frac * scrollM->maxScroll;
+            }
+            ++scrollSt.revision;
+            g_optUi.suppressNextClickAction = true;
+        } else if (isRelease) {
+            g_optUi.suppressNextClickAction = true;
+        }
+        return -1;
+    }
+
     if (isPress) {
         g_optUi.suppressNextClickAction = false;
     }
@@ -3917,7 +4620,15 @@ static int HandleOptMouseHitTest(
     int hitRow = -1;
     if (px >= minX && px < maxX) {
         for (int row = 0; row < nRows; ++row) {
-            if (py >= rowTops[row] && py < rowTops[row] + rowH) {
+            int rH = rowH;
+            if (scrollM != nullptr && scrollM->scrollable) {
+                if (row == scrollM->backIdx) {
+                    rH = scrollM->backH + 2 * scrollM->slotPad;
+                } else if (py < scrollM->listTop || py >= scrollM->listBottom) {
+                    continue;
+                }
+            }
+            if (py >= rowTops[row] && py < rowTops[row] + rH) {
                 hitRow = row;
                 break;
             }
@@ -3999,6 +4710,7 @@ static void ComputeMainOptLayout(int nRows, int virtH, int* outStride, int* outB
 static void __cdecl OptionsOnEnter_Impl(uint8_t* optionsMenu) {
     reinterpret_cast<void(__thiscall*)(void*)>(0x495ed0)(optionsMenu);
     ResetOptUiState(false);
+    g_mainOptScroll.Reset();
     g_mainOptPendingReturnCat = -1;
     g_mainOptCat = OPT_CAT_ROOT;
     *reinterpret_cast<int*>(optionsMenu + 0x10) = 0;
@@ -4024,27 +4736,43 @@ static int __cdecl OptionsHitTest_Impl(uint8_t* optionsMenu, const int* pt) {
     OptItem items[kMaxOptRows];
     int nRows = GetOptItems(g_mainOptCat, false, items);
     int backIdx = nRows - 1;
-    int stride = 0x32;
-    int backTopRel = 0;
-    int rowH = kMainOptRowH;
-    ComputeMainOptLayout(nRows, virtH, &stride, &backTopRel, &rowH);
 
-    int slotPad = (std::max)(0, (stride - rowH) / 2);
-    int rowTops[kMaxOptRows];
-    for (int row = 0; row < nRows; ++row) {
-        int yRel = (row == backIdx) ? backTopRel : (0x56 + stride * row);
-        rowTops[row] = basePt[1] + yRel - slotPad;
-    }
+    OptScrollMetrics scrollM{};
+    ComputeOptScrollMetrics(false, g_mainOptCat, nRows, basePt[0], basePt[1], menuW, g_mainOptScroll.renderY, &scrollM);
 
     int minX = basePt[0] + 2;
     int maxX = basePt[0] + menuW - 2;
     int valXScreen = basePt[0] + kMainOptValRelX;
-    int rightBoundScreen = basePt[0] + menuW - 8;
+    int rightBoundScreen = scrollM.scrollable ? scrollM.rightBound : (basePt[0] + menuW - 8);
+    int rowTops[kMaxOptRows];
+    int hitRowH = 0;
+
+    if (scrollM.scrollable) {
+        int scrollOff = static_cast<int>(std::lround(g_mainOptScroll.renderY));
+        for (int row = 0; row < nRows; ++row) {
+            int yPos = (row == backIdx) ? scrollM.backTop : (scrollM.listTop + scrollM.stride * row - scrollOff);
+            rowTops[row] = yPos - scrollM.slotPad;
+        }
+        hitRowH = scrollM.rowH + 2 * scrollM.slotPad;
+    } else {
+        int stride = 0x32;
+        int backTopRel = 0;
+        int rowH = kMainOptRowH;
+        ComputeMainOptLayout(nRows, virtH, &stride, &backTopRel, &rowH);
+        int slotPad = (std::max)(0, (stride - rowH) / 2);
+        for (int row = 0; row < nRows; ++row) {
+            int yRel = (row == backIdx) ? backTopRel : (0x56 + stride * row);
+            rowTops[row] = basePt[1] + yRel - slotPad;
+        }
+        hitRowH = rowH + 2 * slotPad;
+    }
+
     int& sel = *reinterpret_cast<int*>(optionsMenu + 0x10);
     return HandleOptMouseHitTest(
         false, g_mainOptCat, sel, pt,
-        nRows, items, rowTops, rowH + 2 * slotPad,
-        minX, maxX, valXScreen, rightBoundScreen
+        nRows, items, rowTops, hitRowH,
+        minX, maxX, valXScreen, rightBoundScreen,
+        scrollM.scrollable ? &scrollM : nullptr
     );
 }
 
@@ -4216,10 +4944,12 @@ static void __cdecl OptionsUpdate_Impl(uint8_t* optionsMenu, float dt) {
                 CommitPendingUiScale();
                 Game_PlaySfx(sm, 2);
                 if (--selRow < 0) selRow = nRows - 1;
+                EnsureOptRowVisible(false, g_mainOptCat, selRow);
             } else if (sm[0xb0] != 0) {
                 CommitPendingUiScale();
                 Game_PlaySfx(sm, 2);
                 if (++selRow >= nRows) selRow = 0;
+                EnsureOptRowVisible(false, g_mainOptCat, selRow);
             } else {
                 bool lr = (sm[0xb3] != 0 || sm[0xb6] != 0);
                 if (lr && OptionsIsAdj_Impl(selRow) != 0) {
@@ -4245,6 +4975,7 @@ static void __cdecl OptionsUpdate_Impl(uint8_t* optionsMenu, float dt) {
     if (exitTimer >= 0 && exitDest >= kOptCatEnterBase) {
         if (exitTimer == 0) {
             ResetOptUiState(false);
+            g_mainOptScroll.Reset();
             g_mainOptCat = exitDest - kOptCatEnterBase;
             selRow = 0;
             enterFrames = 0;
@@ -4260,6 +4991,7 @@ static void __cdecl OptionsUpdate_Impl(uint8_t* optionsMenu, float dt) {
     } else if (exitTimer >= 0 && g_mainOptPendingReturnCat >= 0) {
         if (exitTimer == 0) {
             ResetOptUiState(false);
+            g_mainOptScroll.Reset();
             int prevCat = g_mainOptCat;
             int targetCat = g_mainOptPendingReturnCat;
             g_mainOptPendingReturnCat = -1;
@@ -4306,15 +5038,27 @@ static void __cdecl RenderMainOptionsBody_Impl(uint8_t* ebpFrame, uint32_t barOu
     int backIdx = nRows - 1;
     int virtH = reinterpret_cast<int(__cdecl*)()>(0x496060)();
     int menuW = *reinterpret_cast<const int*>(0x589ddc);
+
+    OptScrollMetrics scrollM{};
+    ComputeOptScrollMetrics(false, g_mainOptCat, nRows, xBase, yBase, menuW, g_mainOptScroll.renderY, &scrollM);
+    if (scrollM.scrollable) {
+        AdvanceOptScrollRenderY(g_mainOptScroll, scrollM.maxScroll);
+        ComputeOptScrollMetrics(false, g_mainOptCat, nRows, xBase, yBase, menuW, g_mainOptScroll.renderY, &scrollM);
+    }
+
     int stride = 0x32;
     int backTopRel = 0;
     int rowH = kMainOptRowH;
-    ComputeMainOptLayout(nRows, virtH, &stride, &backTopRel, &rowH);
-    int dy = (kMainOptRowH - rowH) / 2;
-    int slotPad = (std::max)(0, (stride - rowH) / 2); // flush slots: bar fills the full row stride
+    if (scrollM.scrollable) {
+        stride = scrollM.stride;
+        rowH   = scrollM.rowH;
+    } else {
+        ComputeMainOptLayout(nRows, virtH, &stride, &backTopRel, &rowH);
+    }
+    int slotPad = scrollM.scrollable ? scrollM.slotPad : (std::max)(0, (stride - rowH) / 2);
 
     // Header text uses pre-computed RGBA at [ebp - 0x40]
-    const int rightBound = xBase + menuW - 8;
+    const int rightBound = scrollM.scrollable ? scrollM.rightBound : (xBase + menuW - 8);
     const int labelX     = xBase + 0x1e;
     const int valX       = xBase + kMainOptValRelX;
     constexpr int kMinColGap = 6;
@@ -4336,36 +5080,32 @@ static void __cdecl RenderMainOptionsBody_Impl(uint8_t* ebpFrame, uint32_t barOu
     uint32_t effBarOuterRgb = (barOuterRgb == barInnerRgb)
         ? effBarInnerRgb
         : barOuterRgb;
-    if (selRow >= 0 && selRow < nRows) {
-        int selTopRel = (selRow == backIdx) ? backTopRel : (0x56 + stride * selRow);
+
+    auto drawRowHighlight = [&](int topY, int rH) {
         if (effBarInnerRgb != effBarOuterRgb) {
             uint32_t outerRgba = RgbToRgbaOpaque(effBarOuterRgb);
-            Game_DrawQuad(xBase + 2, yBase + selTopRel + barSlideY - slotPad - 2, menuW - 4, rowH + 2 * slotPad + 4, &outerRgba);
+            Game_DrawQuad(xBase + 2, topY - slotPad - 2, menuW - 4, rH + 2 * slotPad + 4, &outerRgba);
             uint32_t innerRgba = RgbToRgbaOpaque(effBarInnerRgb);
-            Game_DrawQuad(xBase + 4, yBase + selTopRel + barSlideY - slotPad, menuW - 8, rowH + 2 * slotPad, &innerRgba);
+            Game_DrawQuad(xBase + 4, topY - slotPad, menuW - 8, rH + 2 * slotPad, &innerRgba);
         } else {
             uint32_t fillRgba = RgbToRgbaOpaque(effBarInnerRgb);
-            Game_DrawQuad(xBase + 2, yBase + selTopRel + barSlideY - slotPad, menuW - 4, rowH + 2 * slotPad, &fillRgba);
+            Game_DrawQuad(xBase + 2, topY - slotPad, menuW - 4, rH + 2 * slotPad, &fillRgba);
         }
-    }
+    };
 
-    // Option rows
-    for (int row = 0; row < nRows; ++row) {
-        if (selRow != row && !drawUnselected) continue;
+    auto drawRowContent = [&](int row, int rowTopY, int rH) {
+        if (selRow != row && !drawUnselected) return;
         uint32_t fgRgb = (selRow == row) ? selRgb : normRgb;
         uint32_t bgRgb = (selRow == row) ? effBarInnerRgb : 0xffffffu;
         uint32_t rgba = RgbToRgbaOpaque(fgRgb);
         *reinterpret_cast<uint32_t*>(ebpFrame - 0x40) = rgba;
         *reinterpret_cast<uint32_t*>(0x5f4268) = rgba;
 
-        int rowTopY = yBase + ((row == backIdx) ? backTopRel : (0x56 + stride * row));
-        if (selRow == row) {
-            rowTopY += barSlideY;
-        }
+        int rDy = (kMainOptRowH - rH) / 2;
         OptCtrlKind kind = GetOptCtrlKind(items[row]);
         bool hasIndicator = (kind == CTRL_TOGGLE || kind == CTRL_POPUP || kind == CTRL_SLIDER);
-        int lblTextY = rowTopY + 0xc - dy;
-        int valTextY = hasIndicator ? (rowTopY + 0x7 - dy) : (rowTopY + 0xc - dy);
+        int lblTextY = rowTopY + 0xc - rDy;
+        int valTextY = hasIndicator ? (rowTopY + 0x7 - rDy) : (rowTopY + 0xc - rDy);
 
         EdgeWString lblTmp, valTmp;
         bool lblFree = false, valFree = false;
@@ -4388,28 +5128,82 @@ static void __cdecl RenderMainOptionsBody_Impl(uint8_t* ebpFrame, uint32_t barOu
             uint32_t activeRgba  = RgbToRgbaOpaque(fgRgb);
             uint32_t dimRgba     = RgbToRgbaOpaque(LerpRgb(bgRgb, fgRgb, 0.28f));
             uint32_t defMarkRgba = RgbToRgbaOpaque(LerpRgb(bgRgb, fgRgb, 0.65f));
-            int indY = rowTopY + (std::max)(0x16, 0x20 - (kMainOptRowH - rowH));
+            int indY = rowTopY + (std::max)(0x16, 0x20 - (kMainOptRowH - rH));
             DrawOptRowControlIndicator(items[row], valX, rightBound, indY, activeRgba, dimRgba, defMarkRgba);
         }
-    }
+    };
 
-    if (IsMenuRenderInteractive() && selRow >= 0 && selRow < nRows) {
-        int selTopRel = (selRow == backIdx) ? backTopRel : (0x56 + stride * selRow);
-        Game_DrawRainbowRectBorder(
-            GetCurrentMenuRenderFrame(),
-            xBase + 2, yBase + selTopRel + barSlideY - slotPad, menuW - 4, rowH + 2 * slotPad, 2, 255
-        );
+    auto getRowTopY = [&](int row) -> int {
+        int y = scrollM.scrollable
+            ? ((row == backIdx) ? scrollM.backTop : (scrollM.listTop + stride * row))
+            : (yBase + ((row == backIdx) ? backTopRel : (0x56 + stride * row)));
+        if (selRow == row) y += barSlideY;
+        return y;
+    };
+
+    if (!scrollM.scrollable) {
+        if (selRow >= 0 && selRow < nRows) {
+            drawRowHighlight(getRowTopY(selRow), rowH);
+        }
+        for (int row = 0; row < nRows; ++row) {
+            drawRowContent(row, getRowTopY(row), rowH);
+        }
+        if (IsMenuRenderInteractive() && selRow >= 0 && selRow < nRows) {
+            Game_DrawRainbowRectBorder(
+                GetCurrentMenuRenderFrame(),
+                xBase + 2, getRowTopY(selRow) - slotPad, menuW - 4, rowH + 2 * slotPad, 2, 255
+            );
+        }
+    } else {
+        {
+            ScopedUiScissor clip(xBase + 2, scrollM.listTop, menuW - 4, scrollM.viewH);
+            if (!clip.empty) {
+                ScopedUiMatrixTranslate scrollMat(0.0f, g_mainOptScroll.renderY);
+                if (selRow >= 0 && selRow < scrollM.nScrollRows) {
+                    drawRowHighlight(getRowTopY(selRow), rowH);
+                }
+                for (int row = 0; row < scrollM.nScrollRows; ++row) {
+                    int topY = getRowTopY(row);
+                    float visTop = static_cast<float>(topY - slotPad) - g_mainOptScroll.renderY;
+                    float visBot = static_cast<float>(topY + rowH + slotPad) - g_mainOptScroll.renderY;
+                    if (visBot <= static_cast<float>(scrollM.listTop) || visTop >= static_cast<float>(scrollM.listBottom)) {
+                        continue;
+                    }
+                    drawRowContent(row, topY, rowH);
+                }
+                if (IsMenuRenderInteractive() && selRow >= 0 && selRow < scrollM.nScrollRows) {
+                    Game_DrawRainbowRectBorder(
+                        GetCurrentMenuRenderFrame(),
+                        xBase + 2, getRowTopY(selRow) - slotPad, menuW - 4, rowH + 2 * slotPad, 2, 255
+                    );
+                }
+            }
+        }
+        if (scrollM.hasScrollbar && drawUnselected) {
+            DrawOptScrollbar(scrollM, false, 0, IsMenuRenderInteractive(), g_mainOptScroll.dragActive);
+        }
+        if (selRow == backIdx) {
+            drawRowHighlight(getRowTopY(backIdx), scrollM.backH);
+        }
+        drawRowContent(backIdx, getRowTopY(backIdx), scrollM.backH);
+        if (IsMenuRenderInteractive() && selRow == backIdx) {
+            Game_DrawRainbowRectBorder(
+                GetCurrentMenuRenderFrame(),
+                xBase + 2, getRowTopY(backIdx) - slotPad, menuW - 4, scrollM.backH + 2 * slotPad, 2, 255
+            );
+        }
     }
 
     if (g_optUi.popupOpen && !g_optUi.popupInPause &&
         g_optUi.popupRow >= 0 && g_optUi.popupRow < nRows) {
         int popRow = g_optUi.popupRow;
-        int popRowTopY = yBase + ((popRow == backIdx) ? backTopRel : (0x56 + stride * popRow));
-        if (selRow == popRow) {
-            popRowTopY += barSlideY;
+        int popRowTopY = getRowTopY(popRow);
+        if (scrollM.scrollable && popRow != backIdx) {
+            popRowTopY -= static_cast<int>(std::lround(g_mainOptScroll.renderY));
         }
+        int popRowH = (scrollM.scrollable && popRow == backIdx) ? scrollM.backH : rowH;
         uint32_t hiBarRgb = (rawBarInnerRgb == 0xffffffu) ? rawBarOuterRgb : rawBarInnerRgb;
-        DrawOptPopupOverlay(g_optUi.popupItem, rightBound, popRowTopY, rowH, false, 0, hiBarRgb);
+        DrawOptPopupOverlay(g_optUi.popupItem, rightBound, popRowTopY, popRowH, false, 0, hiBarRgb);
     }
 }
 
@@ -4430,6 +5224,7 @@ static void __declspec(naked) hk_renderMainOptionsBody() {
 // --- PauseMenu Page 1 (state 0x12) hooks ---
 static void __cdecl PauseEnterP1_Impl(uint8_t* pauseMenu) {
     ResetOptUiState(false);
+    g_pauseOptScroll.Reset();
     g_pauseOptCat = OPT_CAT_ROOT;
     g_pauseSubSwipeX = 0;
     g_pauseSubSwipePrevX = 0;
@@ -4530,6 +5325,7 @@ static void __cdecl PauseP1StepCursor_Impl(uint8_t* pauseMenu, int delta) {
     sel += delta;
     if (sel < 0) sel = nRows - 1;
     else if (sel >= nRows) sel = 0;
+    EnsureOptRowVisible(true, g_pauseOptCat, sel);
 }
 
 static void __declspec(naked) hk_pauseP1Up() {
@@ -4581,22 +5377,35 @@ static int __cdecl PauseP1HitTest_Impl(uint8_t* pauseMenu, const int* pt) {
 
     OptItem items[kMaxOptRows];
     int nRows = GetOptItems(g_pauseOptCat, true, items);
-    int rowH = ComputePauseOptRowH(basePt[1], nRows);
     const int pauseShiftY = GetPauseContentShiftY();
+    OptScrollMetrics scrollM{};
+    ComputeOptScrollMetrics(true, g_pauseOptCat, nRows, basePt[0], basePt[1] + pauseShiftY, kMenuWideW, g_pauseOptScroll.renderY, &scrollM);
+
+    int rowH = scrollM.scrollable ? scrollM.rowH : ComputePauseOptRowH(basePt[1], nRows);
     int rowTops[kMaxOptRows];
-    for (int row = 0; row < nRows; ++row) {
-        rowTops[row] = basePt[1] + 0x75 + pauseShiftY + row * rowH;
+    if (scrollM.scrollable) {
+        int scrollOff = static_cast<int>(std::lround(g_pauseOptScroll.renderY));
+        for (int row = 0; row < nRows; ++row) {
+            rowTops[row] = (row == scrollM.backIdx)
+                ? scrollM.backTop
+                : (scrollM.listTop + row * scrollM.stride - scrollOff);
+        }
+    } else {
+        for (int row = 0; row < nRows; ++row) {
+            rowTops[row] = basePt[1] + 0x75 + pauseShiftY + row * rowH;
+        }
     }
 
     int minX = basePt[0] + 2;
     int maxX = basePt[0] + kMenuWideW - 2;
     int valXScreen = basePt[0] + kPauseOptValRelX;
-    int rightBoundScreen = basePt[0] + kMenuWideW - 6;
+    int rightBoundScreen = scrollM.scrollable ? scrollM.rightBound : (basePt[0] + kMenuWideW - 6);
     int& sel = *reinterpret_cast<int*>(pauseMenu + 0x50);
     return HandleOptMouseHitTest(
         true, g_pauseOptCat, sel, pt,
         nRows, items, rowTops, rowH,
-        minX, maxX, valXScreen, rightBoundScreen
+        minX, maxX, valXScreen, rightBoundScreen,
+        scrollM.scrollable ? &scrollM : nullptr
     );
 }
 
@@ -4707,6 +5516,7 @@ static void __cdecl PauseP1Action_Impl(uint8_t* pauseMenu) {
     int targetCat = GetOptTargetCategory(item);
     if (targetCat >= 0) {
         ResetOptUiState(true);
+        g_pauseOptScroll.Reset();
         int curDepth = GetOptCategoryDepth(g_pauseOptCat);
         int nextDepth = GetOptCategoryDepth(targetCat);
         Game_PlaySfx(sm, 0xc);
@@ -4751,21 +5561,28 @@ static void __declspec(naked) hk_pausePage1Dispatch() {
 static void DrawPauseOptionsPane(int cat, int selRow, int xBase, int yBase, int slideY, int frame, int xOffset, bool isActivePane) {
     OptItem items[kMaxOptRows];
     int nRows = GetOptItems(cat, true, items);
-    int rowH = ComputePauseOptRowH(yBase, nRows);
-    int dy = (kPauseOptRowH - rowH) / 2;
-
     int paneLeft  = xBase + kMenuWideW + xOffset;
     int paneW     = kMenuWideW;
     int innerLeft = paneLeft + 2;
     int innerW    = paneW - 4;
 
+    OptScrollMetrics scrollM{};
+    ComputeOptScrollMetrics(true, cat, nRows, paneLeft, yBase + slideY, paneW, g_pauseOptScroll.renderY, &scrollM);
+    if (scrollM.scrollable && isActivePane) {
+        AdvanceOptScrollRenderY(g_pauseOptScroll, scrollM.maxScroll);
+        ComputeOptScrollMetrics(true, cat, nRows, paneLeft, yBase + slideY, paneW, g_pauseOptScroll.renderY, &scrollM);
+    }
+
+    int rowH = scrollM.scrollable ? scrollM.rowH : ComputePauseOptRowH(yBase, nRows);
+    int panelBodyH = scrollM.scrollable ? (scrollM.viewH + scrollM.backH) : (nRows * rowH);
+
     uint32_t whiteRgba = 0xffffffffu;
-    Game_DrawQuad(innerLeft, yBase + slideY + 0x55, innerW, 0x20 + nRows * rowH, &whiteRgba);
+    Game_DrawQuad(innerLeft, yBase + slideY + 0x55, innerW, 0x20 + panelBodyH, &whiteRgba);
     uint32_t hdrBgRgba = 0xffcbcbcbu;
     Game_DrawQuad(innerLeft, yBase + slideY + 0x55, innerW, 0x20, &hdrBgRgba);
 
     const int labelX     = paneLeft + 0x18;
-    const int rightBound = paneLeft + kMenuWideW - 6;
+    const int rightBound = scrollM.scrollable ? scrollM.rightBound : (paneLeft + kMenuWideW - 6);
     const int valX       = paneLeft + kPauseOptValRelX;
     constexpr int kMinColGap = 6;
 
@@ -4782,20 +5599,17 @@ static void DrawPauseOptionsPane(int cat, int selRow, int xBase, int yBase, int 
         ? ApplyMenuSlotRainbowStyle(rawRainbowRgb)
         : Game_ColorLerp(0xffffffu, rawRainbowRgb, 25);
     uint32_t rainbowRgba = RgbToRgbaOpaque(rainbowRgb);
-    if (selRow >= 0 && selRow < nRows) {
-        Game_DrawQuad(innerLeft, yBase + slideY + 0x76 + selRow * rowH, innerW, rowH, &rainbowRgba);
-    }
-
-    *pFontCol = 0xff3b3b3bu;
     const void* dividerCol = reinterpret_cast<const void*>(0x5f93a4);
-    for (int row = 0; row < nRows; ++row) {
-        int divY = 0x75 + row * rowH;
-        Game_DrawQuad(paneLeft, yBase + slideY + divY, paneW, 1, dividerCol);
 
+    auto drawPauseRow = [&](int row, int divAbsY, int rH) {
+        int rDy = (kPauseOptRowH - rH) / 2;
+        Game_DrawQuad(paneLeft, divAbsY, paneW, 1, dividerCol);
+
+        *pFontCol = 0xff3b3b3bu;
         OptCtrlKind kind = GetOptCtrlKind(items[row]);
         bool hasIndicator = (kind == CTRL_TOGGLE || kind == CTRL_POPUP || kind == CTRL_SLIDER);
-        int lblTxtY = divY + 0x1a - dy;
-        int valTxtY = hasIndicator ? (divY + 0x15 - dy) : (divY + 0x1a - dy);
+        int lblTxtAbsY = divAbsY + 0x1a - rDy;
+        int valTxtAbsY = hasIndicator ? (divAbsY + 0x15 - rDy) : (divAbsY + 0x1a - rDy);
 
         EdgeWString lblTmp, valTmp;
         bool lblFree = false, valFree = false;
@@ -4805,11 +5619,11 @@ static void DrawPauseOptionsPane(int cat, int selRow, int xBase, int yBase, int 
 
         int lblMaxW = (valWs != nullptr) ? ((valX - kMinColGap) - labelX)
                                          : (hasArrow ? ((rightBound - 22) - labelX) : (rightBound - labelX));
-        DrawTextAutoFit(lblWs, labelX, yBase + slideY + lblTxtY, 0x2000, 0x2000, 0, 0, 0x44, lblMaxW);
+        DrawTextAutoFit(lblWs, labelX, lblTxtAbsY, 0x2000, 0x2000, 0, 0, 0x44, lblMaxW);
         if (valWs != nullptr) {
-            DrawTextAutoFit(valWs, valX, yBase + slideY + valTxtY, 0x2000, 0x2000, 0, 0, 0x44, rightBound - valX);
+            DrawTextAutoFit(valWs, valX, valTxtAbsY, 0x2000, 0x2000, 0, 0, 0x44, rightBound - valX);
         } else if (hasArrow) {
-            Game_DrawText(&g_wstrSubmenuArrow, rightBound - 6, yBase + slideY + lblTxtY, 0x2000, 0x2000, 0, 0, 0x48);
+            Game_DrawText(&g_wstrSubmenuArrow, rightBound - 6, lblTxtAbsY, 0x2000, 0x2000, 0, 0, 0x48);
         }
         if (lblFree) lblTmp.free_if_heap();
         if (valFree) valTmp.free_if_heap();
@@ -4820,17 +5634,67 @@ static void DrawPauseOptionsPane(int cat, int selRow, int xBase, int yBase, int 
             uint32_t activeRgba  = RgbToRgbaOpaque(fgRgb);
             uint32_t dimRgba     = RgbToRgbaOpaque(LerpRgb(bgRgb, fgRgb, 0.32f));
             uint32_t defMarkRgba = RgbToRgbaOpaque(LerpRgb(bgRgb, fgRgb, 0.72f));
-            int indY = yBase + slideY + divY + (std::max)(0x16, 0x1d - (kPauseOptRowH - rowH));
+            int indY = divAbsY + (std::max)(0x16, 0x1d - (kPauseOptRowH - rH));
             DrawOptRowControlIndicator(items[row], valX, rightBound, indY, activeRgba, dimRgba, defMarkRgba);
         }
-    }
+    };
 
-    Game_DrawQuad(paneLeft, yBase + slideY + 0x75 + nRows * rowH, paneW, 1, dividerCol);
+    if (!scrollM.scrollable) {
+        if (selRow >= 0 && selRow < nRows) {
+            Game_DrawQuad(innerLeft, yBase + slideY + 0x76 + selRow * rowH, innerW, rowH, &rainbowRgba);
+        }
+        for (int row = 0; row < nRows; ++row) {
+            drawPauseRow(row, yBase + slideY + 0x75 + row * rowH, rowH);
+        }
+        Game_DrawQuad(paneLeft, yBase + slideY + 0x75 + nRows * rowH, paneW, 1, dividerCol);
 
-    if (isActivePane && IsMenuRenderInteractive() && selRow >= 0 && selRow < nRows) {
-        Game_DrawRainbowRectBorder(
-            frame, innerLeft, yBase + slideY + 0x76 + selRow * rowH, innerW, rowH, 2, 255
-        );
+        if (isActivePane && IsMenuRenderInteractive() && selRow >= 0 && selRow < nRows) {
+            Game_DrawRainbowRectBorder(
+                frame, innerLeft, yBase + slideY + 0x76 + selRow * rowH, innerW, rowH, 2, 255
+            );
+        }
+    } else {
+        {
+            ScopedUiScissor clip(innerLeft, scrollM.listTop, innerW, scrollM.viewH);
+            if (!clip.empty) {
+                ScopedUiMatrixTranslate scrollMat(0.0f, g_pauseOptScroll.renderY);
+                if (selRow >= 0 && selRow < scrollM.nScrollRows) {
+                    int hlY = scrollM.listTop + selRow * scrollM.stride + 1;
+                    Game_DrawQuad(innerLeft, hlY, innerW, rowH, &rainbowRgba);
+                }
+                for (int row = 0; row < scrollM.nScrollRows; ++row) {
+                    int divAbsY = scrollM.listTop + row * scrollM.stride;
+                    float visTop = static_cast<float>(divAbsY) - g_pauseOptScroll.renderY;
+                    float visBot = static_cast<float>(divAbsY + rowH) - g_pauseOptScroll.renderY;
+                    if (visBot <= static_cast<float>(scrollM.listTop) || visTop >= static_cast<float>(scrollM.listBottom)) {
+                        continue;
+                    }
+                    drawPauseRow(row, divAbsY, rowH);
+                }
+                if (isActivePane && IsMenuRenderInteractive() && selRow >= 0 && selRow < scrollM.nScrollRows) {
+                    Game_DrawRainbowRectBorder(
+                        frame, innerLeft, scrollM.listTop + selRow * scrollM.stride + 1, innerW, rowH, 2, 255
+                    );
+                }
+            }
+        }
+        Game_DrawQuad(paneLeft, scrollM.listTop, paneW, 1, dividerCol);
+        if (scrollM.hasScrollbar) {
+            DrawOptScrollbar(
+                scrollM, true, kMenuWideW + xOffset,
+                isActivePane && IsMenuRenderInteractive(), g_pauseOptScroll.dragActive
+            );
+        }
+        if (selRow == scrollM.backIdx) {
+            Game_DrawQuad(innerLeft, scrollM.backTop + 1, innerW, scrollM.backH, &rainbowRgba);
+        }
+        drawPauseRow(scrollM.backIdx, scrollM.backTop, scrollM.backH);
+        Game_DrawQuad(paneLeft, scrollM.backTop + scrollM.backH, paneW, 1, dividerCol);
+        if (isActivePane && IsMenuRenderInteractive() && selRow == scrollM.backIdx) {
+            Game_DrawRainbowRectBorder(
+                frame, innerLeft, scrollM.backTop + 1, innerW, scrollM.backH, 2, 255
+            );
+        }
     }
 }
 
@@ -4878,9 +5742,20 @@ static void __cdecl RenderPauseOptionsBody_Impl(uint8_t* ebpFrame, int slideY) {
     if (g_optUi.popupOpen && g_optUi.popupInPause && g_optUi.popupRow >= 0) {
         int xOffset = activeDepth * subStride;
         int popNRows = GetOptRowCount(g_pauseOptCat, true);
-        int popRowH = ComputePauseOptRowH(yBase, popNRows);
-        int popRightBound = xBase + (2 * kMenuWideW) - 6 + xOffset - static_cast<int>(std::lround(subSwipeX));
-        int popRowTopY = yBase + slideY + 0x75 + g_optUi.popupRow * popRowH;
+        int paneLeft = xBase + kMenuWideW + xOffset;
+        OptScrollMetrics popM{};
+        ComputeOptScrollMetrics(true, g_pauseOptCat, popNRows, paneLeft, yBase + slideY, kMenuWideW, g_pauseOptScroll.renderY, &popM);
+
+        int popRowH = popM.scrollable
+            ? ((g_optUi.popupRow == popM.backIdx) ? popM.backH : popM.rowH)
+            : ComputePauseOptRowH(yBase, popNRows);
+        int popRightBound = (popM.scrollable ? popM.rightBound : (xBase + (2 * kMenuWideW) - 6 + xOffset))
+            - static_cast<int>(std::lround(subSwipeX));
+        int popRowTopY = popM.scrollable
+            ? ((g_optUi.popupRow == popM.backIdx)
+                ? popM.backTop
+                : (popM.listTop + g_optUi.popupRow * popM.stride - static_cast<int>(std::lround(g_pauseOptScroll.renderY))))
+            : (yBase + slideY + 0x75 + g_optUi.popupRow * popRowH);
         uint32_t rainbowRgb = GetSmoothMenuRainbow(frame + 3);
         DrawOptPopupOverlay(g_optUi.popupItem, popRightBound, popRowTopY, popRowH, true, scrollX, rainbowRgb);
     }
@@ -6710,7 +7585,24 @@ bool __cdecl IsOptionsPopupOpen(bool inPause) {
 }
 
 bool __cdecl IsOptionsSliderDragging(bool inPause) {
-    return g_optUi.dragActive && g_optUi.dragInPause == inPause;
+    return (g_optUi.dragActive && g_optUi.dragInPause == inPause)
+        || GetOptScrollState(inPause).dragActive;
+}
+
+void __cdecl OnOptionsMouseWheel(int32_t wheelDelta) {
+    if (wheelDelta == 0) return;
+    const uint8_t* sm = GetScreenMgr();
+    if (sm == nullptr) return;
+    uint32_t state = *reinterpret_cast<const uint32_t*>(sm + 0x50);
+    if (state == 9u && IsOptCategoryScrollable(g_mainOptCat)) {
+        g_optWheelAccum.fetch_add(wheelDelta, std::memory_order_acq_rel);
+    } else if (state == 0x12u && IsOptCategoryScrollable(g_pauseOptCat)) {
+        g_optWheelAccum.fetch_add(wheelDelta, std::memory_order_acq_rel);
+    }
+}
+
+uint32_t __cdecl GetOptionsScrollRevision(bool inPause) {
+    return GetOptScrollState(inPause).revision;
 }
 
 bool __cdecl IsOptionsMenuReadyForHover(const uint8_t* menuObj, bool inPause) {
@@ -6736,6 +7628,33 @@ int __cdecl HitTestOptionsSlot(bool inPause, int mx, int my) {
     int nRows = GetOptRowCount(cat, inPause);
     if (nRows <= 0) return -1;
 
+    const int pauseShiftY = inPause ? GetPauseContentShiftY() : 0;
+    OptScrollState& scrollSt = GetOptScrollState(inPause);
+    OptScrollMetrics scrollM{};
+    ComputeOptScrollMetrics(inPause, cat, nRows, basePt[0], basePt[1] + pauseShiftY, menuW, scrollSt.renderY, &scrollM);
+
+    if (scrollM.scrollable) {
+        int paneW = inPause ? kMenuWideW : menuW;
+        int minX = basePt[0] + 2;
+        int maxX = basePt[0] + paneW - 2;
+        if (mx < minX || mx >= maxX) return -1;
+        if (scrollM.hasScrollbar && mx >= scrollM.sbX - 3 && mx <= scrollM.sbX + scrollM.sbW + 3 &&
+            my >= scrollM.listTop && my < scrollM.listBottom) {
+            return -1;
+        }
+        int backTop = scrollM.backTop - scrollM.slotPad;
+        if (my >= backTop && my < backTop + scrollM.backH + 2 * scrollM.slotPad) {
+            return scrollM.backIdx;
+        }
+        if (my < scrollM.listTop || my >= scrollM.listBottom) return -1;
+        int scrollOff = static_cast<int>(std::lround(scrollSt.renderY));
+        for (int row = 0; row < scrollM.nScrollRows; ++row) {
+            int top = scrollM.listTop + row * scrollM.stride - scrollOff - scrollM.slotPad;
+            if (my >= top && my < top + scrollM.rowH + 2 * scrollM.slotPad) return row;
+        }
+        return -1;
+    }
+
     if (!inPause) {
         int minX = basePt[0] + 2;
         int maxX = basePt[0] + menuW - 2;
@@ -6758,7 +7677,6 @@ int __cdecl HitTestOptionsSlot(bool inPause, int mx, int my) {
     int maxX = basePt[0] + kMenuWideW - 2;
     if (mx < minX || mx >= maxX) return -1;
     int rowH = ComputePauseOptRowH(basePt[1], nRows);
-    const int pauseShiftY = GetPauseContentShiftY();
     for (int row = 0; row < nRows; ++row) {
         int top = basePt[1] + 0x75 + pauseShiftY + row * rowH;
         if (my >= top && my < top + rowH) return row;

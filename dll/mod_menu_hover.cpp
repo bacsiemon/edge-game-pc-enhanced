@@ -43,6 +43,7 @@ struct MenuHoverState {
     int32_t lsPrevPlayedTile = -1;
     int     lsHoveredBtn     = -1; // -1=none, 1=back/skip, 2=go
     int32_t lsPrevScrollY    = 0;
+    uint32_t optPrevScrollRev = 0;
 
     int prevMx = -99999;
     int prevMy = -99999;
@@ -427,6 +428,8 @@ static void __cdecl MenuSubUpdate_Impl(uint8_t* submenu, float dt) {
         } else {
             g_hover.lsPrevPlayedTile = -1;
         }
+        bool inOptsInit = (vtbl == kVtblOptions) || (vtbl == kVtblPause && pausePage == 1);
+        g_hover.optPrevScrollRev = inOptsInit ? GetOptionsScrollRevision(vtbl == kVtblPause && pausePage == 1) : 0u;
         if (g_hover.lastInputMode == HoverInputMode::Mouse) {
             g_hover.needsInitialSync = true;
             g_hover.slotVisible = false;
@@ -489,12 +492,16 @@ static void __cdecl MenuSubUpdate_Impl(uint8_t* submenu, float dt) {
                 return;
             }
 
+            uint32_t curOptScrollRev = inOpts ? GetOptionsScrollRevision(inPauseOpts) : 0u;
+            bool optScrollChanged = inOpts && (curOptScrollRev != g_hover.optPrevScrollRev);
+            g_hover.optPrevScrollRev = curOptScrollRev;
+
             if (sm[0xc8] != 0) {
                 g_hover.lastInputMode = HoverInputMode::Keyboard;
                 g_hover.needsInitialSync = false;
             } else if (mouseMoved || mouseJustPressed ||
-                       (g_hover.lastInputMode == HoverInputMode::Mouse && g_hover.needsInitialSync)) {
-                bool silent = g_hover.needsInitialSync && !mouseMoved && !mouseJustPressed;
+                       (g_hover.lastInputMode == HoverInputMode::Mouse && (g_hover.needsInitialSync || optScrollChanged))) {
+                bool silent = (g_hover.needsInitialSync || optScrollChanged) && !mouseMoved && !mouseJustPressed;
                 if (mouseMoved || mouseJustPressed) {
                     g_hover.lastInputMode = HoverInputMode::Mouse;
                 }

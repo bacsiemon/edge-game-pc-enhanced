@@ -27,7 +27,7 @@ uint8_t g_prismVfx    = 1;
 uint8_t g_chromaAb    = 1;
 int32_t g_aaSamples   = -1; // sentinel until loaded/migrated
 uint8_t g_finishEffect   = 0; // 0=pc, 1=mobile, 2=java
-uint8_t g_finishPlatform = 0; // 0=pc, 1=mobile
+uint8_t g_finishPlatform = 0; // 0=pc, 1=mobile, 2=java
 uint8_t g_cubeDistortion = 0; // 0=off, 1=on
 uint8_t g_timerMode   = 3;    // default: both
 float   g_timerSize   = 1.0f; // default: 1x
@@ -921,7 +921,7 @@ static void SaveModSettings() {
     uint8_t chromaAb = (g_chromaAb != 0) ? 1u : 0u;
     int32_t aaSamples = (g_aaSamples >= 0 && g_aaSamples <= 16) ? g_aaSamples : 0;
     uint8_t finishEffect = (g_finishEffect <= 2u) ? g_finishEffect : 0u;
-    uint8_t finishPlatform = (g_finishPlatform != 0) ? 1u : 0u;
+    uint8_t finishPlatform = (g_finishPlatform <= 2u) ? g_finishPlatform : 0u;
     uint8_t colorTheme = (g_colorTheme <= 2u) ? g_colorTheme : 0u;
     uint8_t cubeDistortion = (g_cubeDistortion != 0) ? 1u : 0u;
     uint8_t timerMode = (g_timerMode <= 3u) ? g_timerMode : 3u;
@@ -1281,8 +1281,8 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
                 seenMask |= (1u << 15);
             }
         } else if (AsciiEqIc(kP, kE, "finish_platform")) {
-            if (ParseAsciiInt(vP, vE, &iv)) {
-                g_finishPlatform = (iv != 0) ? 1u : 0u;
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) {
+                g_finishPlatform = static_cast<uint8_t>(iv);
                 seenMask |= (1u << 16);
             }
         } else if (AsciiEqIc(kP, kE, "color_theme")) {
@@ -1550,7 +1550,8 @@ static void ApplyLegacyTtsavSnapshot() {
         if (iv >= 0 && iv <= 2) g_finishEffect = static_cast<uint8_t>(iv);
     }
     if (s.hasFinishPlatform) {
-        g_finishPlatform = (static_cast<int>(std::lrint(s.finishPlatform)) != 0) ? 1u : 0u;
+        int iv = static_cast<int>(std::lrint(s.finishPlatform));
+        if (iv >= 0 && iv <= 2) g_finishPlatform = static_cast<uint8_t>(iv);
     }
     if (s.hasColorTheme) {
         int iv = static_cast<int>(std::lrint(s.colorTheme));
@@ -2116,15 +2117,6 @@ static void ChromaAbAction_Impl(int sfxId) {
     SaveModSettings();
 }
 
-static void FinishPlatformAction_Impl(int sfxId) {
-    uint8_t* sm = GetScreenMgr();
-    g_finishPlatform ^= 1u;
-    if (sm != nullptr && sfxId > 0) {
-        Game_PlaySfx(sm, sfxId);
-    }
-    SaveModSettings();
-}
-
 static void CubeDistortionAction_Impl(int sfxId) {
     uint8_t* sm = GetScreenMgr();
     g_cubeDistortion ^= 1u;
@@ -2472,7 +2464,6 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_FULLSCREEN:
     case OPT_CHROMA_AB:
     case OPT_AUTO_SCALE:
-    case OPT_FINISH_PLATFORM:
     case OPT_CUBE_DISTORTION:
     case OPT_MUSIC_START:
     case OPT_MUSIC_PLAYLIST:
@@ -2488,6 +2479,7 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_DOLLY_ZOOM:
     case OPT_COLOR_THEME:
     case OPT_FINISH_EFFECT:
+    case OPT_FINISH_PLATFORM:
     case OPT_EDGE_TIMER:
     case OPT_TIMER:
     case OPT_TIMER_POS:
@@ -2596,7 +2588,6 @@ static int GetToggleState(OptItem item) {
     }
     case OPT_CHROMA_AB:       return g_chromaAb ? 1 : 0;
     case OPT_AUTO_SCALE:      return g_autoScale ? 1 : 0;
-    case OPT_FINISH_PLATFORM: return g_finishPlatform ? 1 : 0;
     case OPT_CUBE_DISTORTION: return g_cubeDistortion ? 1 : 0;
     case OPT_MUSIC_START:     return g_musicStart ? 1 : 0;
     case OPT_MUSIC_PLAYLIST:  return g_musicPlaylist ? 1 : 0;
@@ -2618,7 +2609,8 @@ static int GetPopupChoiceCount(OptItem item) {
     case OPT_CAM_DIST:     return 8;
     case OPT_DOLLY_ZOOM:   return 11;
     case OPT_COLOR_THEME:  return 3;
-    case OPT_FINISH_EFFECT: return 3;
+    case OPT_FINISH_EFFECT:   return 3;
+    case OPT_FINISH_PLATFORM: return 3;
     case OPT_EDGE_TIMER:         return 3;
     case OPT_TIMER:              return 4;
     case OPT_TIMER_POS:          return 4;
@@ -2665,6 +2657,7 @@ static int GetPopupCurrentChoice(OptItem item) {
     }
     case OPT_COLOR_THEME:        return (g_colorTheme <= 2u) ? static_cast<int>(g_colorTheme) : 0;
     case OPT_FINISH_EFFECT:      return (g_finishEffect <= 2u) ? static_cast<int>(g_finishEffect) : 0;
+    case OPT_FINISH_PLATFORM:    return (g_finishPlatform <= 2u) ? static_cast<int>(g_finishPlatform) : 0;
     case OPT_EDGE_TIMER:         return (g_edgeTimerMode <= 2u) ? static_cast<int>(g_edgeTimerMode) : 0;
     case OPT_TIMER:              return std::clamp<int>(g_timerMode, 0, 3);
     case OPT_TIMER_POS:          return std::clamp<int>(g_timerPos, 0, 3);
@@ -2693,6 +2686,7 @@ static int GetPopupDefaultChoice(OptItem item) {
     case OPT_DOLLY_ZOOM:         return 0; // pc (-1)
     case OPT_COLOR_THEME:        return 0; // pc
     case OPT_FINISH_EFFECT:      return 0; // pc
+    case OPT_FINISH_PLATFORM:    return 0; // pc
     case OPT_EDGE_TIMER:         return 0; // 2D
     case OPT_TIMER:              return 3; // both
     case OPT_TIMER_POS:          return 1; // TR
@@ -2738,6 +2732,7 @@ static const EdgeWString* GetPopupChoiceWstr(OptItem item, int idx, EdgeWString*
         return FmtFloatWstr(g_fovPresets[idx], tmp);
     case OPT_COLOR_THEME:
     case OPT_FINISH_EFFECT:
+    case OPT_FINISH_PLATFORM:
         idx = std::clamp(idx, 0, 2);
         if (idx == 1) return &g_wstrMobile;
         if (idx == 2) return &g_wstrJava;
@@ -2845,6 +2840,11 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
         break;
     case OPT_FINISH_EFFECT:
         g_finishEffect = static_cast<uint8_t>(idx);
+        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SaveModSettings();
+        break;
+    case OPT_FINISH_PLATFORM:
+        g_finishPlatform = static_cast<uint8_t>(idx);
         if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
         SaveModSettings();
         break;
@@ -3400,7 +3400,9 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
         if (g_finishEffect == 2) return &g_wstrJava;
         return &g_wstrPc;
     case OPT_FINISH_PLATFORM:
-        return (g_finishPlatform != 0) ? &g_wstrMobile : &g_wstrPc;
+        if (g_finishPlatform == 1) return &g_wstrMobile;
+        if (g_finishPlatform == 2) return &g_wstrJava;
+        return &g_wstrPc;
     case OPT_COLOR_THEME:
         if (g_colorTheme == 1) return &g_wstrMobile;
         if (g_colorTheme == 2) return &g_wstrJava;
@@ -3568,7 +3570,6 @@ static void ExecuteOptToggle(OptItem item, int sfxId) {
     case OPT_FULLSCREEN:      ToggleFullscreenWithSfx(sfxId); break;
     case OPT_CHROMA_AB:       ChromaAbAction_Impl(sfxId); break;
     case OPT_AUTO_SCALE:      AutoScaleAction_Impl(sfxId); break;
-    case OPT_FINISH_PLATFORM: FinishPlatformAction_Impl(sfxId); break;
     case OPT_CUBE_DISTORTION: CubeDistortionAction_Impl(sfxId); break;
     case OPT_MUSIC_START:     MusicStartAction_Impl(sfxId); break;
     case OPT_MUSIC_PLAYLIST:  MusicPlaylistAction_Impl(sfxId); break;

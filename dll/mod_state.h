@@ -43,7 +43,7 @@ extern uint8_t g_prismVfx;    // 0=off, 1=short (vanilla), 2=medium (1s), 3=long
 extern uint8_t g_chromaAb;    // 0=off, 1=on
 extern int32_t g_aaSamples;   // 0=off, 2/4/8/16 MSAA samples
 extern uint8_t g_finishEffect;   // 0=pc, 1=mobile, 2=java
-extern uint8_t g_finishPlatform; // 0=pc, 1=mobile
+extern uint8_t g_finishPlatform; // 0=pc, 1=mobile, 2=java
 extern uint8_t g_colorTheme;     // 0=pc, 1=mobile, 2=java
 extern uint8_t g_cubeDistortion; // 0=off, 1=on
 extern uint8_t g_timerMode;   // 0=off, 1=level, 2=rank, 3=both

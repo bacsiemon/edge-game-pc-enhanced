@@ -1,4 +1,4 @@
-#include "mod_state.h"
+#include "mod_smooth_shared.h"
 #include <d3d9.h>
 #include <algorithm>
 #include <cmath>
@@ -38,6 +38,16 @@ static const uint32_t kMobileFinishInner[23] = {
     0x69ffe5u, 0x7be7f2u, 0x8ccfffu, 0xa4c5fcu, 0xbbbbfau, 0xd0b6fdu, 0xe4b1ffu, 0xf2a7f7u,
     0xffa0eeu, 0xff9dd0u, 0xff95b0u, 0xffa1a4u, 0xffad9au, 0xffc16bu, 0xffd845u, 0xedec31u,
     0xdcff1du, 0xb5ff3au, 0x8eff52u, 0x69ff77u, 0x69ff94u, 0x69ffb3u, 0x69ffccu
+};
+
+// Java J2ME finish platform color tables from galaxia.spr (11-frame cycle, 2 Java ticks = 90 ms/frame = 2.7 PC 30 Hz ticks/frame)
+static const uint32_t kJavaFinishOuter[11] = {
+    0xd8faffu, 0xd2ffdeu, 0xe4ffd0u, 0xfaffc1u, 0xfff7d6u, 0xffece4u,
+    0xfbe3ecu, 0xfce3f8u, 0xf9e3ffu, 0xe7d8ffu, 0xdbe7fau
+};
+static const uint32_t kJavaFinishInner[11] = {
+    0x51ff70u, 0x86ff4cu, 0xcaff06u, 0xffd771u, 0xffbfabu, 0xffafc7u,
+    0xffabedu, 0xe9aeffu, 0xcdbeffu, 0xabc4ffu, 0x72dffeu
 };
 
 // Mobile / PC 13-color cube rainbow palettes (matches 0x589b50 & 0x589b84)
@@ -223,6 +233,68 @@ static void EmitQuad3D(
     out.push_back({p3[0], p3[1], p3[2], col});
 }
 
+static void EmitFeatheredQuadXZ(
+    std::vector<FinishVert>& out,
+    float ix0, float ix1, float iz0, float iz1,
+    float padX, float padZ,
+    float y, uint32_t rgb, int peakAlpha
+) {
+    auto makeRingCol = [&](float r) -> D3DCOLOR {
+        float w = 1.0f - (3.0f * r * r - 2.0f * r * r * r);
+        int a = std::clamp(static_cast<int>(std::lround(static_cast<float>(peakAlpha) * w)), 0, 255);
+        return (static_cast<D3DCOLOR>(a) << 24) | (rgb & 0x00ffffffu);
+    };
+
+    auto emitQuadVerts = [&](float x0, float z0, D3DCOLOR c0,
+                             float x1, float z1, D3DCOLOR c1,
+                             float x2, float z2, D3DCOLOR c2,
+                             float x3, float z3, D3DCOLOR c3) {
+        out.push_back({x0, y, z0, c0});
+        out.push_back({x1, y, z1, c1});
+        out.push_back({x2, y, z2, c2});
+        out.push_back({x0, y, z0, c0});
+        out.push_back({x2, y, z2, c2});
+        out.push_back({x3, y, z3, c3});
+    };
+
+    // Solid inner core
+    EmitQuadXZ(out, ix0, ix1, iz0, iz1, y, makeRingCol(0.0f));
+
+    // 3 smoothstep feather rings so transitions into the outer tile have no Mach-band creases
+    constexpr float kRadii[4] = {0.0f, 1.0f / 3.0f, 2.0f / 3.0f, 1.0f};
+    for (int k = 0; k < 3; ++k) {
+        float rA = kRadii[k];
+        float rB = kRadii[k + 1];
+        D3DCOLOR colA = makeRingCol(rA);
+        D3DCOLOR colB = makeRingCol(rB);
+
+        float ax0 = ix0 - padX * rA, ax1 = ix1 + padX * rA;
+        float az0 = iz0 - padZ * rA, az1 = iz1 + padZ * rA;
+        float bx0 = ix0 - padX * rB, bx1 = ix1 + padX * rB;
+        float bz0 = iz0 - padZ * rB, bz1 = iz1 + padZ * rB;
+
+        // North / South / West / East edge bands
+        emitQuadVerts(ax0, bz0, colB, ax1, bz0, colB, ax1, az0, colA, ax0, az0, colA);
+        emitQuadVerts(ax0, az1, colA, ax1, az1, colA, ax1, bz1, colB, ax0, bz1, colB);
+        emitQuadVerts(bx0, az0, colB, ax0, az0, colA, ax0, az1, colA, bx0, az1, colB);
+        emitQuadVerts(ax1, az0, colA, bx1, az0, colB, bx1, az1, colB, ax1, az1, colA);
+
+        // 4 corners split across the chamfer diagonal (inner vertex colA, outer 3 vertices colB)
+        auto emitCorner = [&](float xIn, float zIn, float xA, float zA, float xOut, float zOut, float xB, float zB) {
+            out.push_back({xIn,  y, zIn,  colA});
+            out.push_back({xA,   y, zA,   colB});
+            out.push_back({xB,   y, zB,   colB});
+            out.push_back({xA,   y, zA,   colB});
+            out.push_back({xOut, y, zOut, colB});
+            out.push_back({xB,   y, zB,   colB});
+        };
+        emitCorner(ax0, az0, ax0, bz0, bx0, bz0, bx0, az0);
+        emitCorner(ax1, az0, bx1, az0, bx1, bz0, ax1, bz0);
+        emitCorner(ax1, az1, ax1, bz1, bx1, bz1, bx1, az1);
+        emitCorner(ax0, az1, bx0, az1, bx0, bz1, ax0, bz1);
+    }
+}
+
 // ------------------------------------------------------------------
 // 1. Mobile Finish Platform Renderer (0x47b283)
 // ------------------------------------------------------------------
@@ -236,14 +308,34 @@ static float Hash01(uint32_t frame, int idx, uint32_t ch) {
     return static_cast<float>(h % 100u) / 100.0f;
 }
 
+static float SmoothHash01(uint32_t step0, float frac, int idx, uint32_t ch) {
+    float p0 = Hash01(step0 - 1u, idx, ch);
+    float p1 = Hash01(step0,      idx, ch);
+    float p2 = Hash01(step0 + 1u, idx, ch);
+    float p3 = Hash01(step0 + 2u, idx, ch);
+    float t  = std::clamp(frac, 0.0f, 1.0f);
+    float t2 = t * t;
+    float t3 = t2 * t;
+    float v  = 0.5f * (
+        (2.0f * p1)
+        + (-p0 + p2) * t
+        + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2
+        + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3
+    );
+    return std::clamp(v, 0.0f, 1.0f);
+}
+
 static void __cdecl RenderMobileFinishPlatform_Impl(const uint8_t* finish) {
     if (finish == nullptr) return;
     IDirect3DDevice9* dev = GetD3DDevice();
     uint8_t* game = GetWorldScreen();
     if (dev == nullptr || game == nullptr) return;
 
-    uint32_t frame = *reinterpret_cast<uint32_t*>(game + 0x4);
-    float sub = IsGameplayPaused() ? 0.0f : std::clamp(g_uiAlpha, 0.0f, 1.0f);
+    float t30 = GetSmoothWsFrame(game);
+    if (t30 < 0.0f) t30 = 0.0f;
+    float tFloor = std::floor(t30);
+    uint32_t frame = static_cast<uint32_t>(tFloor);
+    float sub = t30 - tFloor;
 
     uint32_t o0 = frame % 23u;
     uint32_t o1 = (o0 + 1u) % 23u;
@@ -286,14 +378,21 @@ static void __cdecl RenderMobileFinishPlatform_Impl(const uint8_t* finish) {
     dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
     dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, 10, verts.data(), sizeof(FinishVert));
 
-    // Mobile center shimmering/orbiting semi-transparent glow squares (DrawScene3D 0x1c5270..0x1c5624)
-    float t30 = static_cast<float>(frame) + sub;
+    // Mobile center shimmering/orbiting semi-transparent glow squares with C1-continuous orbit/burst & Catmull-Rom jitter
+    constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kDeg2Rad = kPi / 180.0f;
     float phase = std::fmod(t30 * 10.0f, 500.0f);
-    float jitterAmp = (phase < 360.0f)
-        ? 1.0f
-        : (((phase - 360.0f) / 140.0f) * 5.0f + 1.0f);
+    float easedOrbitDeg = 360.0f;
+    float jitterAmp = 1.0f;
+    if (phase < 360.0f) {
+        float uOrbit = phase / 360.0f;
+        easedOrbitDeg = 360.0f * (uOrbit - std::sin(2.0f * kPi * uOrbit) / (2.0f * kPi));
+    } else {
+        float uBurst = (phase - 360.0f) / 140.0f;
+        float env = 0.5f * (1.0f - std::cos(2.0f * kPi * uBurst));
+        jitterAmp = 1.0f + 5.0f * env;
+    }
 
-    constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
     std::vector<FinishVert> glowVerts;
     glowVerts.reserve(60);
 
@@ -303,25 +402,24 @@ static void __cdecl RenderMobileFinishPlatform_Impl(const uint8_t* finish) {
         int alpha = static_cast<int>(tri * 2.0f * 100.0f);
         if (alpha <= 0) continue;
 
-        float angDeg = (phase < 360.0f) ? (static_cast<float>(idx * 7) + phase) : 0.0f;
-        float angMod360 = std::fmod(angDeg, 360.0f);
-        float offsetScale = 1.0f + (angMod360 * 0.5f) / 360.0f;
-
-        float pivotX = (x0 + 15.0f) + offsetScale * static_cast<float>(idx - 5)
-                     + (Hash01(frame, idx, 0u) - 0.5f) * offsetScale;
-        float pivotZ = (z0 + 15.0f) + offsetScale * static_cast<float>(idx - 5)
-                     + (Hash01(frame, idx, 1u) - 0.5f) * offsetScale;
-
-        float qx0 = x0 + (Hash01(frame, idx, 2u) - 0.5f) * jitterAmp;
-        float qz1 = z1 + (Hash01(frame, idx, 3u) - 0.5f) * jitterAmp;
-        float qx1 = x1 + (Hash01(frame, idx, 4u) - 0.5f) * jitterAmp;
-        float qz0 = z0 + (Hash01(frame, idx, 5u) - 0.5f) * jitterAmp;
-
-        float avgX = 0.5f * (qx0 + qx1);
-        float avgZ = 0.5f * (qz0 + qz1);
+        float angDeg = static_cast<float>(idx * 7) + easedOrbitDeg;
         float angRad = angDeg * kDeg2Rad;
         float ca = std::cos(angRad);
         float sa = std::sin(angRad);
+        float offsetScale = 1.25f - 0.25f * ca;
+
+        float pivotX = (x0 + 15.0f) + offsetScale * static_cast<float>(idx - 5)
+                     + (SmoothHash01(frame, sub, idx, 0u) - 0.5f) * offsetScale;
+        float pivotZ = (z0 + 15.0f) + offsetScale * static_cast<float>(idx - 5)
+                     + (SmoothHash01(frame, sub, idx, 1u) - 0.5f) * offsetScale;
+
+        float qx0 = x0 + (SmoothHash01(frame, sub, idx, 2u) - 0.5f) * jitterAmp;
+        float qz1 = z1 + (SmoothHash01(frame, sub, idx, 3u) - 0.5f) * jitterAmp;
+        float qx1 = x1 + (SmoothHash01(frame, sub, idx, 4u) - 0.5f) * jitterAmp;
+        float qz0 = z0 + (SmoothHash01(frame, sub, idx, 5u) - 0.5f) * jitterAmp;
+
+        float avgX = 0.5f * (qx0 + qx1);
+        float avgZ = 0.5f * (qz0 + qz1);
         float dx = avgX - pivotX;
         float dz = avgZ - pivotZ;
         float shiftX = (ca * dx - sa * dz + pivotX) - avgX;
@@ -346,15 +444,111 @@ static void __cdecl RenderMobileFinishPlatform_Impl(const uint8_t* finish) {
     }
 }
 
+// ------------------------------------------------------------------
+// 1b. Java Finish Platform Renderer (galaxia.spr, 0x47b283)
+// ------------------------------------------------------------------
+static void __cdecl RenderJavaFinishPlatform_Impl(const uint8_t* finish) {
+    if (finish == nullptr) return;
+    IDirect3DDevice9* dev = GetD3DDevice();
+    uint8_t* game = GetWorldScreen();
+    if (dev == nullptr || game == nullptr) return;
+
+    float t30 = GetSmoothWsFrame(game);
+    if (t30 < 0.0f) t30 = 0.0f;
+
+    // Java galaxia.spr cycles 11 frames at 2 ticks * 45 ms = 90 ms/frame (2.7 PC 30 Hz ticks)
+    float javaF = t30 / 2.7f;
+    float javaFloor = std::floor(javaF);
+    uint32_t step0 = static_cast<uint32_t>(javaFloor);
+    float frac = javaF - javaFloor;
+
+    uint32_t j0 = step0 % 11u;
+    uint32_t j1 = (j0 + 1u) % 11u;
+
+    uint32_t outerRgb = LerpRgbU32(kJavaFinishOuter[j0], kJavaFinishOuter[j1], frac);
+    uint32_t innerRgb = LerpRgbU32(kJavaFinishInner[j0], kJavaFinishInner[j1], frac);
+    D3DCOLOR outerCol = 0xff000000u | outerRgb;
+
+    int32_t fx = *reinterpret_cast<const int32_t*>(finish + 0x0);
+    int32_t fy = *reinterpret_cast<const int32_t*>(finish + 0x4);
+    int32_t fz = *reinterpret_cast<const int32_t*>(finish + 0x8);
+
+    float x0 = static_cast<float>(fx) * 30.0f;
+    float x1 = x0 + 30.0f;
+    float xm = x0 - 30.0f;
+    float xp = x0 + 60.0f;
+
+    float z0 = static_cast<float>(fy) * 30.0f;
+    float z1 = z0 + 30.0f;
+    float zm = z0 - 30.0f;
+    float zp = z0 + 60.0f;
+
+    float y = static_cast<float>(fz) * 30.0f + 0.06f;
+
+    std::vector<FinishVert> outerVerts;
+    outerVerts.reserve(6);
+    EmitQuadXZ(outerVerts, xm, xp, zm, zp, y, outerCol);
+
+    ScopedD3DState guard(dev);
+    dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+    dev->SetRenderState(D3DRS_ZENABLE, TRUE);
+    dev->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+    dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, 2, outerVerts.data(), sizeof(FinishVert));
+
+    // 3-ring smoothstep feathered 1x1 center halo + 4 Catmull-Rom in-place shimmering layers
+    std::vector<FinishVert> blendVerts;
+    blendVerts.reserve(150 * 5);
+    EmitFeatheredQuadXZ(
+        blendVerts,
+        x0 + 2.0f, x1 - 2.0f, z0 + 2.0f, z1 - 2.0f,
+        5.5f, 5.5f,
+        y + 0.015f, innerRgb, 255
+    );
+
+    for (int idx = 0; idx < 4; ++idx) {
+        float dx0 = (SmoothHash01(step0, frac, idx, 0u) - 0.5f) * 4.4f;
+        float dx1 = (SmoothHash01(step0, frac, idx, 1u) - 0.5f) * 4.4f;
+        float dz0 = (SmoothHash01(step0, frac, idx, 2u) - 0.5f) * 4.4f;
+        float dz1 = (SmoothHash01(step0, frac, idx, 3u) - 0.5f) * 4.4f;
+        EmitFeatheredQuadXZ(
+            blendVerts,
+            x0 + dx0, x1 + dx1, z0 + dz0, z1 + dz1,
+            2.5f, 2.5f,
+            y + 0.022f + static_cast<float>(idx) * 0.004f,
+            innerRgb, 46
+        );
+    }
+
+    dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+    dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+    dev->DrawPrimitiveUP(
+        D3DPT_TRIANGLELIST,
+        static_cast<UINT>(blendVerts.size() / 3u),
+        blendVerts.data(),
+        sizeof(FinishVert)
+    );
+}
+
+static void __cdecl RenderCustomFinishPlatform_Impl(const uint8_t* finish) {
+    if (g_finishPlatform == 2u) {
+        RenderJavaFinishPlatform_Impl(finish);
+    } else {
+        RenderMobileFinishPlatform_Impl(finish);
+    }
+}
+
 static void __declspec(naked) hk_finishRender() {
     __asm {
         cmp BYTE PTR g_finishPlatform, 0
-        jne fr_mobile
+        jne fr_custom
         mov eax, 0x4836e0
         jmp eax
-    fr_mobile:
+    fr_custom:
         push ecx
-        call RenderMobileFinishPlatform_Impl
+        call RenderCustomFinishPlatform_Impl
         add esp, 4
         ret
     }

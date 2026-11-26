@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -330,30 +331,285 @@ static std::string BuildFileTimestampTag(const char* path) {
     return norm;
 }
 
-static std::mutex g_autoGainMutex;
-static std::unordered_map<std::string, float> g_midiAutoGainCache;
+// ------------------------------------------------------------------
+// music/midi.ini Configuration Loader / Auto-Generator
+// ------------------------------------------------------------------
+static std::mutex       g_midiCfgMutex;
+static MidiTuningConfig g_midiCfg{};
+static FILETIME         g_midiIniTime{};
+static bool             g_midiCfgLoaded = false;
+static uint64_t         g_midiCfgRevision = 0;
 
-static float ComputeMidiAutoGainDb(const char* midiPath, const char* sfPath, const tml_message* head) {
-    if (head == nullptr || sfPath == nullptr || sfPath[0] == '\0') return 0.0f;
+static std::string TrimIniAscii(const std::string& s) {
+    size_t a = 0;
+    while (a < s.size() && std::isspace(static_cast<unsigned char>(s[a]))) ++a;
+    size_t b = s.size();
+    while (b > a && std::isspace(static_cast<unsigned char>(s[b - 1]))) --b;
+    return s.substr(a, b - a);
+}
+
+static std::string ToLowerIniAscii(const std::string& s) {
+    std::string out = s;
+    for (char& ch : out) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return out;
+}
+
+static bool ParseIniBool(const std::string& val, bool fallback) {
+    std::string v = ToLowerIniAscii(TrimIniAscii(val));
+    if (v == "1" || v == "true" || v == "yes" || v == "on") return true;
+    if (v == "0" || v == "false" || v == "no" || v == "off") return false;
+    return fallback;
+}
+
+static float ParseIniFloat(const std::string& val, float minV, float maxV, float fallback) {
+    std::string s = TrimIniAscii(val);
+    if (s.empty()) return fallback;
+    char* endPtr = nullptr;
+    float f = std::strtof(s.c_str(), &endPtr);
+    if (endPtr == s.c_str() || !std::isfinite(f)) return fallback;
+    return (std::max)(minV, (std::min)(maxV, f));
+}
+
+static int ParseIniInt(const std::string& val, int minV, int maxV, int fallback) {
+    std::string s = TrimIniAscii(val);
+    if (s.empty()) return fallback;
+    char* endPtr = nullptr;
+    long v = std::strtol(s.c_str(), &endPtr, 10);
+    if (endPtr == s.c_str()) return fallback;
+    if (v < static_cast<long>(minV)) return minV;
+    if (v > static_cast<long>(maxV)) return maxV;
+    return static_cast<int>(v);
+}
+
+static std::string GetMidiIniPath() {
+    return ResolveFullDiskPath("music\\midi.ini");
+}
+
+static const char* kDefaultMidiIniText =
+    "; EDGE MIDI / SoundFont Playback Configuration\r\n"
+    "; Auto-generated if missing. Hot-reloads automatically on edit (next track or playlist switch).\r\n"
+    "; Numeric values are clamped to safe ranges; invalid entries fall back to defaults.\r\n"
+    "\r\n"
+    "[soundfont]\r\n"
+    "; Optional default SoundFont (.sf2). Leave empty to follow <soundfont> in music/playlist.xml\r\n"
+    "; (or Bada_Mobile_0300_base.sf2). Relative paths check music/ then the game folder.\r\n"
+    "path=\r\n"
+    "\r\n"
+    "[quality]\r\n"
+    "; Sample interpolation: linear or cubic (4-point Catmull-Rom, cleaner highs when pitch-shifting)\r\n"
+    "interpolation=cubic\r\n"
+    "; Simultaneous polyphony voice cap (16..512)\r\n"
+    "max_voices=128\r\n"
+    "; Output sample rate: 22050, 44100, or 48000\r\n"
+    "sample_rate=44100\r\n"
+    "\r\n"
+    "[loudness]\r\n"
+    "; Per-track RMS loudness normalization targeting target_db (-30..-10 dBFS)\r\n"
+    "auto_level=1\r\n"
+    "target_db=-17.0\r\n"
+    "; Manual output gain offset in dB (-36..24), added after auto-leveling & playlist.xml gain\r\n"
+    "gain_db=0.0\r\n"
+    "; Soft-knee tanh peak limiter (prevents clipping on dense chords)\r\n"
+    "limiter=1\r\n"
+    "; 20 Hz DC-blocking high-pass filter\r\n"
+    "dc_blocker=1\r\n"
+    "\r\n"
+    "[modulation]\r\n"
+    "; MIDI CC 1 (Modulation Wheel) -> vibrato pitch LFO depth\r\n"
+    "mod_wheel=1\r\n"
+    "; Maximum added vibrato depth in cents at CC 1 = 127 (0..200)\r\n"
+    "mod_wheel_cents=50.0\r\n"
+    "\r\n"
+    "[reverb]\r\n"
+    "; Stereo Freeverb spatial ambience (0.0 disables, 0.0..1.0)\r\n"
+    "level=0.18\r\n"
+    "room=0.55\r\n"
+    "damp=0.55\r\n"
+    "width=0.85\r\n"
+    "\r\n"
+    "[chorus]\r\n"
+    "; Stereo chorus ensemble effect (0.0 disables, 0.0..1.0)\r\n"
+    "level=0.12\r\n"
+    "; LFO rate in Hz (0.05..5.0)\r\n"
+    "speed=0.35\r\n"
+    "; Modulation sweep depth in ms (0.1..10.0)\r\n"
+    "depth_ms=2.0\r\n"
+    "\r\n"
+    "[playback]\r\n"
+    "; Keep decaying notes & reverb/chorus tails ringing smoothly across loop wraps\r\n"
+    "seamless_loop=1\r\n"
+    "; Support RPG Maker CC 111 loop-start marker on repeat\r\n"
+    "cc111_loop=1\r\n";
+
+static bool WriteDefaultMidiIniIfMissing(const std::string& iniPath) {
+    if (iniPath.empty() || FileExistsA(iniPath.c_str())) return false;
+    std::string musicDir = ResolveFullDiskPath("music");
+    if (!musicDir.empty()) {
+        CreateDirectoryA(musicDir.c_str(), nullptr);
+    }
+    FILE* f = nullptr;
+    if (fopen_s(&f, iniPath.c_str(), "wb") != 0 || f == nullptr) return false;
+    const size_t len = std::strlen(kDefaultMidiIniText);
+    const size_t wrote = std::fwrite(kDefaultMidiIniText, 1, len, f);
+    std::fclose(f);
+    return wrote == len;
+}
+
+static MidiTuningConfig ParseMidiIniText(const std::string& text) {
+    MidiTuningConfig cfg{};
+    std::string section;
+    size_t pos = 0;
+    const size_t n = text.size();
+    while (pos < n) {
+        size_t eol = text.find('\n', pos);
+        if (eol == std::string::npos) eol = n;
+        std::string line = TrimIniAscii(text.substr(pos, eol - pos));
+        pos = (eol < n) ? (eol + 1) : n;
+
+        if (line.empty() || line[0] == ';' || line[0] == '#') continue;
+        if (line[0] == '[') {
+            size_t close = line.find(']');
+            if (close != std::string::npos) {
+                section = ToLowerIniAscii(TrimIniAscii(line.substr(1, close - 1)));
+            }
+            continue;
+        }
+        size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = ToLowerIniAscii(TrimIniAscii(line.substr(0, eq)));
+        std::string val = TrimIniAscii(line.substr(eq + 1));
+
+        if (section == "soundfont") {
+            if (key == "path" || key == "file" || key == "soundfont") {
+                cfg.soundFontPath = val;
+            }
+        } else if (section == "quality") {
+            if (key == "interpolation" || key == "interp") {
+                std::string lv = ToLowerIniAscii(val);
+                if (lv == "linear" || lv == "0") cfg.cubicInterp = false;
+                else if (lv == "cubic" || lv == "1") cfg.cubicInterp = true;
+            } else if (key == "max_voices") {
+                cfg.maxVoices = ParseIniInt(val, 16, 512, cfg.maxVoices);
+            } else if (key == "sample_rate") {
+                int sr = ParseIniInt(val, 22050, 48000, static_cast<int>(cfg.sampleRate));
+                if (sr == 22050 || sr == 44100 || sr == 48000) {
+                    cfg.sampleRate = static_cast<uint32_t>(sr);
+                } else {
+                    cfg.sampleRate = 44100u;
+                }
+            }
+        } else if (section == "loudness") {
+            if (key == "auto_level") {
+                cfg.autoLevel = ParseIniBool(val, cfg.autoLevel);
+            } else if (key == "target_db") {
+                cfg.targetDb = ParseIniFloat(val, -30.0f, -10.0f, cfg.targetDb);
+            } else if (key == "gain_db" || key == "gain") {
+                cfg.gainDb = ParseIniFloat(val, -36.0f, 24.0f, cfg.gainDb);
+            } else if (key == "limiter") {
+                cfg.limiter = ParseIniBool(val, cfg.limiter);
+            } else if (key == "dc_blocker") {
+                cfg.dcBlocker = ParseIniBool(val, cfg.dcBlocker);
+            }
+        } else if (section == "modulation") {
+            if (key == "mod_wheel") {
+                cfg.modWheel = ParseIniBool(val, cfg.modWheel);
+            } else if (key == "mod_wheel_cents") {
+                cfg.modWheelCents = ParseIniFloat(val, 0.0f, 200.0f, cfg.modWheelCents);
+            }
+        } else if (section == "reverb") {
+            if (key == "level") cfg.reverbLevel = ParseIniFloat(val, 0.0f, 1.0f, cfg.reverbLevel);
+            else if (key == "room") cfg.reverbRoom = ParseIniFloat(val, 0.0f, 1.0f, cfg.reverbRoom);
+            else if (key == "damp") cfg.reverbDamp = ParseIniFloat(val, 0.0f, 1.0f, cfg.reverbDamp);
+            else if (key == "width") cfg.reverbWidth = ParseIniFloat(val, 0.0f, 1.0f, cfg.reverbWidth);
+        } else if (section == "chorus") {
+            if (key == "level") cfg.chorusLevel = ParseIniFloat(val, 0.0f, 1.0f, cfg.chorusLevel);
+            else if (key == "speed") cfg.chorusSpeed = ParseIniFloat(val, 0.05f, 5.0f, cfg.chorusSpeed);
+            else if (key == "depth_ms") cfg.chorusDepthMs = ParseIniFloat(val, 0.1f, 10.0f, cfg.chorusDepthMs);
+        } else if (section == "playback") {
+            if (key == "seamless_loop") cfg.seamlessLoop = ParseIniBool(val, cfg.seamlessLoop);
+            else if (key == "cc111_loop") cfg.cc111Loop = ParseIniBool(val, cfg.cc111Loop);
+        }
+    }
+    return cfg;
+}
+
+static void EnsureMidiConfigLoadedLocked() {
+    std::string iniPath = GetMidiIniPath();
+    if (iniPath.empty()) {
+        if (!g_midiCfgLoaded) {
+            g_midiCfg = MidiTuningConfig{};
+            g_midiCfgLoaded = true;
+            ++g_midiCfgRevision;
+        }
+        return;
+    }
+
+    WIN32_FILE_ATTRIBUTE_DATA fad{};
+    if (!GetFileAttributesExA(iniPath.c_str(), GetFileExInfoStandard, &fad) ||
+        (fad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+        WriteDefaultMidiIniIfMissing(iniPath);
+        g_midiCfg = MidiTuningConfig{};
+        g_midiCfgLoaded = true;
+        if (GetFileAttributesExA(iniPath.c_str(), GetFileExInfoStandard, &fad)) {
+            g_midiIniTime = fad.ftLastWriteTime;
+        }
+        ++g_midiCfgRevision;
+        return;
+    }
+
+    const bool sameTime = g_midiCfgLoaded &&
+        fad.ftLastWriteTime.dwLowDateTime == g_midiIniTime.dwLowDateTime &&
+        fad.ftLastWriteTime.dwHighDateTime == g_midiIniTime.dwHighDateTime;
+    if (sameTime) return;
+
+    FILE* f = nullptr;
+    std::string text;
+    if (fopen_s(&f, iniPath.c_str(), "rb") == 0 && f != nullptr) {
+        if (std::fseek(f, 0, SEEK_END) == 0) {
+            long sz = std::ftell(f);
+            if (sz > 0 && sz <= 1024 * 1024) {
+                std::rewind(f);
+                text.resize(static_cast<size_t>(sz));
+                size_t got = std::fread(&text[0], 1, static_cast<size_t>(sz), f);
+                text.resize(got);
+            }
+        }
+        std::fclose(f);
+    }
+
+    g_midiCfg = ParseMidiIniText(text);
+    g_midiIniTime = fad.ftLastWriteTime;
+    g_midiCfgLoaded = true;
+    ++g_midiCfgRevision;
+}
+
+static std::mutex g_autoGainMutex;
+static std::unordered_map<std::string, double> g_midiRawRmsCache;
+
+static double MeasureMidiRawRmsDb(const char* midiPath, const char* sfPath, const tml_message* head) {
+    if (head == nullptr || sfPath == nullptr || sfPath[0] == '\0') return -999.0;
 
     std::string cacheKey = BuildFileTimestampTag(midiPath) + "||" + BuildFileTimestampTag(sfPath);
     if (!cacheKey.empty()) {
         std::lock_guard<std::mutex> lock(g_autoGainMutex);
-        auto it = g_midiAutoGainCache.find(cacheKey);
-        if (it != g_midiAutoGainCache.end()) {
+        auto it = g_midiRawRmsCache.find(cacheKey);
+        if (it != g_midiRawRmsCache.end()) {
             return it->second;
         }
     }
 
     tsf* probe = AcquireSoundFontCopy(sfPath);
-    if (probe == nullptr) return 0.0f;
+    if (probe == nullptr) return -999.0;
 
     constexpr uint32_t kProbeRate = 11025u;
     constexpr uint32_t kMaxProbeFrames = 30u * kProbeRate;
-    constexpr float kTargetMidiRmsDb = -17.0f;
 
     tsf_set_output(probe, TSF_STEREO_INTERLEAVED, kProbeRate, 0.0f);
     tsf_set_max_voices(probe, 128);
+    tsf_set_cubic_interpolation(probe, 0);
+    tsf_set_modwheel_depth(probe, 0.0f);
     tsf_channel_set_presetnumber(probe, 9, 0, 1);
 
     const tml_message* cur = head;
@@ -394,18 +650,220 @@ static float ComputeMidiAutoGainDb(const char* midiPath, const char* sfPath, con
         ? (activeSumSq / static_cast<double>(activeSamples))
         : ((totalSamples > 0) ? (totalSumSq / static_cast<double>(totalSamples)) : 0.0);
 
-    float autoGainDb = 0.0f;
-    if (meanSq > 1e-9) {
-        const double rmsDb = 10.0 * std::log10(meanSq);
-        autoGainDb = (std::max)(-15.0f, (std::min)(15.0f, kTargetMidiRmsDb - static_cast<float>(rmsDb)));
-    }
-
+    const double rmsDb = (meanSq > 1e-9) ? (10.0 * std::log10(meanSq)) : -999.0;
     if (!cacheKey.empty()) {
         std::lock_guard<std::mutex> lock(g_autoGainMutex);
-        g_midiAutoGainCache[cacheKey] = autoGainDb;
+        g_midiRawRmsCache[cacheKey] = rmsDb;
     }
-    return autoGainDb;
+    return rmsDb;
 }
+
+// ------------------------------------------------------------------
+// MIDI DSP Effects: DC Blocker, Stereo Chorus, Freeverb, Soft Limiter
+// ------------------------------------------------------------------
+class StereoDcBlocker {
+public:
+    void init(uint32_t sampleRate) {
+        const double sr = (sampleRate > 0u) ? static_cast<double>(sampleRate) : 44100.0;
+        m_r = static_cast<float>(std::exp(-6.283185307179586 * 20.0 / sr));
+        reset();
+    }
+    void reset() {
+        m_xPrev[0] = m_xPrev[1] = 0.0f;
+        m_yPrev[0] = m_yPrev[1] = 0.0f;
+    }
+    void process(float* interleaved, uint32_t frames) {
+        for (uint32_t f = 0; f < frames; ++f) {
+            for (int c = 0; c < 2; ++c) {
+                const float x = interleaved[f * 2u + c];
+                float y = x - m_xPrev[c] + m_r * m_yPrev[c];
+                if (std::fabs(y) < 1e-18f) y = 0.0f;
+                m_xPrev[c] = x;
+                m_yPrev[c] = y;
+                interleaved[f * 2u + c] = y;
+            }
+        }
+    }
+private:
+    float m_r = 0.997f;
+    float m_xPrev[2]{};
+    float m_yPrev[2]{};
+};
+
+class SimpleStereoChorus {
+public:
+    void init(uint32_t sampleRate, float level, float speedHz, float depthMs) {
+        m_level = level;
+        if (m_level <= 0.0001f) {
+            m_buf[0].clear();
+            m_buf[1].clear();
+            return;
+        }
+        const float sr = (sampleRate > 0u) ? static_cast<float>(sampleRate) : 44100.0f;
+        m_baseDelay = 0.012f * sr;
+        m_depthSamp = (depthMs * 0.001f) * sr;
+        m_phaseInc = (6.283185307179586f * speedHz) / sr;
+        const size_t cap = static_cast<size_t>(std::ceil(m_baseDelay + m_depthSamp)) + 64u;
+        m_buf[0].assign(cap, 0.0f);
+        m_buf[1].assign(cap, 0.0f);
+        m_writePos = 0;
+        m_phase = 0.0f;
+    }
+    void reset() {
+        std::fill(m_buf[0].begin(), m_buf[0].end(), 0.0f);
+        std::fill(m_buf[1].begin(), m_buf[1].end(), 0.0f);
+        m_writePos = 0;
+        m_phase = 0.0f;
+    }
+    void process(float* interleaved, uint32_t frames) {
+        if (m_level <= 0.0001f || m_buf[0].empty()) return;
+        const size_t cap = m_buf[0].size();
+        const float wet = 0.5f * m_level;
+        for (uint32_t f = 0; f < frames; ++f) {
+            const float lfoL = std::sin(m_phase);
+            const float lfoR = std::cos(m_phase); // 90 deg quadrature for stereo width
+            m_phase += m_phaseInc;
+            if (m_phase >= 6.283185307179586f) m_phase -= 6.283185307179586f;
+
+            const float delays[2] = {
+                m_baseDelay + 0.5f * (lfoL + 1.0f) * m_depthSamp,
+                m_baseDelay + 0.5f * (lfoR + 1.0f) * m_depthSamp
+            };
+
+            for (int c = 0; c < 2; ++c) {
+                const float in = interleaved[f * 2u + c];
+                m_buf[c][m_writePos] = in;
+
+                float rpos = static_cast<float>(m_writePos) - delays[c];
+                while (rpos < 0.0f) rpos += static_cast<float>(cap);
+                const size_t i0 = static_cast<size_t>(rpos) % cap;
+                const size_t i1 = (i0 + 1u) % cap;
+                const float frac = rpos - std::floor(rpos);
+                const float delayed = m_buf[c][i0] * (1.0f - frac) + m_buf[c][i1] * frac;
+                interleaved[f * 2u + c] = in + wet * delayed;
+            }
+            m_writePos = (m_writePos + 1u) % cap;
+        }
+    }
+private:
+    float m_level = 0.0f;
+    float m_baseDelay = 529.0f;
+    float m_depthSamp = 88.0f;
+    float m_phaseInc = 0.0f;
+    float m_phase = 0.0f;
+    size_t m_writePos = 0;
+    std::vector<float> m_buf[2];
+};
+
+class SimpleFreeverb {
+public:
+    void init(uint32_t sampleRate, float level, float room, float damp, float width) {
+        m_level = level;
+        if (m_level <= 0.0001f) {
+            for (int c = 0; c < 2; ++c) {
+                for (int i = 0; i < kNumCombs; ++i) m_comb[c][i].buf.clear();
+                for (int i = 0; i < kNumAllpass; ++i) m_ap[c][i].buf.clear();
+            }
+            return;
+        }
+        static constexpr int kCombTunings[kNumCombs] = {1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617};
+        static constexpr int kApTunings[kNumAllpass] = {556, 441, 341, 225};
+        static constexpr int kSpread = 23;
+        const double scale = ((sampleRate > 0u) ? static_cast<double>(sampleRate) : 44100.0) / 44100.0;
+
+        for (int c = 0; c < 2; ++c) {
+            const int sp = (c == 1) ? kSpread : 0;
+            for (int i = 0; i < kNumCombs; ++i) {
+                const size_t len = static_cast<size_t>((std::max)(1L, std::lround((kCombTunings[i] + sp) * scale)));
+                m_comb[c][i].buf.assign(len, 0.0f);
+                m_comb[c][i].idx = 0;
+                m_comb[c][i].store = 0.0f;
+            }
+            for (int i = 0; i < kNumAllpass; ++i) {
+                const size_t len = static_cast<size_t>((std::max)(1L, std::lround((kApTunings[i] + sp) * scale)));
+                m_ap[c][i].buf.assign(len, 0.0f);
+                m_ap[c][i].idx = 0;
+            }
+        }
+        m_feedback = 0.70f + 0.28f * room;
+        m_damp1 = 0.40f * damp;
+        m_damp2 = 1.0f - m_damp1;
+        m_wet1 = level * (0.5f + 0.5f * width);
+        m_wet2 = level * (0.5f - 0.5f * width);
+    }
+
+    void reset() {
+        for (int c = 0; c < 2; ++c) {
+            for (int i = 0; i < kNumCombs; ++i) {
+                std::fill(m_comb[c][i].buf.begin(), m_comb[c][i].buf.end(), 0.0f);
+                m_comb[c][i].idx = 0;
+                m_comb[c][i].store = 0.0f;
+            }
+            for (int i = 0; i < kNumAllpass; ++i) {
+                std::fill(m_ap[c][i].buf.begin(), m_ap[c][i].buf.end(), 0.0f);
+                m_ap[c][i].idx = 0;
+            }
+        }
+    }
+
+    void process(float* interleaved, uint32_t frames) {
+        if (m_level <= 0.0001f || m_comb[0][0].buf.empty()) return;
+        constexpr float kInputGain = 0.015f;
+        for (uint32_t f = 0; f < frames; ++f) {
+            const float dryL = interleaved[f * 2u + 0u];
+            const float dryR = interleaved[f * 2u + 1u];
+            const float inMono = (dryL + dryR) * kInputGain;
+
+            float acc[2] = {0.0f, 0.0f};
+            for (int c = 0; c < 2; ++c) {
+                float out = 0.0f;
+                for (int i = 0; i < kNumCombs; ++i) {
+                    Comb& cb = m_comb[c][i];
+                    float bufOut = cb.buf[cb.idx];
+                    if (std::fabs(bufOut) < 1e-18f) bufOut = 0.0f;
+                    out += bufOut;
+                    cb.store = bufOut * m_damp2 + cb.store * m_damp1;
+                    if (std::fabs(cb.store) < 1e-18f) cb.store = 0.0f;
+                    cb.buf[cb.idx] = inMono + cb.store * m_feedback;
+                    if (++cb.idx >= cb.buf.size()) cb.idx = 0;
+                }
+                for (int i = 0; i < kNumAllpass; ++i) {
+                    Allpass& ap = m_ap[c][i];
+                    float bufOut = ap.buf[ap.idx];
+                    if (std::fabs(bufOut) < 1e-18f) bufOut = 0.0f;
+                    const float feedOut = -out + bufOut;
+                    ap.buf[ap.idx] = out + bufOut * 0.5f;
+                    if (++ap.idx >= ap.buf.size()) ap.idx = 0;
+                    out = feedOut;
+                }
+                acc[c] = out;
+            }
+            interleaved[f * 2u + 0u] = dryL + m_wet1 * acc[0] + m_wet2 * acc[1];
+            interleaved[f * 2u + 1u] = dryR + m_wet1 * acc[1] + m_wet2 * acc[0];
+        }
+    }
+
+private:
+    static constexpr int kNumCombs = 8;
+    static constexpr int kNumAllpass = 4;
+    struct Comb {
+        std::vector<float> buf;
+        size_t idx = 0;
+        float store = 0.0f;
+    };
+    struct Allpass {
+        std::vector<float> buf;
+        size_t idx = 0;
+    };
+    Comb m_comb[2][kNumCombs]{};
+    Allpass m_ap[2][kNumAllpass]{};
+    float m_level = 0.0f;
+    float m_feedback = 0.84f;
+    float m_damp1 = 0.22f;
+    float m_damp2 = 0.78f;
+    float m_wet1 = 0.0f;
+    float m_wet2 = 0.0f;
+};
 
 static inline float SoftLimitMidiSample(float x) {
     constexpr float kKnee = 0.85f;
@@ -418,11 +876,29 @@ static inline float SoftLimitMidiSample(float x) {
 
 class MidiDecoder final : public EdgeAudioDecoder {
 public:
-    MidiDecoder(tsf* synth, tml_message* head, float totalGainDb)
-        : m_synth(synth), m_head(head), m_cur(head), m_totalGainDb(totalGainDb) {
-        tsf_set_output(m_synth, TSF_STEREO_INTERLEAVED, kSampleRate, m_totalGainDb);
-        tsf_set_max_voices(m_synth, 128);
+    MidiDecoder(tsf* synth, tml_message* head, const MidiTuningConfig& cfg, float totalGainDb)
+        : m_synth(synth), m_head(head), m_cur(head), m_cfg(cfg), m_totalGainDb(totalGainDb) {
+        tsf_set_output(m_synth, TSF_STEREO_INTERLEAVED, static_cast<int>(m_cfg.sampleRate), m_totalGainDb);
+        tsf_set_max_voices(m_synth, m_cfg.maxVoices);
+        tsf_set_cubic_interpolation(m_synth, m_cfg.cubicInterp ? 1 : 0);
+        tsf_set_modwheel_depth(m_synth, m_cfg.modWheel ? m_cfg.modWheelCents : 0.0f);
         tsf_channel_set_presetnumber(m_synth, 9, 0, 1);
+
+        if (m_cfg.dcBlocker) m_dcBlocker.init(m_cfg.sampleRate);
+        m_chorus.init(m_cfg.sampleRate, m_cfg.chorusLevel, m_cfg.chorusSpeed, m_cfg.chorusDepthMs);
+        m_reverb.init(m_cfg.sampleRate, m_cfg.reverbLevel, m_cfg.reverbRoom, m_cfg.reverbDamp, m_cfg.reverbWidth);
+
+        if (m_cfg.cc111Loop) {
+            for (const tml_message* m = m_head; m != nullptr; m = m->next) {
+                if (m->type == TML_CONTROL_CHANGE && static_cast<unsigned char>(m->control) == 111u) {
+                    if (m->next != nullptr) {
+                        m_loopStartNode = m->next;
+                        m_loopStartTimeMs = static_cast<double>(m->time);
+                    }
+                    break;
+                }
+            }
+        }
     }
 
     ~MidiDecoder() override {
@@ -431,28 +907,40 @@ public:
     }
 
     uint32_t getChannelCount() override { return 2u; }
-    uint32_t getSampleRate() override { return kSampleRate; }
+    uint32_t getSampleRate() override { return m_cfg.sampleRate; }
 
 protected:
     uint32_t sourceChannels() const override { return 2u; }
 
     uint32_t decodeFloatFrames(float* dstInterleaved, uint32_t frames) override {
         if (m_synth == nullptr || m_head == nullptr) return 0;
+        const double sr = static_cast<double>(m_cfg.sampleRate);
         uint32_t rendered = 0;
         while (rendered < frames) {
             if (m_cur == nullptr) {
                 break;
             }
             const uint32_t chunk = (std::min)(frames - rendered, 64u);
-            m_curTimeMs += (static_cast<double>(chunk) * 1000.0) / static_cast<double>(kSampleRate);
+            m_curTimeMs += (static_cast<double>(chunk) * 1000.0) / sr;
             while (m_cur != nullptr && static_cast<double>(m_cur->time) <= m_curTimeMs) {
                 DispatchMidiMessage(m_synth, m_cur);
                 m_cur = m_cur->next;
             }
-            tsf_render_float(m_synth, dstInterleaved + static_cast<size_t>(rendered) * 2u, static_cast<int>(chunk), 0);
             float* outChunk = dstInterleaved + static_cast<size_t>(rendered) * 2u;
-            for (uint32_t i = 0; i < chunk * 2u; ++i) {
-                outChunk[i] = SoftLimitMidiSample(outChunk[i]);
+            tsf_render_float(m_synth, outChunk, static_cast<int>(chunk), 0);
+            if (m_cfg.dcBlocker) {
+                m_dcBlocker.process(outChunk, chunk);
+            }
+            if (m_cfg.chorusLevel > 0.0001f) {
+                m_chorus.process(outChunk, chunk);
+            }
+            if (m_cfg.reverbLevel > 0.0001f) {
+                m_reverb.process(outChunk, chunk);
+            }
+            if (m_cfg.limiter) {
+                for (uint32_t i = 0; i < chunk * 2u; ++i) {
+                    outChunk[i] = SoftLimitMidiSample(outChunk[i]);
+                }
             }
             rendered += chunk;
         }
@@ -461,21 +949,44 @@ protected:
 
     bool rewindStream() override {
         if (m_synth == nullptr || m_head == nullptr) return false;
-        tsf_reset(m_synth);
-        tsf_channel_set_presetnumber(m_synth, 9, 0, 1);
-        m_cur = m_head;
-        m_curTimeMs = 0.0;
+        if (m_cfg.seamlessLoop) {
+            for (int ch = 0; ch < 16; ++ch) {
+                tsf_channel_note_off_all(m_synth, ch);
+                tsf_channel_set_sustain(m_synth, ch, 0);
+                tsf_channel_midi_control(m_synth, ch, 1, 0);
+                tsf_channel_set_pitchwheel(m_synth, ch, 8192);
+            }
+            if (m_loopStartNode != nullptr) {
+                m_cur = m_loopStartNode;
+                m_curTimeMs = m_loopStartTimeMs;
+            } else {
+                m_cur = m_head;
+                m_curTimeMs = 0.0;
+            }
+        } else {
+            tsf_reset(m_synth);
+            tsf_channel_set_presetnumber(m_synth, 9, 0, 1);
+            m_dcBlocker.reset();
+            m_chorus.reset();
+            m_reverb.reset();
+            m_cur = m_head;
+            m_curTimeMs = 0.0;
+        }
         return true;
     }
 
 private:
-    static constexpr uint32_t kSampleRate = 44100u;
-
     tsf* m_synth = nullptr;
     tml_message* m_head = nullptr;
-    tml_message* m_cur = nullptr;
+    const tml_message* m_cur = nullptr;
+    const tml_message* m_loopStartNode = nullptr;
+    double m_loopStartTimeMs = 0.0;
     double m_curTimeMs = 0.0;
+    MidiTuningConfig m_cfg;
     float m_totalGainDb = 0.0f;
+    StereoDcBlocker m_dcBlocker;
+    SimpleStereoChorus m_chorus;
+    SimpleFreeverb m_reverb;
 };
 
 // ------------------------------------------------------------------
@@ -831,6 +1342,23 @@ static void __declspec(naked) hk_openMusicDecoder() {
 
 namespace edgemod {
 
+void EnsureMidiConfigReady() {
+    std::lock_guard<std::mutex> lock(g_midiCfgMutex);
+    EnsureMidiConfigLoadedLocked();
+}
+
+MidiTuningConfig GetActiveMidiTuningConfig() {
+    std::lock_guard<std::mutex> lock(g_midiCfgMutex);
+    EnsureMidiConfigLoadedLocked();
+    return g_midiCfg;
+}
+
+uint64_t GetMidiConfigRevision() {
+    std::lock_guard<std::mutex> lock(g_midiCfgMutex);
+    EnsureMidiConfigLoadedLocked();
+    return g_midiCfgRevision;
+}
+
 bool IsSupportedMusicExtension(const char* extWithDot) {
     if (extWithDot == nullptr || extWithDot[0] != '.') return false;
     static const char* const kExts[] = {
@@ -847,15 +1375,24 @@ void* CreateCustomMusicDecoder(const char* fullPath, const char* soundFontPath, 
     std::string p(fullPath);
 
     if (EndsWithNoCase(p, ".mid") || EndsWithNoCase(p, ".midi")) {
+        const MidiTuningConfig cfg = GetActiveMidiTuningConfig();
         tml_message* head = tml_load_filename(fullPath);
         if (head == nullptr) return nullptr;
-        const float autoGainDb = ComputeMidiAutoGainDb(fullPath, soundFontPath, head);
+
+        float autoGainDb = 0.0f;
+        if (cfg.autoLevel) {
+            const double rawRmsDb = MeasureMidiRawRmsDb(fullPath, soundFontPath, head);
+            if (rawRmsDb > -900.0) {
+                autoGainDb = (std::max)(-15.0f, (std::min)(15.0f, cfg.targetDb - static_cast<float>(rawRmsDb)));
+            }
+        }
+
         tsf* synth = AcquireSoundFontCopy(soundFontPath);
         if (synth == nullptr) {
             tml_free(head);
             return nullptr;
         }
-        return new MidiDecoder(synth, head, autoGainDb + soundFontGainDb);
+        return new MidiDecoder(synth, head, cfg, autoGainDb + cfg.gainDb + soundFontGainDb);
     }
     if (EndsWithNoCase(p, ".mp3")) {
         drmp3 mp3{};

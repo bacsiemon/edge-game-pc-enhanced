@@ -164,6 +164,12 @@ TSFDEF void tsf_set_volume(tsf* f, float global_gain);
 //   (tsf_set_max_voices returns 0 if allocation failed, otherwise 1)
 TSFDEF int tsf_set_max_voices(tsf* f, int max_voices);
 
+// Enable or disable 4-point cubic sample interpolation (default 0 = linear)
+TSFDEF void tsf_set_cubic_interpolation(tsf* f, int enable);
+
+// Set maximum vibrato pitch depth in cents added by MIDI CC1 Modulation Wheel
+TSFDEF void tsf_set_modwheel_depth(tsf* f, float max_cents);
+
 // Start playing a note
 //   preset_index: preset index >= 0 and < tsf_get_presetcount()
 //   key: note value between 0 and 127 (60 being middle C)
@@ -343,6 +349,8 @@ struct tsf
 	float outSampleRate;
 	float globalGainDB;
 	int* refCount;
+	int useCubicInterp;
+	float modWheelMaxCents;
 };
 
 #ifndef TSF_NO_STDIO
@@ -454,7 +462,7 @@ struct tsf_voice
 	struct tsf_region* region;
 	double pitchInputTimecents, pitchOutputFactor;
 	double sourceSamplePosition;
-	float  noteGainDB, panFactorLeft, panFactorRight;
+	float  noteGainDB, panFactorLeft, panFactorRight, modWheelDepthCents;
 	unsigned int playIndex, loopStart, loopEnd;
 	struct tsf_voice_envelope ampenv, modenv;
 	struct tsf_voice_lowpass lowpass;
@@ -463,7 +471,7 @@ struct tsf_voice
 
 struct tsf_channel
 {
-	unsigned short presetIndex, bank, pitchWheel, midiPan, midiVolume, midiExpression, midiRPN, midiData : 14, sustain : 1;
+	unsigned short presetIndex, bank, pitchWheel, midiPan, midiVolume, midiExpression, midiModWheel, midiRPN, midiData : 14, sustain : 1;
 	float panOffset, gainDB, pitchRange, tuning;
 };
 
@@ -1217,19 +1225,46 @@ static void tsf_voice_calcpitchratio(struct tsf_voice* v, float pitchShift, floa
 	v->pitchOutputFactor = v->region->sample_rate / (tsf_timecents2Secsd(v->region->pitch_keycenter * 100.0) * outSampleRate);
 }
 
+static float tsf_interp_cubic(
+	const float* input, unsigned int pos, float alpha,
+	unsigned int sampleStart, unsigned int sampleEnd,
+	TSF_BOOL isLooping, unsigned int loopStart, unsigned int loopEnd
+)
+{
+	unsigned int p0, p1 = pos, p2, p3;
+	float y0, y1, y2, y3, c0, c1, c2, c3;
+	if (p1 < sampleStart) p1 = sampleStart;
+	if (p1 >= sampleEnd) p1 = (sampleEnd > 0 ? sampleEnd - 1 : 0);
+	p0 = (isLooping && p1 <= loopStart) ? loopEnd : (p1 > sampleStart ? p1 - 1 : p1);
+	p2 = (isLooping && p1 >= loopEnd) ? loopStart : (p1 + 1 < sampleEnd ? p1 + 1 : p1);
+	p3 = (isLooping && p2 >= loopEnd) ? loopStart : (p2 + 1 < sampleEnd ? p2 + 1 : p2);
+	if (p0 >= sampleEnd) p0 = p1;
+	if (p2 >= sampleEnd) p2 = p1;
+	if (p3 >= sampleEnd) p3 = p2;
+	y0 = input[p0]; y1 = input[p1]; y2 = input[p2]; y3 = input[p3];
+	c0 = y1;
+	c1 = 0.5f * (y2 - y0);
+	c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
+	c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+	return ((c3 * alpha + c2) * alpha + c1) * alpha + c0;
+}
+
 static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, int numSamples)
 {
 	struct tsf_region* region = v->region;
 	float* input = f->fontSamples;
 	float* outL = outputBuffer;
 	float* outR = (f->outputmode == TSF_STEREO_UNWEAVED ? outL + numSamples : TSF_NULL);
+	int useCubic = f->useCubicInterp;
 
 	// Cache some values, to give them at least some chance of ending up in registers.
+	float effVibLfoToPitch = (float)region->vibLfoToPitch + v->modWheelDepthCents;
 	TSF_BOOL updateModEnv = (region->modEnvToPitch || region->modEnvToFilterFc);
 	TSF_BOOL updateModLFO = (v->modlfo.delta && (region->modLfoToPitch || region->modLfoToFilterFc || region->modLfoToVolume));
-	TSF_BOOL updateVibLFO = (v->viblfo.delta && (region->vibLfoToPitch));
+	TSF_BOOL updateVibLFO = (v->viblfo.delta && (effVibLfoToPitch != 0.0f));
 	TSF_BOOL isLooping    = (v->loopStart < v->loopEnd);
 	unsigned int tmpLoopStart = v->loopStart, tmpLoopEnd = v->loopEnd;
+	unsigned int tmpSampleStart = region->offset, tmpSampleEnd = region->end;
 	double tmpSampleEndDbl = (double)region->end, tmpLoopEndDbl = (double)tmpLoopEnd + 1.0;
 	double tmpSourceSamplePosition = v->sourceSamplePosition;
 	struct tsf_voice_lowpass tmpLowpass = v->lowpass;
@@ -1237,7 +1272,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 	TSF_BOOL dynamicLowpass = (region->modLfoToFilterFc || region->modEnvToFilterFc);
 	float tmpSampleRate = f->outSampleRate, tmpInitialFilterFc, tmpModLfoToFilterFc, tmpModEnvToFilterFc;
 
-	TSF_BOOL dynamicPitchRatio = (region->modLfoToPitch || region->modEnvToPitch || region->vibLfoToPitch);
+	TSF_BOOL dynamicPitchRatio = (region->modLfoToPitch || region->modEnvToPitch || effVibLfoToPitch != 0.0f);
 	double pitchRatio;
 	float tmpModLfoToPitch, tmpVibLfoToPitch, tmpModEnvToPitch;
 
@@ -1247,7 +1282,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 	if (dynamicLowpass) tmpInitialFilterFc = (float)region->initialFilterFc, tmpModLfoToFilterFc = (float)region->modLfoToFilterFc, tmpModEnvToFilterFc = (float)region->modEnvToFilterFc;
 	else tmpInitialFilterFc = 0, tmpModLfoToFilterFc = 0, tmpModEnvToFilterFc = 0;
 
-	if (dynamicPitchRatio) pitchRatio = 0, tmpModLfoToPitch = (float)region->modLfoToPitch, tmpVibLfoToPitch = (float)region->vibLfoToPitch, tmpModEnvToPitch = (float)region->modEnvToPitch;
+	if (dynamicPitchRatio) pitchRatio = 0, tmpModLfoToPitch = (float)region->modLfoToPitch, tmpVibLfoToPitch = effVibLfoToPitch, tmpModEnvToPitch = (float)region->modEnvToPitch;
 	else pitchRatio = tsf_timecents2Secsd(v->pitchInputTimecents) * v->pitchOutputFactor, tmpModLfoToPitch = 0, tmpVibLfoToPitch = 0, tmpModEnvToPitch = 0;
 
 	if (dynamicGain) tmpModLfoToVolume = (float)region->modLfoToVolume * 0.1f;
@@ -1290,9 +1325,10 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 				while (blockSamples-- && tmpSourceSamplePosition < tmpSampleEndDbl)
 				{
 					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
-
-					// Simple linear interpolation.
-					float alpha = (float)(tmpSourceSamplePosition - pos), val = (input[pos] * (1.0f - alpha) + input[nextPos] * alpha);
+					float alpha = (float)(tmpSourceSamplePosition - pos);
+					float val = useCubic
+						? tsf_interp_cubic(input, pos, alpha, tmpSampleStart, tmpSampleEnd, isLooping, tmpLoopStart, tmpLoopEnd)
+						: (input[pos] * (1.0f - alpha) + input[nextPos] * alpha);
 
 					// Low-pass filter.
 					if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
@@ -1311,9 +1347,10 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 				while (blockSamples-- && tmpSourceSamplePosition < tmpSampleEndDbl)
 				{
 					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
-
-					// Simple linear interpolation.
-					float alpha = (float)(tmpSourceSamplePosition - pos), val = (input[pos] * (1.0f - alpha) + input[nextPos] * alpha);
+					float alpha = (float)(tmpSourceSamplePosition - pos);
+					float val = useCubic
+						? tsf_interp_cubic(input, pos, alpha, tmpSampleStart, tmpSampleEnd, isLooping, tmpLoopStart, tmpLoopEnd)
+						: (input[pos] * (1.0f - alpha) + input[nextPos] * alpha);
 
 					// Low-pass filter.
 					if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
@@ -1331,9 +1368,10 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 				while (blockSamples-- && tmpSourceSamplePosition < tmpSampleEndDbl)
 				{
 					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
-
-					// Simple linear interpolation.
-					float alpha = (float)(tmpSourceSamplePosition - pos), val = (input[pos] * (1.0f - alpha) + input[nextPos] * alpha);
+					float alpha = (float)(tmpSourceSamplePosition - pos);
+					float val = useCubic
+						? tsf_interp_cubic(input, pos, alpha, tmpSampleStart, tmpSampleEnd, isLooping, tmpLoopStart, tmpLoopEnd)
+						: (input[pos] * (1.0f - alpha) + input[nextPos] * alpha);
 
 					// Low-pass filter.
 					if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
@@ -1550,6 +1588,16 @@ TSFDEF int tsf_set_max_voices(tsf* f, int max_voices)
 	return 1;
 }
 
+TSFDEF void tsf_set_cubic_interpolation(tsf* f, int enable)
+{
+	if (f) f->useCubicInterp = (enable ? 1 : 0);
+}
+
+TSFDEF void tsf_set_modwheel_depth(tsf* f, float max_cents)
+{
+	if (f) f->modWheelMaxCents = (max_cents >= 0.0f ? max_cents : 0.0f);
+}
+
 TSFDEF int tsf_note_on(tsf* f, int preset_index, int key, float vel)
 {
 	short midiVelocity = (short)(vel * 127);
@@ -1624,6 +1672,7 @@ TSFDEF int tsf_note_on(tsf* f, int preset_index, int key, float vel)
 		}
 		else
 		{
+			voice->modWheelDepthCents = 0.0f;
 			tsf_voice_calcpitchratio(voice, 0, f->outSampleRate);
 			// The SFZ spec is silent about the pan curve, but a 3dB pan law seems common. This sqrt() curve matches what Dimension LE does; Alchemy Free seems closer to sin(adjustedPan * pi/2).
 			voice->panFactorLeft  = TSF_SQRTF(0.5f - region->pan);
@@ -1750,6 +1799,7 @@ static void tsf_channel_setup_voice(tsf* f, struct tsf_voice* v)
 	float newpan = v->region->pan + c->panOffset;
 	v->playingChannel = f->channels->activeChannel;
 	v->noteGainDB += c->gainDB;
+	v->modWheelDepthCents = (c->midiModWheel / 16383.0f) * f->modWheelMaxCents;
 	tsf_voice_calcpitchratio(v, (c->pitchWheel == 8192 ? c->tuning : ((c->pitchWheel / 16383.0f * c->pitchRange * 2.0f) - c->pitchRange + c->tuning)), f->outSampleRate);
 	if      (newpan <= -0.5f) { v->panFactorLeft = 1.0f; v->panFactorRight = 0.0f; }
 	else if (newpan >=  0.5f) { v->panFactorLeft = 0.0f; v->panFactorRight = 1.0f; }
@@ -1783,6 +1833,7 @@ static struct tsf_channel* tsf_channel_init(tsf* f, int channel)
 		c->pitchWheel = c->midiPan = 8192;
 		c->midiVolume = 100 << 7;
 		c->midiExpression = 16383;
+		c->midiModWheel = 0;
 		c->midiRPN = 0xFFFF;
 		c->midiData = c->sustain = 0;
 		c->panOffset = 0.0f;
@@ -1989,6 +2040,8 @@ TSFDEF int tsf_channel_midi_control(tsf* f, int channel, int controller, int con
 	if (!c) return 0;
 	switch (controller)
 	{
+		case   1 /*MODWHEEL_MSB*/    : c->midiModWheel   = (unsigned short)((c->midiModWheel   & 0x7F  ) | (control_value << 7)); goto TCMC_SET_MODWHEEL;
+		case  33 /*MODWHEEL_LSB*/    : c->midiModWheel   = (unsigned short)((c->midiModWheel   & 0x3F80) |  control_value);       goto TCMC_SET_MODWHEEL;
 		case   7 /*VOLUME_MSB*/      : c->midiVolume     = (unsigned short)((c->midiVolume     & 0x7F  ) | (control_value << 7)); goto TCMC_SET_VOLUME;
 		case  39 /*VOLUME_LSB*/      : c->midiVolume     = (unsigned short)((c->midiVolume     & 0x3F80) |  control_value);       goto TCMC_SET_VOLUME;
 		case  11 /*EXPRESSION_MSB*/  : c->midiExpression = (unsigned short)((c->midiExpression & 0x7F  ) | (control_value << 7)); goto TCMC_SET_VOLUME;
@@ -2008,6 +2061,7 @@ TSFDEF int tsf_channel_midi_control(tsf* f, int channel, int controller, int con
 		case 123 /*ALL_NOTES_OFF*/   : tsf_channel_note_off_all(f, channel);   return 1;
 		case 121 /*ALL_CTRL_OFF*/    :
 			c->midiExpression = 16383;
+			c->midiModWheel = 0;
 			c->midiPan = 8192;
 			c->bank = 0;
 			c->midiRPN = 0xFFFF;
@@ -2016,7 +2070,16 @@ TSFDEF int tsf_channel_midi_control(tsf* f, int channel, int controller, int con
 			tsf_channel_set_pan(f, channel, 0.5f);
 			tsf_channel_set_pitchrange(f, channel, 2.0f);
 			tsf_channel_set_tuning(f, channel, 0);
-			return 1;
+			goto TCMC_SET_MODWHEEL;
+	}
+	return 1;
+TCMC_SET_MODWHEEL:
+	{
+		struct tsf_voice *v, *vEnd;
+		float mwDepth = (c->midiModWheel / 16383.0f) * f->modWheelMaxCents;
+		for (v = f->voices, vEnd = v + f->voiceNum; v != vEnd; v++)
+			if (v->playingPreset != -1 && v->playingChannel == channel)
+				v->modWheelDepthCents = mwDepth;
 	}
 	return 1;
 TCMC_SET_VOLUME:

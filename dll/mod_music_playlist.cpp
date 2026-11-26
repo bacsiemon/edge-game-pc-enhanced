@@ -204,6 +204,7 @@ static std::string                               g_currentLevelName;
 static int                                       g_currentLevelFileMusicId = -1;
 static std::string                               g_lastPlayedPath;
 static std::string                               g_lastPlayedSoundFont;
+static uint64_t                                  g_lastPlayedMidiCfgRev = 0;
 
 static std::string ToLowerAscii(const std::string& s) {
     std::string out = s;
@@ -1044,6 +1045,7 @@ static const char* __cdecl GetMusicFilename_Impl(int musicId) {
     if (path.empty()) {
         g_lastPlayedPath.clear();
         g_lastPlayedSoundFont.clear();
+        g_lastPlayedMidiCfgRev = GetMidiConfigRevision();
         return nullptr;
     }
     if (path.size() >= sizeof(s_outPath)) {
@@ -1052,6 +1054,7 @@ static const char* __cdecl GetMusicFilename_Impl(int musicId) {
     std::memcpy(s_outPath, path.c_str(), path.size() + 1);
     g_lastPlayedPath = path;
     g_lastPlayedSoundFont = GetActiveSoundFontPath();
+    g_lastPlayedMidiCfgRev = GetMidiConfigRevision();
     return s_outPath;
 }
 
@@ -1158,6 +1161,11 @@ std::string GetActiveSoundFontPath() {
         std::string resolved = ResolveSoundFontCandidate(g_xmlSoundFont);
         if (!resolved.empty()) return resolved;
     }
+    MidiTuningConfig midiCfg = GetActiveMidiTuningConfig();
+    if (!midiCfg.soundFontPath.empty()) {
+        std::string resolved = ResolveSoundFontCandidate(midiCfg.soundFontPath);
+        if (!resolved.empty()) return resolved;
+    }
     std::string localSf = JoinExePath("music\\Bada_Mobile_0300_base.sf2");
     if (FileExistsOnDisk(localSf)) return localSf;
     if (FileExistsOnDisk(kDefaultFallbackSoundFont)) return kDefaultFallbackSoundFont;
@@ -1171,6 +1179,7 @@ float GetActiveSoundFontGainDb() {
 
 void EnsureMusicPlaylistReady() {
     EnsurePlaylistLoaded();
+    EnsureMidiConfigReady();
 }
 
 void OnMusicPlaylistChanged() {
@@ -1199,10 +1208,12 @@ void OnMusicPlaylistChanged() {
 
     std::string newPath = ResolveTrackPathForMusicId(curId);
     std::string newSf   = GetActiveSoundFontPath();
+    uint64_t newCfgRev  = GetMidiConfigRevision();
     const bool sameTrack = (_stricmp(newPath.c_str(), g_lastPlayedPath.c_str()) == 0);
     const bool isMidi = EndsWithNoCase(newPath, ".mid") || EndsWithNoCase(newPath, ".midi");
     const bool sameSf = (_stricmp(newSf.c_str(), g_lastPlayedSoundFont.c_str()) == 0);
-    if (sameTrack && (!isMidi || sameSf)) {
+    const bool sameCfg = (newCfgRev == g_lastPlayedMidiCfgRev);
+    if (sameTrack && (!isMidi || (sameSf && sameCfg))) {
         return;
     }
 
@@ -1210,6 +1221,7 @@ void OnMusicPlaylistChanged() {
         reinterpret_cast<void(__thiscall*)(void*, int)>(0x4743e0)(ap, 1);
         g_lastPlayedPath.clear();
         g_lastPlayedSoundFont.clear();
+        g_lastPlayedMidiCfgRev = newCfgRev;
         return;
     }
 

@@ -74,8 +74,8 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 | **Gameplay**    | `skip intro`           | `off`, `on`                                                                      | toggle            | Instant 2-state switch                                                                                             |
 | **Gameplay**    | `cam distance`         | `mobile` (`-1`), `0.5`, `0.65`, `0.75`, `1`, `1.25`, `1.5`, `2`                  | popup             | Named `mobile` mode + numeric multipliers (default `1`)                                                            |
 | **Gameplay**    | `dolly zoom`           | `pc` (`-1`), `mobile` (`-2`), `0`, `5`, `10`, `15`, `20`, `25`, `30`, `40`, `50` | popup             | Two named presets (`pc`, `mobile`) + numeric FOV offsets (adds `40`, `50` to `g_fovPresets`; default `pc`)         |
-| **Gameplay**    | `turbo mode`           | `off`, `on` *(Main Options only)*                                                | toggle            | Android Turbo Mode physics, separate score/prism history (`edgemod_turbo_scores.ini`), & no Steam leaderboard upload |
-| **Gameplay**    | `reset score`          | *(Main Options only)*                                                            | **confirm popup** | In-place `no` / `yes` popup (defaults to `no`, no row dots, no Left/Right trigger; resets active Normal or Turbo history) |
+| **Gameplay**    | `reset normal score`   | *(Main Options only)*                                                            | **confirm popup** | In-place `no` / `yes` popup (defaults to `no`, no row dots, no Left/Right trigger; resets Normal score/prism history in `local_savedata.ttsav`) |
+| **Gameplay**    | `reset turbo score`    | *(Main Options only)*                                                            | **confirm popup** | In-place `no` / `yes` popup (defaults to `no`, no row dots, no Left/Right trigger; resets Turbo score/prism history in `edgemod_turbo_scores.ini`) |
 
 ---
 
@@ -89,22 +89,22 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 
 ## Control Behavior Guidelines
 
-### 1. Toggles (14 items)
+### 1. Toggles (13 items)
 
 - **Display:** 2 dots under the value. Lighter dot indicates the selected option.
 - **Interaction:** Click / Enter / Left / Right toggles immediately and saves, playing hover SFX (`2`).
 
-### 2. Popups (31 setting popups + 1 confirm popup)
+### 2. Popups (31 setting popups + 2 confirm popups)
 
 - **Display:**
-  - Setting popups show multiple horizontal dots under the value (lighter dot indicates the selected option). Action confirm popups (`reset score`) show no dots under the row.
+  - Setting popups show multiple horizontal dots under the value (lighter dot indicates the selected option). Action confirm popups (`reset normal score`, `reset turbo score`) show no dots under the row.
   - Popup anchors **below** the option row by default to preserve visual flow, flipping **above** the row if there is insufficient vertical space below.
-  - Shows all valid choices, marking the active choice and **highlighting the default value with a dot** (or `no` / `yes` with `no` focused by default for `reset score`).
+  - Shows all valid choices, marking the active choice and **highlighting the default value with a dot** (or `no` / `yes` with `no` focused by default for `reset normal score` / `reset turbo score`).
 - **Interaction:**
   - **Click / Enter** on the row opens the anchored popup, playing hover SFX (`2`).
-  - **Up / Down / Mouse Hover + Enter / Click** picks a choice (or confirms/cancels for `reset score`), closes the popup, and saves: setting choices play select SFX (`0xc`), choosing `no` plays back SFX (`0xb`), and confirming `reset score` (`yes`) plays level start / final confirm SFX (`0x1`). Moving the mouse off-popup in mouse mode clears the choice highlight; pressing Up/Down/Enter restores the last highlighted choice first; hovered choices use subtle (`25%`) rainbow with a 2px rainbow border and switch to strong rainbow while pressed.
+  - **Up / Down / Mouse Hover + Enter / Click** picks a choice (or confirms/cancels for `reset normal score` / `reset turbo score`), closes the popup, and saves: setting choices play select SFX (`0xc`), choosing `no` plays back SFX (`0xb`), and confirming `reset normal score` / `reset turbo score` (`yes`) plays level start / final confirm SFX (`0x1`). Moving the mouse off-popup in mouse mode clears the choice highlight; pressing Up/Down/Enter restores the last highlighted choice first; hovered choices use subtle (`25%`) rainbow with a 2px rainbow border and switch to strong rainbow while pressed.
   - **Esc / Cancel / Click outside** closes without changing the value / without resetting, playing back SFX (`0xb`).
-  - **Left / Right** on the row (when popup is closed) quick-cycles setting popups as a shortcut (disabled on `reset score`), playing hover SFX (`2`).
+  - **Left / Right** on the row (when popup is closed) quick-cycles setting popups as a shortcut (disabled on `reset normal score` / `reset turbo score`), playing hover SFX (`2`).
 
 ### 3. Sliders (17 items)
 
@@ -115,5 +115,5 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
   - **Mouse:** Click anywhere on the track to jump, drag thumb to scrub (pointer stays captured and row stays strong rainbow even if cursor leaves the row vertically), and release to save. Value changes during scrubbing play hover SFX (`2`).
   - **Keyboard / Gamepad:** Left / Right steps by preset or fixed increment (`5` for `sounds`/`music`, `10` for `background`/`drop shadow`, preset index for `prism vfx`/`ui scale`/`size`/`width`/`height`/`range`), playing hover SFX (`2`).
   - **Reset to default:** Press `R` / `Backspace` / `Delete` while a slider row is focused to snap back to the default value, playing hover SFX (`2`).
-  - **Special case (`ui scale`):** Update the displayed slider value while dragging/stepping, and call `ApplyUiScale` + `SaveModSettings` on mouse-up / Left-Right release (or cursor/focus change) without reverting `auto scale` to `off` (all mod options save atomically to `%LocalAppData%\Two Tribes\EDGE\edgemod_settings.ini`; `display mode` also keeps vanilla `fullScreen` in `local_savedata.ttsav` synced alongside `sounds`, `music`, `up key`, and `reset score` via `Game_SaveUserSettings`).
+  - **Special case (`ui scale`):** Update the displayed slider value while dragging/stepping, and call `ApplyUiScale` + `SaveModSettings` on mouse-up / Left-Right release (or cursor/focus change) without reverting `auto scale` to `off` (all mod options save atomically to `%LocalAppData%\Two Tribes\EDGE\edgemod_settings.ini`; `display mode` also keeps vanilla `fullScreen` in `local_savedata.ttsav` synced alongside `sounds`, `music`, `up key`, and `reset normal score` via `Game_SaveUserSettings`).
   - **Special case (`minimap` `enable` / `width` / `height` / `range` / `position`):** Read-only against `%LocalAppData%\Two Tribes\EDGE\settings.ini`: until adjusted in the menu (`minimap_*_override = 0`), the game uses `settings.ini` values directly; once changed in Options (`minimap_*_override = 1`), the chosen option takes effect (with `width`/`height`/`range` scaling the `160px` / `19.5` baseline), unless `settings.ini` is later edited on disk.

@@ -433,7 +433,6 @@ EDGE_STATIC_WSTR(g_wstrCamDist,   "cam distance");
 EDGE_STATIC_WSTR(g_wstrCamFov,    "dolly zoom");
 EDGE_STATIC_WSTR(g_wstrTimeFmt,   "time format");
 EDGE_STATIC_WSTR(g_wstrSkipIntro, "skip intro");
-EDGE_STATIC_WSTR(g_wstrTurboMode, "turbo mode");
 EDGE_STATIC_WSTR(g_wstrMusicStart,   "music start");
 EDGE_STATIC_WSTR(g_wstrMusicPlaylist, "music playlist");
 EDGE_STATIC_WSTR(g_wstrMuteUnfocused, "mute when unfocused");
@@ -448,8 +447,8 @@ EDGE_STATIC_WSTR(g_wstrTimerPosTL,   "TL");
 EDGE_STATIC_WSTR(g_wstrTimerPosTR,   "TR");
 EDGE_STATIC_WSTR(g_wstrTimerPosBL,   "BL");
 EDGE_STATIC_WSTR(g_wstrTimerPosBR,   "BR");
-EDGE_STATIC_WSTR(g_wstrResetScore,   "reset score");
-EDGE_STATIC_WSTR(g_wstrResetConfirm, "reset score?");
+EDGE_STATIC_WSTR(g_wstrResetNormalScore, "reset normal score");
+EDGE_STATIC_WSTR(g_wstrResetTurboScore,  "reset turbo score");
 EDGE_STATIC_WSTR(g_wstrCatDisplay,   "display");
 EDGE_STATIC_WSTR(g_wstrDisplayMode,  "display mode");
 EDGE_STATIC_WSTR(g_wstrFullscreen,   "fullscreen");
@@ -618,7 +617,6 @@ enum OptItem : int {
     OPT_MUTE_UNFOCUSED,
     OPT_UP_KEY,
     OPT_SKIP_INTRO,
-    OPT_TURBO_MODE,
     OPT_TIME_FMT,
     OPT_EDGE_TIMER,
     OPT_TIMER,
@@ -642,7 +640,8 @@ enum OptItem : int {
     OPT_SPEEDOMETER_BG_OPACITY,
     OPT_SPEEDOMETER_SHADOW_OPACITY,
     OPT_SPEEDOMETER_POS,
-    OPT_RESET_SCORE,
+    OPT_RESET_NORMAL_SCORE,
+    OPT_RESET_TURBO_SCORE,
     OPT_BACK
 };
 
@@ -756,7 +755,7 @@ static OptScrollState& GetOptScrollState(bool inPause) {
     return inPause ? g_pauseOptScroll : g_mainOptScroll;
 }
 
-static void ResetAllScores_Impl();
+static void ResetNormalScores_Impl();
 static void ApplyOptionScaleChange();
 
 // ------------------------------------------------------------------
@@ -2248,17 +2247,6 @@ static void SkipIntroAction_Impl(int sfxId) {
     ApplyOptionScaleChange(sfxId);
 }
 
-static void TurboModeAction_Impl(int sfxId) {
-    uint8_t* sm = GetScreenMgr();
-    if (sm != nullptr && *reinterpret_cast<const uint32_t*>(sm + 0x50) >= 0x11u) {
-        return;
-    }
-    g_turboMode ^= 1u;
-    EnsureTurboScoresLoaded();
-    if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
-    SaveModSettings();
-}
-
 static int GetLevelThemeIdx() {
     uint8_t* lvl = GetLevel();
     if (lvl == nullptr) return 0;
@@ -2756,8 +2744,8 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         outItems[n++] = OPT_CAM_DIST;
         outItems[n++] = OPT_DOLLY_ZOOM;
         if (!inPause) {
-            outItems[n++] = OPT_TURBO_MODE;
-            outItems[n++] = OPT_RESET_SCORE;
+            outItems[n++] = OPT_RESET_NORMAL_SCORE;
+            outItems[n++] = OPT_RESET_TURBO_SCORE;
         }
         outItems[n++] = OPT_BACK;
         return n;
@@ -2823,7 +2811,6 @@ static bool IsOptItemAdjustable(OptItem item) {
     case OPT_MUTE_UNFOCUSED:
     case OPT_UP_KEY:
     case OPT_SKIP_INTRO:
-    case OPT_TURBO_MODE:
     case OPT_TIME_FMT:
     case OPT_EDGE_TIMER:
     case OPT_TIMER:
@@ -2921,7 +2908,6 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_MUSIC_PLAYLIST:   return &g_wstrMusicPlaylist;
     case OPT_MUTE_UNFOCUSED:   return &g_wstrMuteUnfocused;
     case OPT_SKIP_INTRO:       return &g_wstrSkipIntro;
-    case OPT_TURBO_MODE:       return &g_wstrTurboMode;
     case OPT_TIME_FMT:         return &g_wstrTimeFmt;
     case OPT_EDGE_TIMER:       return &g_wstrEdgeTimer;
     case OPT_TIMER:            return &g_wstrTimerType;
@@ -2945,7 +2931,8 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_MINIMAP_RANGE:        return &g_wstrMinimapRange;
     case OPT_MINIMAP_POS:
     case OPT_SPEEDOMETER_POS:      return &g_wstrTimerPosLbl;
-    case OPT_RESET_SCORE:      return &g_wstrResetScore;
+    case OPT_RESET_NORMAL_SCORE: return &g_wstrResetNormalScore;
+    case OPT_RESET_TURBO_SCORE:  return &g_wstrResetTurboScore;
     case OPT_DISPLAY_MODE:     return &g_wstrDisplayMode;
     case OPT_SOUNDS:
         Game_GetLocalizedWString(tmp, 0xa);
@@ -2979,7 +2966,6 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_MUTE_UNFOCUSED:
     case OPT_UP_KEY:
     case OPT_SKIP_INTRO:
-    case OPT_TURBO_MODE:
     case OPT_TIME_FMT:
     case OPT_MINIMAP_ENABLE:
     case OPT_SPEEDOMETER_ENABLE:
@@ -3016,7 +3002,8 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_MINIMAP_POS:
     case OPT_SPEEDOMETER_POS:
         return CTRL_POPUP;
-    case OPT_RESET_SCORE:
+    case OPT_RESET_NORMAL_SCORE:
+    case OPT_RESET_TURBO_SCORE:
         return CTRL_CONFIRM_POPUP;
     case OPT_PRISM_VFX:
     case OPT_UI_SCALE:
@@ -3146,7 +3133,6 @@ static int GetToggleState(OptItem item) {
     case OPT_MUTE_UNFOCUSED:  return g_muteUnfocused ? 1 : 0;
     case OPT_UP_KEY:      return (sm != nullptr && sm[0x2b4] != 0) ? 1 : 0;
     case OPT_SKIP_INTRO:  return g_skipIntro ? 1 : 0;
-    case OPT_TURBO_MODE:  return g_turboMode ? 1 : 0;
     case OPT_TIME_FMT:    return g_timeFmt ? 1 : 0;
     case OPT_MINIMAP_ENABLE: return GetMinimapDisplayEnabled() ? 1 : 0;
     case OPT_SPEEDOMETER_ENABLE: return g_speedometerEnable ? 1 : 0;
@@ -3189,7 +3175,8 @@ static int GetPopupChoiceCount(OptItem item) {
     case OPT_PRISM_COUNTER_POS:       return 4;
     case OPT_MINIMAP_POS:             return 4;
     case OPT_SPEEDOMETER_POS:         return 4;
-    case OPT_RESET_SCORE:             return 2;
+    case OPT_RESET_NORMAL_SCORE:
+    case OPT_RESET_TURBO_SCORE:       return 2;
     default:                          return 0;
     }
 }
@@ -3241,7 +3228,8 @@ static int GetPopupCurrentChoice(OptItem item) {
     case OPT_PRISM_COUNTER_POS:  return std::clamp<int>(g_prismCounterPos, 0, 3);
     case OPT_MINIMAP_POS:        return std::clamp<int>(GetMinimapDisplayPos(), 0, 3);
     case OPT_SPEEDOMETER_POS:    return std::clamp<int>(g_speedometerPos, 0, 3);
-    case OPT_RESET_SCORE:        return 0; // default highlight on "no"
+    case OPT_RESET_NORMAL_SCORE:
+    case OPT_RESET_TURBO_SCORE:  return 0; // default highlight on "no"
     default:                     return 0;
     }
 }
@@ -3274,7 +3262,8 @@ static int GetPopupDefaultChoice(OptItem item) {
     case OPT_PRISM_COUNTER_POS:  return 1; // TR
     case OPT_MINIMAP_POS:        return 0; // TL
     case OPT_SPEEDOMETER_POS:    return 3; // BR
-    case OPT_RESET_SCORE:        return 0; // no
+    case OPT_RESET_NORMAL_SCORE:
+    case OPT_RESET_TURBO_SCORE:  return 0; // no
     default:                     return 0;
     }
 }
@@ -3395,7 +3384,8 @@ static const EdgeWString* GetPopupChoiceWstr(OptItem item, int idx, EdgeWString*
         if (idx == 1) return &g_wstrTimerPosTR;
         if (idx == 2) return &g_wstrTimerPosBL;
         return &g_wstrTimerPosBR;
-    case OPT_RESET_SCORE:
+    case OPT_RESET_NORMAL_SCORE:
+    case OPT_RESET_TURBO_SCORE:
         Game_GetLocalizedWString(tmp, (idx == 1) ? 0x1c : 0x1d); // yes / no
         *outFreeHeap = true;
         return tmp;
@@ -3437,9 +3427,17 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
         ApplyDisplayMode(static_cast<uint8_t>(idx), true);
         if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
         break;
-    case OPT_RESET_SCORE:
+    case OPT_RESET_NORMAL_SCORE:
         if (idx == 1) {
-            ResetAllScores_Impl();
+            ResetNormalScores_Impl();
+            Game_PlaySfx(sm, 0x1);
+        } else {
+            Game_PlaySfx(sm, 0xb);
+        }
+        break;
+    case OPT_RESET_TURBO_SCORE:
+        if (idx == 1) {
+            ResetTurboScores();
             Game_PlaySfx(sm, 0x1);
         } else {
             Game_PlaySfx(sm, 0xb);
@@ -4147,10 +4145,6 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
         Game_GetLocalizedWString(tmp, g_skipIntro ? 0xb : 0xc);
         *outFreeHeap = true;
         return tmp;
-    case OPT_TURBO_MODE:
-        Game_GetLocalizedWString(tmp, g_turboMode ? 0xb : 0xc);
-        *outFreeHeap = true;
-        return tmp;
     case OPT_TIME_FMT:
         return g_timeFmt ? &g_wstrNew : &g_wstrDef;
     case OPT_EDGE_TIMER:
@@ -4288,7 +4282,6 @@ static void ExecuteOptToggle(OptItem item, int sfxId) {
     case OPT_MUTE_UNFOCUSED:  MuteUnfocusedAction_Impl(sfxId); break;
     case OPT_UP_KEY:          ToggleUpKeyWithSfx(sfxId); break;
     case OPT_SKIP_INTRO:      SkipIntroAction_Impl(sfxId); break;
-    case OPT_TURBO_MODE:      TurboModeAction_Impl(sfxId); break;
     case OPT_TIME_FMT:        TimeFmtAction_Impl(sfxId); break;
     case OPT_MINIMAP_ENABLE:     MinimapEnableAction_Impl(sfxId); break;
     case OPT_SPEEDOMETER_ENABLE: SpeedometerEnableAction_Impl(sfxId); break;
@@ -4569,8 +4562,9 @@ static void DrawOptPopupOverlay(
         g_optUi.popupHighlight = GetPopupCurrentChoice(item);
     }
 
-    int popupW = inPause ? ((item == OPT_RESET_SCORE) ? 104 : 132)
-                         : ((item == OPT_RESET_SCORE) ? 116 : 148);
+    const bool isConfirm = (GetOptCtrlKind(item) == CTRL_CONFIRM_POPUP);
+    int popupW = inPause ? (isConfirm ? 104 : 132)
+                         : (isConfirm ? 116 : 148);
     int itemH = (nChoices >= 9) ? 20 : 22;
     int padY = 4;
     int popupH = 2 * padY + nChoices * itemH;
@@ -6758,13 +6752,9 @@ static void __declspec(naked) hk_musicStartGate() {
 }
 
 // ------------------------------------------------------------------
-// 8. Reset Score helper (used by in-place Reset Score confirm popup)
+// 8. Reset Score helpers (used by in-place Reset Normal/Turbo Score confirm popups)
 // ------------------------------------------------------------------
-static void ResetAllScores_Impl() {
-    if (g_turboMode != 0) {
-        ResetTurboScores();
-        return;
-    }
+static void ResetNormalScores_Impl() {
     uint8_t* sm = GetScreenMgr();
     if (sm == nullptr) return;
     uint8_t* saveData = sm + 0x298;

@@ -319,6 +319,14 @@ static void __declspec(naked) hk_subMeshDrawDistorted() {
     // At 0x439f02 (6B): 8B 96 A4 00 00 00  mov edx, DWORD PTR [esi+0xa4]
     // edi = IDirect3DDevice9*, esi = SubMesh*, [ebp+8] = RenderParams*
     __asm {
+        cmp BYTE PTR g_motionBlurCaptureActive, 0
+        je smd_chk_distort
+        push DWORD PTR [ebp + 8]
+        push esi
+        push edi
+        call MotionBlur_RecordSubMeshDraw
+        add esp, 12
+    smd_chk_distort:
         cmp BYTE PTR g_cubeDistortActive, 0
         jne smd_try
         call IsCustomHintGhostOverrideActive

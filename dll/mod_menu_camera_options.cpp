@@ -418,9 +418,15 @@ const float g_timerSizePresets[8] = {0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75
 EDGE_STATIC_WSTR(g_wstrPrismVfx,  "prism vfx");
 EDGE_STATIC_WSTR(g_wstrChromaAb,  "chromatic aberration");
 EDGE_STATIC_WSTR(g_wstrAntiAlias, "anti-aliasing");
+EDGE_STATIC_WSTR(g_wstrMotionBlur,"motion blur");
+EDGE_STATIC_WSTR(g_wstrBlurMode,  "blur mode");
+EDGE_STATIC_WSTR(g_wstrLow,       "low");
 EDGE_STATIC_WSTR(g_wstrShort,     "short");
 EDGE_STATIC_WSTR(g_wstrMedium,    "medium");
+EDGE_STATIC_WSTR(g_wstrHigh,      "high");
 EDGE_STATIC_WSTR(g_wstrLong,      "long");
+EDGE_STATIC_WSTR(g_wstrCamera,    "camera");
+EDGE_STATIC_WSTR(g_wstrObject,    "object");
 EDGE_STATIC_WSTR(g_wstrUiScale,   "ui scale");
 EDGE_STATIC_WSTR(g_wstrAuto,      "auto scale");
 EDGE_STATIC_WSTR(g_wstrCamDist,   "cam distance");
@@ -579,6 +585,8 @@ enum OptItem : int {
     OPT_PRISM_VFX,
     OPT_CHROMA_AB,
     OPT_AA,
+    OPT_MOTION_BLUR,
+    OPT_BLUR_MODE,
     OPT_UI_SCALE,
     OPT_AUTO_SCALE,
     OPT_CAM_DIST,
@@ -1257,6 +1265,8 @@ static void SaveModSettings() {
     writeInt("window_height", (g_customWinH >= 240) ? g_customWinH : 0);
     writeInt("window_width_ini", (g_lastIniWinW >= 0) ? g_lastIniWinW : -1);
     writeInt("window_height_ini", (g_lastIniWinH >= 0) ? g_lastIniWinH : -1);
+    writeInt("motion_blur", (g_motionBlur <= 3u) ? g_motionBlur : 0);
+    writeInt("blur_mode", (g_blurMode <= 2u) ? g_blurMode : 2);
 
     wchar_t tmpPath[MAX_PATH + 16]{};
     if (std::swprintf(tmpPath, MAX_PATH + 16, L"%ls.tmp", iniPath) <= 0) return;
@@ -1373,7 +1383,7 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
     uint64_t seenMask = 0;
     uint64_t seenMask2 = 0;
     constexpr uint64_t kAllModKeysMask = (1ull << 54) - 1ull;
-    constexpr uint64_t kAllModKeysMask2 = (1ull << 28) - 1ull;
+    constexpr uint64_t kAllModKeysMask2 = (1ull << 30) - 1ull;
     uint8_t legacyColorTheme = 0;
     bool hasThemeMode = false;
 
@@ -1785,6 +1795,16 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
             if (ParseAsciiInt(vP, vE, &iv) && iv >= -1) {
                 g_lastIniWinH = iv;
                 seenMask2 |= (1ull << 27);
+            }
+        } else if (AsciiEqIc(kP, kE, "motion_blur")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 3) {
+                g_motionBlur = static_cast<uint8_t>(iv);
+                seenMask2 |= (1ull << 28);
+            }
+        } else if (AsciiEqIc(kP, kE, "blur_mode")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) {
+                g_blurMode = static_cast<uint8_t>(iv);
+                seenMask2 |= (1ull << 29);
             }
         }
     }
@@ -2621,7 +2641,7 @@ static int GetOptParentRowForCategory(int cat, bool inPause) {
     case OPT_CAT_AUDIO:           return 2;
     case OPT_CAT_UI:              return 3;
     case OPT_CAT_GAMEPLAY:        return 4;
-    case OPT_CAT_CUSTOMIZE_THEME: return inPause ? 5 : 6; // below theme (+1 in Main Menu for preview level)
+    case OPT_CAT_CUSTOMIZE_THEME: return (inPause ? 6 : 7) + (g_motionBlur != 0u ? 1 : 0);
     case OPT_CAT_TIMER:           return 1; // row 1 in OPT_CAT_UI (below time format)
     case OPT_CAT_PRISM_COUNTER:   return 2; // row 2 in OPT_CAT_UI (below timer)
     case OPT_CAT_MINIMAP:         return 3; // row 3 in OPT_CAT_UI (below prism counter)
@@ -2646,6 +2666,10 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         outItems[n++] = OPT_AA;
         outItems[n++] = OPT_CHROMA_AB;
         outItems[n++] = OPT_PRISM_VFX;
+        outItems[n++] = OPT_MOTION_BLUR;
+        if (g_motionBlur != 0u) {
+            outItems[n++] = OPT_BLUR_MODE;
+        }
         outItems[n++] = OPT_EDGE_TIMER;
         outItems[n++] = OPT_COLOR_THEME;
         if (g_colorTheme == 3u) {
@@ -2766,6 +2790,8 @@ static bool IsOptItemAdjustable(OptItem item) {
     case OPT_PRISM_VFX:
     case OPT_CHROMA_AB:
     case OPT_AA:
+    case OPT_MOTION_BLUR:
+    case OPT_BLUR_MODE:
     case OPT_UI_SCALE:
     case OPT_AUTO_SCALE:
     case OPT_CAM_DIST:
@@ -2865,6 +2891,8 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_PRISM_VFX:        return &g_wstrPrismVfx;
     case OPT_CHROMA_AB:        return &g_wstrChromaAb;
     case OPT_AA:               return &g_wstrAntiAlias;
+    case OPT_MOTION_BLUR:      return &g_wstrMotionBlur;
+    case OPT_BLUR_MODE:        return &g_wstrBlurMode;
     case OPT_UI_SCALE:         return &g_wstrUiScale;
     case OPT_AUTO_SCALE:       return &g_wstrAuto;
     case OPT_CAM_DIST:         return &g_wstrCamDist;
@@ -2958,6 +2986,8 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
         return CTRL_TOGGLE;
     case OPT_DISPLAY_MODE:
     case OPT_AA:
+    case OPT_MOTION_BLUR:
+    case OPT_BLUR_MODE:
     case OPT_PREVIEW_LEVEL:
     case OPT_CAM_DIST:
     case OPT_DOLLY_ZOOM:
@@ -3130,6 +3160,8 @@ static int GetPopupChoiceCount(OptItem item) {
     case OPT_AA:
         if (g_aaLevelCount <= 0) ProbeSupportedAaLevels();
         return (g_aaLevelCount > 0) ? g_aaLevelCount : 1;
+    case OPT_MOTION_BLUR:             return 4;
+    case OPT_BLUR_MODE:               return 3;
     case OPT_PREVIEW_LEVEL:           return 4;
     case OPT_CAM_DIST:                return 8;
     case OPT_DOLLY_ZOOM:              return 11;
@@ -3200,6 +3232,8 @@ static int GetPopupCurrentChoice(OptItem item) {
     }
     case OPT_COLOR_THEME:        return (g_colorTheme <= 3u) ? static_cast<int>(g_colorTheme) : 0;
     case OPT_PREVIEW_LEVEL:      return (g_previewLevelTheme <= 3u) ? static_cast<int>(g_previewLevelTheme) : 0;
+    case OPT_MOTION_BLUR:        return (g_motionBlur <= 3u) ? static_cast<int>(g_motionBlur) : 0;
+    case OPT_BLUR_MODE:          return (g_blurMode <= 2u) ? static_cast<int>(g_blurMode) : 2;
     case OPT_EDGE_TIMER:         return (g_edgeTimerMode <= 2u) ? static_cast<int>(g_edgeTimerMode) : 0;
     case OPT_TIMER:              return std::clamp<int>(g_timerMode, 0, 3);
     case OPT_TIMER_POS:          return std::clamp<int>(g_timerPos, 0, 3);
@@ -3231,6 +3265,8 @@ static int GetPopupDefaultChoice(OptItem item) {
     case OPT_COLOR_THEME:        return 0; // pc
     case OPT_FINISH_EFFECT:      return 0; // pc
     case OPT_FINISH_PLATFORM:    return 0; // pc
+    case OPT_MOTION_BLUR:        return 0; // off
+    case OPT_BLUR_MODE:          return 2; // both
     case OPT_EDGE_TIMER:         return 0; // 2D
     case OPT_TIMER:              return 3; // both
     case OPT_TIMER_POS:          return 1; // TR
@@ -3316,6 +3352,21 @@ static const EdgeWString* GetPopupChoiceWstr(OptItem item, int idx, EdgeWString*
         if (idx == 1) return &g_wstrEdgeTimer2DScaled;
         if (idx == 2) return &g_wstrEdgeTimer3D;
         return &g_wstrEdgeTimer2D;
+    case OPT_MOTION_BLUR:
+        idx = std::clamp(idx, 0, 3);
+        if (idx == 0) {
+            Game_GetLocalizedWString(tmp, 0xc);
+            *outFreeHeap = true;
+            return tmp;
+        }
+        if (idx == 1) return &g_wstrLow;
+        if (idx == 2) return &g_wstrMedium;
+        return &g_wstrHigh;
+    case OPT_BLUR_MODE:
+        idx = std::clamp(idx, 0, 2);
+        if (idx == 0) return &g_wstrCamera;
+        if (idx == 1) return &g_wstrObject;
+        return &g_wstrTimerBoth;
     case OPT_TIMER:
         idx = std::clamp(idx, 0, 3);
         if (idx == 0) {
@@ -3460,6 +3511,21 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
         break;
     case OPT_EDGE_TIMER:
         g_edgeTimerMode = static_cast<uint8_t>(idx);
+        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SaveModSettings();
+        break;
+    case OPT_MOTION_BLUR:
+        g_motionBlur = static_cast<uint8_t>(std::clamp(idx, 0, 3));
+        ResetMotionBlurHistory();
+        if (g_motionBlur == 0u) {
+            ReleaseMotionBlurResources();
+        }
+        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SaveModSettings();
+        break;
+    case OPT_BLUR_MODE:
+        g_blurMode = static_cast<uint8_t>(std::clamp(idx, 0, 2));
+        ResetMotionBlurHistory();
         if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
         SaveModSettings();
         break;
@@ -3979,6 +4045,19 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
         Game_GetLocalizedWString(tmp, g_chromaAb ? 0xb : 0xc);
         *outFreeHeap = true;
         return tmp;
+    case OPT_MOTION_BLUR:
+        if (g_motionBlur == 0u) {
+            Game_GetLocalizedWString(tmp, 0xc);
+            *outFreeHeap = true;
+            return tmp;
+        }
+        if (g_motionBlur == 1u) return &g_wstrLow;
+        if (g_motionBlur == 2u) return &g_wstrMedium;
+        return &g_wstrHigh;
+    case OPT_BLUR_MODE:
+        if (g_blurMode == 0u) return &g_wstrCamera;
+        if (g_blurMode == 1u) return &g_wstrObject;
+        return &g_wstrTimerBoth;
     case OPT_AA:
         if (g_aaSamples <= 0) {
             Game_GetLocalizedWString(tmp, 0xc);

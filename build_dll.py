@@ -54,6 +54,7 @@ DLL_SOURCES = [
     "mod_leaderboards.cpp",
     "mod_turbo_mode.cpp",
     "mod_display_mode.cpp",
+    "mod_motion_blur.cpp",
 ]
 
 

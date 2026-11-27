@@ -43,6 +43,8 @@ extern uint8_t g_muteUnfocused; // 0=off, 1=on
 extern uint8_t g_prismVfx;    // 0=off, 1=short (vanilla), 2=medium (1s), 3=long (2s)
 extern uint8_t g_chromaAb;    // 0=off, 1=on
 extern int32_t g_aaSamples;   // 0=off, 2/4/8/16 MSAA samples
+extern uint8_t g_motionBlur;  // 0=off, 1=low, 2=medium, 3=high
+extern uint8_t g_blurMode;    // 0=camera, 1=object, 2=both
 extern uint8_t g_finishEffect;   // 0=pc, 1=mobile, 2=java
 extern uint8_t g_finishPlatform; // 0=pc, 1=mobile, 2=java
 extern uint8_t g_colorTheme;     // 0=pc, 1=mobile, 2=java, 3=custom
@@ -386,5 +388,30 @@ uint8_t __cdecl GetDisplayMode();
 void    __cdecl ApplyDisplayMode(uint8_t mode, bool saveSettings);
 bool    __cdecl HandleDisplayModeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, LRESULT* outResult);
 void    __cdecl SaveModSettingsPublic();
+
+// Unified Camera + Per-Object Velocity Motion Blur (mod_motion_blur.cpp)
+extern uint8_t g_motionBlurCaptureActive;
+void __cdecl MotionBlur_PushEntity(const void* entityPtr, bool isDynamic, bool isCube = false);
+void __cdecl MotionBlur_PopEntity();
+struct MotionBlurEntityScope {
+    bool pushed = false;
+    MotionBlurEntityScope(const void* entityPtr, bool isDynamic, bool isCube = false) {
+        if (g_motionBlurCaptureActive != 0u && entityPtr != nullptr) {
+            MotionBlur_PushEntity(entityPtr, isDynamic, isCube);
+            pushed = true;
+        }
+    }
+    ~MotionBlurEntityScope() {
+        if (pushed) {
+            MotionBlur_PopEntity();
+        }
+    }
+    MotionBlurEntityScope(const MotionBlurEntityScope&) = delete;
+    MotionBlurEntityScope& operator=(const MotionBlurEntityScope&) = delete;
+};
+void __cdecl MotionBlur_RecordSubMeshDraw(void* d3dDev, const uint8_t* subMesh, const uint8_t* renderParams);
+void __cdecl ResetMotionBlurHistory();
+void __cdecl ResetMotionBlurEntity(const void* entityPtr);
+void __cdecl ReleaseMotionBlurResources();
 
 } // namespace edgemod

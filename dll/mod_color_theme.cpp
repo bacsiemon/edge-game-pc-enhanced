@@ -1100,6 +1100,7 @@ static void PreparePrismMaterial(int32_t animTick, uint8_t prismStyle) {
 static void __fastcall Hook_PrismRender(uint8_t* prism) {
     using OrigFn = void(__thiscall*)(void*);
     auto orig = reinterpret_cast<OrigFn>(0x487800);
+    MotionBlurEntityScope mbScope(prism, true);
     const CustomThemeSettings eff = GetEffectiveTheme();
     if (eff.prisms == 0u || prism == nullptr || *reinterpret_cast<void* const*>(prism + 0x24) != nullptr) {
         ScopedThemeLight lightGuard;
@@ -1522,6 +1523,7 @@ static void RenderPreviewTopPlanets(IDirect3DDevice9* dev) {
 static void __fastcall Hook_StaticLevelRender(uint8_t* model, void*, int arg) {
     using OrigFn = void(__thiscall*)(void*, int);
     auto orig = reinterpret_cast<OrigFn>(0x421460);
+    MotionBlurEntityScope mbScope(model, false);
     if (model == nullptr) {
         s_cachedLevelModel = nullptr;
         s_wallSubMeshes.clear();
@@ -1866,6 +1868,7 @@ static void RenderSmoothBumperRoofFlash(const uint8_t* bumper) {
 
 static void __fastcall Hook_BumperRender(uint8_t* bumper) {
     using OrigFn = void(__thiscall*)(void*);
+    MotionBlurEntityScope mbScope(bumper, true);
     if (bumper == nullptr) {
         reinterpret_cast<OrigFn>(0x484fa0)(bumper);
         return;
@@ -2263,6 +2266,7 @@ static MovingPlatDepthPlan ResolveMovingPlatformDepthPlan(uint8_t* plat) {
 static void __fastcall Hook_MovingPlatformRender(uint8_t* plat) {
     using OrigFn = void(__thiscall*)(void*);
     auto orig = reinterpret_cast<OrigFn>(0x483fd0);
+    MotionBlurEntityScope mbScope(plat, true);
     if (plat == nullptr) {
         orig(plat);
         return;
@@ -2501,6 +2505,7 @@ static void SyncSwitchModelVertexColors(uint8_t* nodePtr, uint8_t targetTheme) {
 static void __fastcall Hook_SwitchRender(uint8_t* sw) {
     using OrigFn = void(__thiscall*)(void*);
     auto orig = reinterpret_cast<OrigFn>(0x485c30);
+    MotionBlurEntityScope mbScope(sw, true);
     if (sw == nullptr) {
         orig(sw);
         return;
@@ -2586,6 +2591,7 @@ static void ApplyHoloSwitchSmoothUV(
 static void __fastcall Hook_HoloSwitchRender(uint8_t* holo) {
     using OrigFn = void(__thiscall*)(void*);
     auto orig = reinterpret_cast<OrigFn>(0x486150);
+    MotionBlurEntityScope mbScope(holo, false);
     if (holo == nullptr) {
         orig(holo);
         return;
@@ -2783,6 +2789,7 @@ static void SyncShrinkerNodeTimer(const uint8_t* shrinker) {
 static void __fastcall Hook_ShrinkerRender(uint8_t* shrinker) {
     using OrigFn = void(__thiscall*)(void*);
     auto orig = reinterpret_cast<OrigFn>(0x486f50);
+    MotionBlurEntityScope mbScope(shrinker, false);
     if (shrinker != nullptr) {
         SyncShrinkerNodeTimer(shrinker);
     }
@@ -2815,6 +2822,7 @@ static void __fastcall Hook_ShrinkerRender(uint8_t* shrinker) {
 static void __fastcall Hook_FallingPlatformRender(uint8_t* plat) {
     using OrigFn = void(__thiscall*)(void*);
     auto orig = reinterpret_cast<OrigFn>(0x486b20);
+    MotionBlurEntityScope mbScope(plat, true);
     if (plat == nullptr) {
         orig(plat);
         return;
@@ -2900,6 +2908,7 @@ static void BeginDarkCubeLight(ScopedThemeLight& guard, const CustomThemeSetting
 
 static void __fastcall Hook_DarkCubeRender(void* cube) {
     using OrigFn = void(__thiscall*)(void*);
+    MotionBlurEntityScope mbScope(cube, true, true);
     const CustomThemeSettings eff = GetEffectiveTheme();
     ScopedThemeLight darkLight;
     BeginDarkCubeLight(darkLight, eff, true);
@@ -3393,6 +3402,7 @@ uint32_t __cdecl GetCleanHintGhostBaseRgb() {
 
 uint32_t __fastcall RenderPlayerCubeWithColorTheme(void* cube) {
     using OrigFn = uint32_t(__thiscall*)(void*);
+    MotionBlurEntityScope mbScope(cube, true, true);
     uint32_t ret = 0;
     {
         ScopedThemeLight cubeLight;

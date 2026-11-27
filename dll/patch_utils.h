@@ -226,3 +226,4 @@ void RegisterGraphicsPreview();
 void RegisterLeaderboards();
 void RegisterTurboMode();
 void RegisterDisplayMode();
+void RegisterMotionBlur();

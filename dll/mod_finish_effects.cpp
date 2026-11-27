@@ -677,6 +677,7 @@ static void __declspec(naked) hk_unloadLevelClear() {
         call ResetSpeedometerState
         call ResetColorThemeLevelCaches
         call ResetPauseVisualClock
+        call ResetMotionBlurHistory
         pop edx
         pop ecx
         pop eax
@@ -1148,7 +1149,10 @@ static void __declspec(naked) hk_renderBeforeSpark() {
         call RenderPreviewHintGhostIfActive
         call RenderCustomFinishEffect_Impl
         call RenderCustomShatterEffect_Impl
+        cmp BYTE PTR g_motionBlur, 0
+        jne rbs_skip_et3d
         call RenderEdgeTimer3D
+    rbs_skip_et3d:
         popad
         mov eax, 0x4d0fa0
         jmp eax

@@ -15,6 +15,8 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 | **Graphics**    | `anti-aliasing`        | `off` + supported `2x`, `4x`, `8x`, `16x`                                        | popup             | Dynamic list from `g_aaLevels[]`; dynamic default from `GetLegacyDefaultAa(legacyFx)`                              |
 | **Graphics**    | `chromatic aberration` | `off`, `on`                                                                      | toggle            | Instant 2-state switch                                                                                             |
 | **Graphics**    | `prism vfx`            | `0` (`off`), `1` (`short`), `2` (`medium`), `3` (`long`)                         | slider            | 4 discrete stops (`0..3`); triggers live screen flash + separation preview on change (default `1` / `short`)       |
+| **Graphics**    | `motion blur`          | `off`, `low`, `medium`, `high`                                                   | popup             | Camera + per-object velocity-buffer motion blur (`off` default, saved under `motion_blur`)                       |
+| **Graphics**    | `blur mode`            | `camera`, `object`, `both` *(shown only when `motion blur != off`)*              | popup             | Selects camera-only, object-only, or combined velocity (`both` default, saved under `blur_mode`)                   |
 | **Graphics**    | `edge timer`           | `2D`, `2D scaled`, `3D`                                                          | popup             | `2D` (default), `2D scaled` (scales to camera zoom level), or `3D` (Android 3D timer); previewed on hover in Main Menu |
 | **Graphics**    | `theme`                | `pc`, `mobile`, `java`, `custom`                                                 | popup             | Unified preset (`pc` default, live switch); choosing `custom` reveals `customize theme >` below it                 |
 | **Graphics**    | `customize theme`      | *(opens **Customize Theme** submenu when `theme == custom`)*                     | submenu (`>`)     | Conditional nested 3rd-level scrollable category (19 theme/effect items + `back`)                                  |
@@ -92,7 +94,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 - **Display:** 2 dots under the value. Lighter dot indicates the selected option.
 - **Interaction:** Click / Enter / Left / Right toggles immediately and saves, playing hover SFX (`2`).
 
-### 2. Popups (29 setting popups + 1 confirm popup)
+### 2. Popups (31 setting popups + 1 confirm popup)
 
 - **Display:**
   - Setting popups show multiple horizontal dots under the value (lighter dot indicates the selected option). Action confirm popups (`reset score`) show no dots under the row.

@@ -8004,7 +8004,7 @@ void RegisterMenuCameraOptions() {
         RegRelJmp(0x4b2d7b, exRen, 10, 5, &hk_renderMainOptionsBody, 0x90, 0x4b37a3);
     }
 
-    // 2. MainMenu 6 rows (edge challenge, scores, options, instructions, credits, exit game), ModeSelect 5 rows, Instructions -> MainMenu, Credits -> MainMenu
+    // 2. MainMenu 6 rows (edge challenge, scores, options, instructions, credits, exit game), Instructions -> MainMenu, Credits -> MainMenu
     {
         // MainMenu row count 5 -> 6
         const uint8_t exHit5[5] = {0x83, 0xfe, 0x05, 0x7c, 0xd6};

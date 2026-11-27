@@ -17,8 +17,8 @@ int32_t __cdecl GetScoresSelectRowCount() {
 MenuRowRect __cdecl GetModeSelectRowRect(int row, int bx, int by, int panelH, int menuW) {
     const int backTop  = by + panelH - 0x3e;
     const int backH    = 0x32;
-    const int turboH   = 0x2a;
-    const int turboTop = backTop - turboH - 4;
+    const int turboH   = backH;
+    const int turboTop = backTop - turboH;
     if (row == 5) {
         return {bx + 2, backTop, menuW - 4, backH, false};
     }
@@ -49,8 +49,8 @@ MenuRowRect __cdecl GetModeSelectRowRect(int row, int bx, int by, int panelH, in
 MenuRowRect __cdecl GetScoresSelectRowRect(int row, int bx, int by, int panelH, int menuW) {
     const int backTop  = by + panelH - 0x3e;
     const int backH    = 0x32;
-    const int turboH   = 0x2a;
-    const int turboTop = backTop - turboH - 4;
+    const int turboH   = backH;
+    const int turboTop = backTop - turboH;
     const int backRow  = (g_turboMode != 0) ? 4 : 5;
     const int turboRow = (g_turboMode != 0) ? 3 : 4;
     if (row == backRow) {
@@ -277,25 +277,48 @@ static void DrawCategoryProgressBar(
     }
 }
 
+static int ComputeUniformCounterReserveW() {
+    uint8_t* sm = GetScreenMgr();
+    if (sm == nullptr) return 42;
+
+    using GetCountFn = int(__thiscall*)(void*, int);
+    auto getCount = reinterpret_cast<GetCountFn>(0x4a4550);
+    int maxTotal = 0;
+    for (int type = 0; type < 3; ++type) {
+        maxTotal = (std::max)(maxTotal, getCount(sm + 0x24c, type));
+    }
+
+    int digits = 2;
+    for (int t = maxTotal; t >= 100 && digits < 6; t /= 10) {
+        ++digits;
+    }
+
+    wchar_t buf[20]{};
+    int pos = 0;
+    for (int i = 0; i < digits; ++i) buf[pos++] = L'8';
+    buf[pos++] = L'/';
+    for (int i = 0; i < digits; ++i) buf[pos++] = L'8';
+    buf[pos] = L'\0';
+
+    EdgeWString ws{};
+    ws.set_literal(buf, static_cast<uint32_t>(pos));
+    const int measured = MeasureTextWidth(&ws, 0x1000, 0);
+    return (std::max)(42, measured + 8);
+}
+
 static void DrawCategoryCard(
     const MenuRowRect& r, const EdgeWString* titleWs, int levelType,
     bool isSelected, bool isExitConfirm, int frame, int fadePct,
     uint32_t selBorderRgb, uint32_t selFillRgb, int cardIdx,
-    bool solidHeader, int unfoldPct
+    bool solidHeader, int counterReserveW
 ) {
     const int fullInnerH = r.h - 4;
-    const int headerH    = std::clamp((fullInnerH * 41) / 100, 20, 24);
-    const int minCardH   = headerH + 4;
-    const int clampedUnfold = std::clamp(unfoldPct, 0, 100);
-    const int curH = (clampedUnfold >= 100)
-        ? r.h
-        : (minCardH + ((r.h - minCardH) * clampedUnfold + 50) / 100);
-    const int curBodyH = curH - 4 - headerH;
+    const int titleOffY  = (fullInnerH * 30) / 100;
+    const int bottomOffY = (fullInnerH * 70) / 100;
 
     const int innerCardX = r.x + 2;
     const int innerCardY = r.y + 2;
     const int innerCardW = r.w - 4;
-    const int bodyY      = innerCardY + headerH;
 
     const int hdrFade = solidHeader ? 100 : fadePct;
 
@@ -303,13 +326,10 @@ static void DrawCategoryCard(
     const uint32_t borderRgb = (isExitConfirm && isSelected && !solidHeader)
         ? selBorderRgb
         : Game_ColorLerp(0xFFFFFFu, 0x7D7D7Du, hdrFade);
-    DrawQuadRgb(r.x, r.y, r.w, curH, borderRgb);
+    DrawQuadRgb(r.x, r.y, r.w, r.h, borderRgb);
 
-    // Dark #3B3B3B header strip
-    DrawQuadRgb(innerCardX, innerCardY, innerCardW, headerH, Game_ColorLerp(0xFFFFFFu, 0x3B3B3Bu, hdrFade));
-
-    // Body background: pure white when unhovered, rainbow tint on hover/click
-    if (curBodyH > 0) {
+    // Unified interior background (transparent header over card fill: white idle, rainbow on hover/click)
+    if (fullInnerH > 0) {
         uint32_t bodyBase = 0xFFFFFFu;
         if (isSelected) {
             if (isExitConfirm) {
@@ -321,43 +341,51 @@ static void DrawCategoryCard(
                 }
             }
         }
-        const uint32_t bodyRgb = Game_ColorLerp(0xFFFFFFu, bodyBase, fadePct);
-        DrawQuadRgb(innerCardX, bodyY, innerCardW, curBodyH, bodyRgb);
+        const uint32_t cardBgRgb = Game_ColorLerp(0xFFFFFFu, bodyBase, fadePct);
+        DrawQuadRgb(innerCardX, innerCardY, innerCardW, fullInnerH, cardBgRgb);
     }
 
-    // Header title (white text on dark header, left+vcenter, light font, no '>' arrow)
-    SetTextRgb(0xFFFFFFu);
-    DrawTextAutoFit(titleWs, innerCardX + 12, innerCardY + headerH / 2, 0x1800, 0x1800, 0, 0, 0x06, innerCardW - 24);
+    // Header title (black text over transparent header, left+vcenter, light font, no '>' arrow)
+    SetTextRgb(Game_ColorLerp(0xFFFFFFu, 0x000000u, hdrFade));
+    DrawTextAutoFit(titleWs, innerCardX + 12, innerCardY + titleOffY, 0x1800, 0x1800, 0, 0, 0x06, innerCardW - 24);
 
-    // Body content (fades smoothly after the body unfolds enough to avoid clipping)
-    const int contentFade = solidHeader
-        ? std::clamp(((clampedUnfold - 35) * 100) / 65, 0, 100)
-        : fadePct;
-    if (curBodyH >= 12 && contentFade > 0) {
-        const int bodyCenterY = bodyY + curBodyH / 2;
+    // Bottom row (fades smoothly during the 4..8 phase)
+    if (fadePct > 0 && fullInnerH >= bottomOffY + 6) {
+        const int bottomCenterY = innerCardY + bottomOffY;
         if (levelType >= 0) {
             const CategoryProgress prog = QueryCategoryProgress(levelType);
             const int barX = innerCardX + 12;
-            const int barH = (curBodyH >= 28) ? 10 : 8;
-            const int barY = bodyY + (curBodyH - barH) / 2;
-            const int barW = innerCardW - 12 - 60;
+            const int barH = (fullInnerH >= 48) ? 10 : 8;
+            const int barY = bottomCenterY - barH / 2;
+            const int barW = (std::max)(80, innerCardW - 24 - counterReserveW);
 
-            DrawCategoryProgressBar(barX, barY, barW, barH, prog, frame, contentFade, cardIdx);
+            DrawCategoryProgressBar(barX, barY, barW, barH, prog, frame, fadePct, cardIdx);
 
             wchar_t cntBuf[32]{};
             std::swprintf(cntBuf, 32, L"%d/%d", prog.completed, prog.total);
             EdgeWString cntWs{};
             cntWs.set_literal(cntBuf, static_cast<uint32_t>(std::wcslen(cntBuf)));
-            SetTextRgb(Game_ColorLerp(0xFFFFFFu, 0x3B3B3Bu, contentFade));
-            Game_DrawText(&cntWs, barX + barW + 6, bodyCenterY, 0x1000, 0x1000, 0, 0, 0x06);
+            SetTextRgb(Game_ColorLerp(0xFFFFFFu, 0x3B3B3Bu, fadePct));
+            Game_DrawText(&cntWs, innerCardX + innerCardW - 12, bottomCenterY - 2, 0x1000, 0x1000, 0, 0, 0x0a);
         } else {
             wchar_t subBuf[160]{};
             BuildContinueSubtitle(subBuf, 160);
             EdgeWString subWs{};
             subWs.set_literal(subBuf, static_cast<uint32_t>(std::wcslen(subBuf)));
-            SetTextRgb(Game_ColorLerp(0xFFFFFFu, 0x3B3B3Bu, contentFade));
-            DrawTextAutoFit(&subWs, innerCardX + 12, bodyCenterY, 0x1800, 0x1800, 0, 0, 0x06, innerCardW - 24);
+            SetTextRgb(Game_ColorLerp(0xFFFFFFu, 0x3B3B3Bu, fadePct));
+            DrawTextAutoFit(&subWs, innerCardX + 12, bottomCenterY, 0x1800, 0x1800, 0, 0, 0x06, innerCardW - 24);
         }
+    }
+}
+
+static void DrawRowHighlightBox(
+    const MenuRowRect& r, int y, uint32_t selBorderRgb, uint32_t selFillRgb
+) {
+    if (selBorderRgb != selFillRgb) {
+        DrawQuadRgb(r.x, y - 2, r.w, r.h + 4, selBorderRgb);
+        DrawQuadRgb(r.x + 2, y, r.w - 4, r.h, selFillRgb);
+    } else {
+        DrawQuadRgb(r.x, y, r.w, r.h, selFillRgb);
     }
 }
 
@@ -367,12 +395,12 @@ static void DrawMorphingCardHeader(
 ) {
     t = std::clamp(t, 0.0f, 1.0f);
     if (r.isCard) {
-        const int headerH = std::clamp(((r.h - 4) * 41) / 100, 20, 24);
-        const int startX  = bx + 2;
-        const int startY  = by + 2;
-        const int startW  = menuW - 4;
-        const int startH  = 0x22;
-        const int endH    = headerH + 4;
+        const int titleOffY  = ((r.h - 4) * 30) / 100;
+        const int startX     = bx + 2;
+        const int startY     = by + 2;
+        const int startW     = menuW - 4;
+        const int startH     = 0x22;
+        const int endH       = r.h;
 
         auto lerpI = [&](int a, int b) -> int {
             return static_cast<int>(std::lrint(static_cast<float>(a) + static_cast<float>(b - a) * t));
@@ -385,14 +413,14 @@ static void DrawMorphingCardHeader(
         const int tPct  = std::clamp(static_cast<int>(std::lrint(t * 100.0f)), 0, 100);
 
         const uint32_t borderRgb = Game_ColorLerp(0x808080u, 0x7D7D7Du, tPct);
-        const uint32_t fillRgb   = Game_ColorLerp(0xFFFFFFu, 0x3B3B3Bu, tPct);
-        const uint32_t textRgb   = Game_ColorLerp(0x808080u, 0xFFFFFFu, tPct);
+        const uint32_t fillRgb   = 0xFFFFFFu;
+        const uint32_t textRgb   = Game_ColorLerp(0x808080u, 0x000000u, tPct);
 
         DrawQuadRgb(drawX, drawY, drawW, drawH, borderRgb);
         DrawQuadRgb(drawX + 2, drawY + 2, drawW - 4, drawH - 4, fillRgb);
 
         const int textX     = lerpI(bx + 0x1e, r.x + 14);
-        const int textY     = drawY + drawH / 2;
+        const int textY     = lerpI(startY + startH / 2, r.y + 2 + titleOffY);
         const int textScale = lerpI(0x2000, 0x1800);
         SetTextRgb(textRgb);
         DrawTextAutoFit(titleWs, textX, textY, textScale, textScale, 0, 0, 0x06, drawW - 28);
@@ -400,12 +428,7 @@ static void DrawMorphingCardHeader(
         const int drawY = static_cast<int>(std::lrint(
             static_cast<float>(by + 2) + static_cast<float>(r.y - (by + 2)) * t
         ));
-        if (selBorderRgb != selFillRgb) {
-            DrawQuadRgb(r.x, drawY - 2, r.w, r.h + 4, selBorderRgb);
-            DrawQuadRgb(r.x + 2, drawY, r.w - 4, r.h, selFillRgb);
-        } else {
-            DrawQuadRgb(r.x, drawY, r.w, r.h, selFillRgb);
-        }
+        DrawRowHighlightBox(r, drawY, selBorderRgb, selFillRgb);
         SetTextRgb(selTextRgb);
         DrawTextAutoFit(titleWs, bx + 0x1e, drawY + (r.h - 18) / 2, 0x2000, 0x2000, 1, 0, 0x04, 330);
     }
@@ -416,12 +439,7 @@ static void DrawStandardRow(
     uint32_t selBorderRgb, uint32_t selFillRgb, uint32_t selTextRgb, uint32_t normalTextRgb
 ) {
     if (isSelected) {
-        if (selBorderRgb != selFillRgb) {
-            DrawQuadRgb(r.x, r.y - 2, r.w, r.h + 4, selBorderRgb);
-            DrawQuadRgb(r.x + 2, r.y, r.w - 4, r.h, selFillRgb);
-        } else {
-            DrawQuadRgb(r.x, r.y, r.w, r.h, selFillRgb);
-        }
+        DrawRowHighlightBox(r, r.y, selBorderRgb, selFillRgb);
         SetTextRgb(selTextRgb);
     } else {
         SetTextRgb(normalTextRgb);
@@ -434,12 +452,7 @@ static void DrawTurboToggleRow(
     uint32_t selBorderRgb, uint32_t selFillRgb, uint32_t selTextRgb, uint32_t normalTextRgb
 ) {
     if (isSelected) {
-        if (selBorderRgb != selFillRgb) {
-            DrawQuadRgb(r.x, r.y - 2, r.w, r.h + 4, selBorderRgb);
-            DrawQuadRgb(r.x + 2, r.y, r.w - 4, r.h, selFillRgb);
-        } else {
-            DrawQuadRgb(r.x, r.y, r.w, r.h, selFillRgb);
-        }
+        DrawRowHighlightBox(r, r.y, selBorderRgb, selFillRgb);
     }
 
     const int rightBound = bx + menuW - 8;
@@ -449,7 +462,7 @@ static void DrawTurboToggleRow(
     const int rDy        = (0x2a - r.h) / 2;
     const int lblTextY   = r.y + 0xc - rDy;
     const int valTextY   = r.y + 0x7 - rDy;
-    const int indY       = r.y + (std::max)(0x16, 0x20 - (0x2a - r.h));
+    const int indY       = r.y + (std::max)(0x16, 0x20 - rDy);
 
     const uint32_t fgRgb  = isSelected ? selTextRgb : normalTextRgb;
     const uint32_t bgRgb  = isSelected ? selFillRgb : 0xffffffu;
@@ -535,16 +548,17 @@ static void __cdecl RenderModeSelectRows_Impl(
     }
 
     int32_t fadePct = GetSmoothSubmenuFadePct(menu, 1);
-    bool morphUnfold = false;
+    bool morphActive = false;
     if (isEnterChild) {
         fadePct = std::clamp(static_cast<int32_t>(std::lrint((sm4 - 4.0f) * 25.0f)), 0, 100);
-        morphUnfold = true;
+        morphActive = true;
     } else if (isExitChild) {
         fadePct = std::clamp(static_cast<int32_t>(std::lrint((sm8 - 4.0f) * 25.0f)), 0, 100);
-        morphUnfold = true;
+        morphActive = true;
     }
 
-    const int rowCount = GetModeSelectRowCount();
+    const int rowCount        = GetModeSelectRowCount();
+    const int counterReserveW = ComputeUniformCounterReserveW();
     for (int i = 0; i < rowCount; ++i) {
         if (i >= 1 && i <= 3 && menu[0x14] == 0) continue;
         MenuRowRect r = GetModeSelectRowRect(i, bx, by, panelH, menuW);
@@ -557,12 +571,11 @@ static void __cdecl RenderModeSelectRows_Impl(
         ws.clear_sso();
         Game_GetLocalizedWString(&ws, getRowStrId(i));
         if (r.isCard) {
-            const bool solidHdr = (morphUnfold && isSel);
-            const int  unfold   = solidHdr ? fadePct : 100;
+            const bool solidHdr = (morphActive && isSel);
             DrawCategoryCard(
                 r, &ws, kLvlTypes[i],
                 isSel, isExitConfirm, frame, fadePct, selBorderRgb, selFillRgb, i,
-                solidHdr, unfold
+                solidHdr, counterReserveW
             );
         } else {
             DrawStandardRow(r, &ws, bx, isSel, selBorderRgb, selFillRgb, selTextRgb, normalTextRgb);
@@ -632,15 +645,16 @@ static void __cdecl RenderScoresSelectRows_Impl(
 
     const int32_t fadeMode = (enterFrames >= 8 && exitTimer >= 0 && exitDest == 0x10) ? 4 : 1;
     int32_t fadePct = GetSmoothSubmenuFadePct(menu, fadeMode);
-    bool morphUnfold = false;
+    bool morphActive = false;
     if (isEnterChild) {
         fadePct = std::clamp(static_cast<int32_t>(std::lrint((sm4 - 4.0f) * 25.0f)), 0, 100);
-        morphUnfold = true;
+        morphActive = true;
     } else if (isExitChild && exitDest != 0x10) {
         fadePct = std::clamp(static_cast<int32_t>(std::lrint((sm8 - 4.0f) * 25.0f)), 0, 100);
-        morphUnfold = true;
+        morphActive = true;
     }
 
+    const int counterReserveW = ComputeUniformCounterReserveW();
     for (int i = 0; i < rowCount; ++i) {
         MenuRowRect r = GetScoresSelectRowRect(i, bx, by, panelH, menuW);
         const bool isSel = (sel == i);
@@ -652,12 +666,11 @@ static void __cdecl RenderScoresSelectRows_Impl(
         ws.clear_sso();
         Game_GetLocalizedWString(&ws, getScoresStrId(i));
         if (r.isCard) {
-            const bool solidHdr = (morphUnfold && isSel);
-            const int  unfold   = solidHdr ? fadePct : 100;
+            const bool solidHdr = (morphActive && isSel);
             DrawCategoryCard(
                 r, &ws, i,
                 isSel, isExitConfirm, frame, fadePct, selBorderRgb, selFillRgb, i,
-                solidHdr, unfold
+                solidHdr, counterReserveW
             );
         } else {
             DrawStandardRow(r, &ws, bx, isSel, selBorderRgb, selFillRgb, selTextRgb, normalTextRgb);
@@ -798,7 +811,7 @@ static int32_t __cdecl ScoresSelectActivate_Impl(uint8_t* menu) {
     if (menu == nullptr) return -1;
     const int32_t sel = *reinterpret_cast<const int32_t*>(menu + 0x10);
     if (sel >= 0 && sel <= 2) {
-        return sel; // 0=normal(0xc), 1=bonus(0xd), 2=extended(0xe)
+        return sel; // 0=normal(0xc), 1=extended(0xe), 2=bonus(0xd) via 0x4b23ef jtbl
     }
     if (g_turboMode == 0) {
         if (sel == 3) return 3; // leaderboards URL

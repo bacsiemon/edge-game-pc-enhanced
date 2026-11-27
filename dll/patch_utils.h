@@ -223,3 +223,4 @@ void RegisterMenuHover();
 void RegisterCubeDistortion();
 void RegisterMinimap();
 void RegisterGraphicsPreview();
+void RegisterLeaderboards();

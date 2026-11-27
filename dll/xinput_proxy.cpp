@@ -72,6 +72,7 @@ void RegisterAllPatchesOnce() {
     RegisterMenuHover();
     RegisterCubeDistortion();
     RegisterGraphicsPreview();
+    RegisterLeaderboards();
 }
 
 } // namespace

@@ -186,7 +186,8 @@ static int HitTestMenuSlot(const uint8_t* menu, uint32_t vtbl, int pausePage, in
 
     if (vtbl == kVtblDebrief) {
         if (mx < bx || mx >= bx + 0x170) return -1;
-        for (int i = 0; i < 4; ++i) {
+        const int count = GetDebriefButtonCount();
+        for (int i = 0; i < count; ++i) {
             int top = by + 0x18c + i * 0x21;
             if (my >= top && my < top + 0x20) return i;
         }
@@ -296,7 +297,7 @@ static void DrawHoveredSlotBorder(const uint8_t* menu, uint32_t vtbl, int pauseP
             }
         }
     } else if (vtbl == kVtblDebrief) {
-        if (sel < 4) {
+        if (sel >= 0 && sel < GetDebriefButtonCount()) {
             Game_DrawRainbowRectBorder(frame, bx, by + 0x18c + sel * 0x21, 0x170, 0x20, 2, 255);
         }
     }

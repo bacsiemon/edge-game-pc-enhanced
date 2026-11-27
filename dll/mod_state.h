@@ -336,4 +336,8 @@ void    __cdecl ApplyGraphicsPreviewThemeOverrides(CustomThemeSettings* eff);
 void    __cdecl ResetCustomFinishEffectState();
 void    __cdecl ResetPreviewCubeFxWhiteFlash();
 
+// Steam leaderboard mapping & Debrief button visibility (mod_leaderboards.cpp)
+bool    __cdecl DebriefHasLeaderboard();
+int32_t __cdecl GetDebriefButtonCount();
+
 } // namespace edgemod

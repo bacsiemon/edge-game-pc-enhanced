@@ -28,6 +28,7 @@ Mod settings are stored separately in `%LocalAppData%\Two Tribes\EDGE\edgemod_se
 ### Camera & Gameplay
 - **Camera Distance & Dolly Zoom**: Under **Options → Gameplay**, adjust **`cam distance`** (`mobile`, `0.5`–`2`) and **`dolly zoom`** (`pc`, `mobile`, `0`–`50`), including true orthographic framing (`mobile` / `0`) for isometric levels like *Curious Land* without skybox or shadow artifacts.
 - **All Levels & Bonus Modes Unlocked**: Unlocks Normal, Extended, and Bonus levels without requiring the broken Steam Community group check and without triggering Steam achievements. Unplayed levels show a light gray corner indicator and keep `"new game"` vs `"continue"` intact.
+- **Steam Leaderboard Fix for Modded Level Lists**: Maps official levels by level identity rather than `mapping.xml` list index so Steam leaderboard score submissions and links stay accurate even with EDGE Epic or custom level mods installed, and hides the Debrief **`leaderboard`** button on levels that do not have a Steam leaderboard.
 - **Skip Startup Intro**: Toggle **Options → Gameplay → `skip intro`** (`off` / `on`) to jump straight to the Main Menu.
 
 ### Audio

@@ -50,6 +50,7 @@ DLL_SOURCES = [
     "mod_menu_hover.cpp",
     "mod_cube_distortion.cpp",
     "mod_graphics_preview.cpp",
+    "mod_leaderboards.cpp",
 ]
 
 

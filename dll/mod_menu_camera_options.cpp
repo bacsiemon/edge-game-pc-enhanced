@@ -22,6 +22,7 @@ bool    g_inRenderCamInterp = false;
 
 uint8_t g_timeFmt     = 0;
 uint8_t g_skipIntro   = 0;
+uint8_t g_turboMode   = 0; // 0=off, 1=on
 uint8_t g_musicStart  = 0;
 uint8_t g_musicPlaylist = 0; // 0=pc, 1=java
 uint8_t g_muteUnfocused = 0; // 0=off, 1=on
@@ -426,6 +427,7 @@ EDGE_STATIC_WSTR(g_wstrCamDist,   "cam distance");
 EDGE_STATIC_WSTR(g_wstrCamFov,    "dolly zoom");
 EDGE_STATIC_WSTR(g_wstrTimeFmt,   "time format");
 EDGE_STATIC_WSTR(g_wstrSkipIntro, "skip intro");
+EDGE_STATIC_WSTR(g_wstrTurboMode, "turbo mode");
 EDGE_STATIC_WSTR(g_wstrMusicStart,   "music start");
 EDGE_STATIC_WSTR(g_wstrMusicPlaylist, "music playlist");
 EDGE_STATIC_WSTR(g_wstrMuteUnfocused, "mute when unfocused");
@@ -598,6 +600,7 @@ enum OptItem : int {
     OPT_MUTE_UNFOCUSED,
     OPT_UP_KEY,
     OPT_SKIP_INTRO,
+    OPT_TURBO_MODE,
     OPT_TIME_FMT,
     OPT_EDGE_TIMER,
     OPT_TIMER,
@@ -1094,6 +1097,7 @@ static void SaveModSettings() {
 
     uint8_t timeFmt = (g_timeFmt != 0) ? 1u : 0u;
     uint8_t skipIntro = (g_skipIntro != 0) ? 1u : 0u;
+    uint8_t turboMode = (g_turboMode != 0) ? 1u : 0u;
     uint8_t musicStart = (g_musicStart != 0) ? 1u : 0u;
     uint8_t musicPlaylist = (g_musicPlaylist != 0) ? 1u : 0u;
     uint8_t muteUnfocused = (g_muteUnfocused != 0) ? 1u : 0u;
@@ -1171,6 +1175,7 @@ static void SaveModSettings() {
     writeFloat("cam_fov_ini", camFovIni);
     writeInt("time_fmt", timeFmt);
     writeInt("skip_intro", skipIntro);
+    writeInt("turbo_mode", turboMode);
     writeInt("music_start", musicStart);
     writeInt("music_playlist", musicPlaylist);
     writeInt("mute_unfocused", muteUnfocused);
@@ -1350,7 +1355,7 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
     uint64_t seenMask = 0;
     uint64_t seenMask2 = 0;
     constexpr uint64_t kAllModKeysMask = (1ull << 54) - 1ull;
-    constexpr uint64_t kAllModKeysMask2 = (1ull << 19) - 1ull;
+    constexpr uint64_t kAllModKeysMask2 = (1ull << 20) - 1ull;
     uint8_t legacyColorTheme = 0;
     bool hasThemeMode = false;
 
@@ -1448,6 +1453,11 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
             if (ParseAsciiInt(vP, vE, &iv)) {
                 g_skipIntro = (iv != 0) ? 1u : 0u;
                 seenMask |= (1u << 9);
+            }
+        } else if (AsciiEqIc(kP, kE, "turbo_mode")) {
+            if (ParseAsciiInt(vP, vE, &iv)) {
+                g_turboMode = (iv != 0) ? 1u : 0u;
+                seenMask2 |= (1ull << 19);
             }
         } else if (AsciiEqIc(kP, kE, "music_start")) {
             if (ParseAsciiInt(vP, vE, &iv)) {
@@ -1918,6 +1928,7 @@ static void LoadModSettingsOnStartup_Impl(uint8_t* userSettings) {
     g_lastIniFov    = kFovDesc.unsetFlt;
     g_timeFmt       = 0;
     g_skipIntro     = 0;
+    g_turboMode     = 0;
     g_musicStart    = 0;
     g_musicPlaylist = 0;
     g_muteUnfocused = 0;
@@ -2091,6 +2102,7 @@ static void LoadModSettingsOnStartup_Impl(uint8_t* userSettings) {
     }
 
     EnsureMusicPlaylistReady();
+    EnsureTurboScoresLoaded();
     OnColorThemeChanged();
     if (userSettings != nullptr) {
         ApplyUiScale(userSettings - 0x298);
@@ -2140,6 +2152,17 @@ static void TimeFmtAction_Impl(int sfxId) {
 static void SkipIntroAction_Impl(int sfxId) {
     g_skipIntro ^= 1u;
     ApplyOptionScaleChange(sfxId);
+}
+
+static void TurboModeAction_Impl(int sfxId) {
+    uint8_t* sm = GetScreenMgr();
+    if (sm != nullptr && *reinterpret_cast<const uint32_t*>(sm + 0x50) >= 0x11u) {
+        return;
+    }
+    g_turboMode ^= 1u;
+    EnsureTurboScoresLoaded();
+    if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+    SaveModSettings();
 }
 
 static int GetLevelThemeIdx() {
@@ -2632,6 +2655,7 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         outItems[n++] = OPT_CAM_DIST;
         outItems[n++] = OPT_DOLLY_ZOOM;
         if (!inPause) {
+            outItems[n++] = OPT_TURBO_MODE;
             outItems[n++] = OPT_RESET_SCORE;
         }
         outItems[n++] = OPT_BACK;
@@ -2693,6 +2717,7 @@ static bool IsOptItemAdjustable(OptItem item) {
     case OPT_MUTE_UNFOCUSED:
     case OPT_UP_KEY:
     case OPT_SKIP_INTRO:
+    case OPT_TURBO_MODE:
     case OPT_TIME_FMT:
     case OPT_EDGE_TIMER:
     case OPT_TIMER:
@@ -2785,6 +2810,7 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_MUSIC_PLAYLIST:   return &g_wstrMusicPlaylist;
     case OPT_MUTE_UNFOCUSED:   return &g_wstrMuteUnfocused;
     case OPT_SKIP_INTRO:       return &g_wstrSkipIntro;
+    case OPT_TURBO_MODE:       return &g_wstrTurboMode;
     case OPT_TIME_FMT:         return &g_wstrTimeFmt;
     case OPT_EDGE_TIMER:       return &g_wstrEdgeTimer;
     case OPT_TIMER:            return &g_wstrTimerType;
@@ -2846,6 +2872,7 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_MUTE_UNFOCUSED:
     case OPT_UP_KEY:
     case OPT_SKIP_INTRO:
+    case OPT_TURBO_MODE:
     case OPT_TIME_FMT:
     case OPT_MINIMAP_ENABLE:
     case OPT_SPEEDOMETER_ENABLE:
@@ -3009,6 +3036,7 @@ static int GetToggleState(OptItem item) {
     case OPT_MUTE_UNFOCUSED:  return g_muteUnfocused ? 1 : 0;
     case OPT_UP_KEY:      return (sm != nullptr && sm[0x2b4] != 0) ? 1 : 0;
     case OPT_SKIP_INTRO:  return g_skipIntro ? 1 : 0;
+    case OPT_TURBO_MODE:  return g_turboMode ? 1 : 0;
     case OPT_TIME_FMT:    return g_timeFmt ? 1 : 0;
     case OPT_MINIMAP_ENABLE: return GetMinimapDisplayEnabled() ? 1 : 0;
     case OPT_SPEEDOMETER_ENABLE: return g_speedometerEnable ? 1 : 0;
@@ -3936,6 +3964,10 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
         Game_GetLocalizedWString(tmp, g_skipIntro ? 0xb : 0xc);
         *outFreeHeap = true;
         return tmp;
+    case OPT_TURBO_MODE:
+        Game_GetLocalizedWString(tmp, g_turboMode ? 0xb : 0xc);
+        *outFreeHeap = true;
+        return tmp;
     case OPT_TIME_FMT:
         return g_timeFmt ? &g_wstrNew : &g_wstrDef;
     case OPT_EDGE_TIMER:
@@ -4089,6 +4121,7 @@ static void ExecuteOptToggle(OptItem item, int sfxId) {
     case OPT_MUTE_UNFOCUSED:  MuteUnfocusedAction_Impl(sfxId); break;
     case OPT_UP_KEY:          ToggleUpKeyWithSfx(sfxId); break;
     case OPT_SKIP_INTRO:      SkipIntroAction_Impl(sfxId); break;
+    case OPT_TURBO_MODE:      TurboModeAction_Impl(sfxId); break;
     case OPT_TIME_FMT:        TimeFmtAction_Impl(sfxId); break;
     case OPT_MINIMAP_ENABLE:     MinimapEnableAction_Impl(sfxId); break;
     case OPT_SPEEDOMETER_ENABLE: SpeedometerEnableAction_Impl(sfxId); break;
@@ -6558,6 +6591,10 @@ static void __declspec(naked) hk_musicStartGate() {
 // 8. Reset Score helper (used by in-place Reset Score confirm popup)
 // ------------------------------------------------------------------
 static void ResetAllScores_Impl() {
+    if (g_turboMode != 0) {
+        ResetTurboScores();
+        return;
+    }
     uint8_t* sm = GetScreenMgr();
     if (sm == nullptr) return;
     uint8_t* saveData = sm + 0x298;

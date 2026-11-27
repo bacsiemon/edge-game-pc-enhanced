@@ -73,6 +73,7 @@ void RegisterAllPatchesOnce() {
     RegisterCubeDistortion();
     RegisterGraphicsPreview();
     RegisterLeaderboards();
+    RegisterTurboMode();
 }
 
 } // namespace

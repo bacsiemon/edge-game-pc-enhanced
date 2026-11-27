@@ -36,6 +36,7 @@ extern bool    g_inRenderCamInterp;
 
 extern uint8_t g_timeFmt;
 extern uint8_t g_skipIntro;
+extern uint8_t g_turboMode;   // 0=off, 1=on
 extern uint8_t g_musicStart;
 extern uint8_t g_musicPlaylist; // 0=pc, 1=java
 extern uint8_t g_muteUnfocused; // 0=off, 1=on
@@ -339,5 +340,10 @@ void    __cdecl ResetPreviewCubeFxWhiteFlash();
 // Steam leaderboard mapping & Debrief button visibility (mod_leaderboards.cpp)
 bool    __cdecl DebriefHasLeaderboard();
 int32_t __cdecl GetDebriefButtonCount();
+
+// Turbo Mode score/prism persistence (mod_turbo_mode.cpp)
+void __cdecl EnsureTurboScoresLoaded();
+void __cdecl SaveTurboScores();
+void __cdecl ResetTurboScores();
 
 } // namespace edgemod

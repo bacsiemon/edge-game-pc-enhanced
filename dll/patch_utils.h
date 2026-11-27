@@ -224,3 +224,4 @@ void RegisterCubeDistortion();
 void RegisterMinimap();
 void RegisterGraphicsPreview();
 void RegisterLeaderboards();
+void RegisterTurboMode();

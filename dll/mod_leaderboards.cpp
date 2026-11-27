@@ -166,7 +166,7 @@ bool IsSteamApiReady() {
 }
 
 void __cdecl UploadOfficialLeaderboard_Impl(const uint8_t* ws) {
-    if (ws == nullptr) return;
+    if (ws == nullptr || g_turboMode != 0) return;
     void* lbMgr = *reinterpret_cast<void* const*>(0x5f9f80);
     uint8_t* sm = GetScreenMgr();
     if (lbMgr == nullptr || sm == nullptr || sm[0x334] == 0) return;
@@ -338,6 +338,7 @@ void __declspec(naked) hk_debriefLoadOfficialLbId() {
 } // namespace
 
 bool __cdecl DebriefHasLeaderboard() {
+    if (g_turboMode != 0) return false;
     return FindOfficialLeaderboardForCurrentLevel() != nullptr && IsSteamApiReady();
 }
 

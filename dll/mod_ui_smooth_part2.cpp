@@ -1739,7 +1739,8 @@ static void UpdateSpeedometerTracker(uint8_t* renderer, uint8_t* ws) {
         g_speedTracker.lastX = curX;
         g_speedTracker.lastZ = curZ;
 
-        if (!std::isfinite(stepDist) || stepDist > 45.0f) {
+        const float maxStepDist = (g_turboMode != 0) ? 90.0f : 45.0f;
+        if (!std::isfinite(stepDist) || stepDist > maxStepDist) {
             g_speedTracker.ResetWindow();
         } else {
             constexpr double kWindowSec = 0.20;

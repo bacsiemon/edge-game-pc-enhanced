@@ -69,7 +69,8 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 | **Gameplay**    | `skip intro`           | `off`, `on`                                                                      | toggle            | Instant 2-state switch                                                                                             |
 | **Gameplay**    | `cam distance`         | `mobile` (`-1`), `0.5`, `0.65`, `0.75`, `1`, `1.25`, `1.5`, `2`                  | popup             | Named `mobile` mode + numeric multipliers (default `1`)                                                            |
 | **Gameplay**    | `dolly zoom`           | `pc` (`-1`), `mobile` (`-2`), `0`, `5`, `10`, `15`, `20`, `25`, `30`, `40`, `50` | popup             | Two named presets (`pc`, `mobile`) + numeric FOV offsets (adds `40`, `50` to `g_fovPresets`; default `pc`)         |
-| **Gameplay**    | `reset score`          | *(Main Options only)*                                                            | **confirm popup** | In-place `no` / `yes` popup (defaults to `no`, no row dots, no Left/Right trigger)                                 |
+| **Gameplay**    | `turbo mode`           | `off`, `on` *(Main Options only)*                                                | toggle            | Android Turbo Mode physics, separate score/prism history (`edgemod_turbo_scores.ini`), & no Steam leaderboard upload |
+| **Gameplay**    | `reset score`          | *(Main Options only)*                                                            | **confirm popup** | In-place `no` / `yes` popup (defaults to `no`, no row dots, no Left/Right trigger; resets active Normal or Turbo history) |
 
 ---
 
@@ -83,7 +84,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 
 ## Control Behavior Guidelines
 
-### 1. Toggles (14 items)
+### 1. Toggles (15 items)
 
 - **Display:** 2 dots under the value. Lighter dot indicates the selected option.
 - **Interaction:** Click / Enter / Left / Right toggles immediately and saves, playing hover SFX (`2`).

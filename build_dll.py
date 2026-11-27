@@ -51,6 +51,7 @@ DLL_SOURCES = [
     "mod_cube_distortion.cpp",
     "mod_graphics_preview.cpp",
     "mod_leaderboards.cpp",
+    "mod_turbo_mode.cpp",
 ]
 
 

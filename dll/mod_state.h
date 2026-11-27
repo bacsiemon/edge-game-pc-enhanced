@@ -363,4 +363,22 @@ void __cdecl EnsureTurboScoresLoaded();
 void __cdecl SaveTurboScores();
 void __cdecl ResetTurboScores();
 
+// Custom 3-state Display Mode & resizable windowed mode (mod_display_mode.cpp)
+enum DisplayMode : uint8_t {
+    DISPLAY_MODE_FULLSCREEN = 0,
+    DISPLAY_MODE_WINDOWED   = 1,
+    DISPLAY_MODE_BORDERLESS = 2,
+};
+
+extern uint8_t g_displayMode;
+extern int32_t g_customWinW;
+extern int32_t g_customWinH;
+extern int32_t g_lastIniWinW;
+extern int32_t g_lastIniWinH;
+
+uint8_t __cdecl GetDisplayMode();
+void    __cdecl ApplyDisplayMode(uint8_t mode, bool saveSettings);
+bool    __cdecl HandleDisplayModeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, LRESULT* outResult);
+void    __cdecl SaveModSettingsPublic();
+
 } // namespace edgemod

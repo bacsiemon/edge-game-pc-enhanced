@@ -500,6 +500,10 @@ static LRESULT CALLBACK hk_GameWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         g_windowFocused = focused;
         SyncFocusAudioMute();
     }
+    LRESULT dispRes = 0;
+    if (HandleDisplayModeWndProc(hwnd, msg, wParam, lParam, &dispRes)) {
+        return dispRes;
+    }
     return reinterpret_cast<WNDPROC>(0x44d4e0)(hwnd, msg, wParam, lParam);
 }
 

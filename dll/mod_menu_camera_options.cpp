@@ -445,6 +445,10 @@ EDGE_STATIC_WSTR(g_wstrTimerPosBR,   "BR");
 EDGE_STATIC_WSTR(g_wstrResetScore,   "reset score");
 EDGE_STATIC_WSTR(g_wstrResetConfirm, "reset score?");
 EDGE_STATIC_WSTR(g_wstrCatDisplay,   "display");
+EDGE_STATIC_WSTR(g_wstrDisplayMode,  "display mode");
+EDGE_STATIC_WSTR(g_wstrFullscreen,   "fullscreen");
+EDGE_STATIC_WSTR(g_wstrWindowed,     "windowed");
+EDGE_STATIC_WSTR(g_wstrBorderless,   "borderless");
 EDGE_STATIC_WSTR(g_wstrCatGraphics,  "graphics");
 EDGE_STATIC_WSTR(g_wstrCatAudio,     "audio");
 EDGE_STATIC_WSTR(g_wstrCatUi,        "ui");
@@ -570,7 +574,7 @@ enum OptItem : int {
     OPT_CAT_BTN_MINIMAP,
     OPT_CAT_BTN_SPEEDOMETER,
     OPT_CAT_BTN_GAMEPLAY,
-    OPT_FULLSCREEN,
+    OPT_DISPLAY_MODE,
     OPT_PREVIEW_LEVEL,
     OPT_PRISM_VFX,
     OPT_CHROMA_AB,
@@ -1248,6 +1252,11 @@ static void SaveModSettings() {
     writeInt("speedometer_bg_opacity", speedometerBgOpacity);
     writeInt("speedometer_shadow_opacity", speedometerShadowOpacity);
     writeInt("speedometer_pos", speedometerPos);
+    writeInt("display_mode", GetDisplayMode());
+    writeInt("window_width", (g_customWinW >= 384) ? g_customWinW : 0);
+    writeInt("window_height", (g_customWinH >= 240) ? g_customWinH : 0);
+    writeInt("window_width_ini", (g_lastIniWinW >= 0) ? g_lastIniWinW : -1);
+    writeInt("window_height_ini", (g_lastIniWinH >= 0) ? g_lastIniWinH : -1);
 
     wchar_t tmpPath[MAX_PATH + 16]{};
     if (std::swprintf(tmpPath, MAX_PATH + 16, L"%ls.tmp", iniPath) <= 0) return;
@@ -1364,7 +1373,7 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
     uint64_t seenMask = 0;
     uint64_t seenMask2 = 0;
     constexpr uint64_t kAllModKeysMask = (1ull << 54) - 1ull;
-    constexpr uint64_t kAllModKeysMask2 = (1ull << 23) - 1ull;
+    constexpr uint64_t kAllModKeysMask2 = (1ull << 28) - 1ull;
     uint8_t legacyColorTheme = 0;
     bool hasThemeMode = false;
 
@@ -1752,6 +1761,31 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
                 g_speedometerPos = static_cast<uint8_t>(iv);
                 seenMask |= (1ull << 53);
             }
+        } else if (AsciiEqIc(kP, kE, "display_mode")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) {
+                g_displayMode = static_cast<uint8_t>(iv);
+                seenMask2 |= (1ull << 23);
+            }
+        } else if (AsciiEqIc(kP, kE, "window_width")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0) {
+                g_customWinW = iv;
+                seenMask2 |= (1ull << 24);
+            }
+        } else if (AsciiEqIc(kP, kE, "window_height")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0) {
+                g_customWinH = iv;
+                seenMask2 |= (1ull << 25);
+            }
+        } else if (AsciiEqIc(kP, kE, "window_width_ini")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= -1) {
+                g_lastIniWinW = iv;
+                seenMask2 |= (1ull << 26);
+            }
+        } else if (AsciiEqIc(kP, kE, "window_height_ini")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= -1) {
+                g_lastIniWinH = iv;
+                seenMask2 |= (1ull << 27);
+            }
         }
     }
 
@@ -1994,6 +2028,13 @@ static void LoadModSettingsOnStartup_Impl(uint8_t* userSettings) {
     g_lastIniMinimapCellH   = 0.0f;
     g_lastIniMinimapAlignX  = -1;
     g_lastIniMinimapAlignY  = -1;
+    g_displayMode           = (userSettings != nullptr && userSettings[0x1e] == 0)
+                                ? DISPLAY_MODE_WINDOWED
+                                : DISPLAY_MODE_FULLSCREEN;
+    g_customWinW            = 0;
+    g_customWinH            = 0;
+    g_lastIniWinW           = -1;
+    g_lastIniWinH           = -1;
 
     bool needsResave = true;
     bool fileExisted = LoadModSettingsFromIni(&needsResave);
@@ -2109,6 +2150,20 @@ static void LoadModSettingsOnStartup_Impl(uint8_t* userSettings) {
             g_minimapPosOverride = 0;
             g_lastIniMinimapAlignX = g_iniMinimapAlignX;
             g_lastIniMinimapAlignY = g_iniMinimapAlignY;
+            dirty = true;
+        }
+
+        int32_t iniWinW = (st != nullptr) ? *reinterpret_cast<const int32_t*>(st + 0x08) : 0;
+        int32_t iniWinH = (st != nullptr) ? *reinterpret_cast<const int32_t*>(st + 0x0c) : 0;
+        if (g_lastIniWinW < 0 || g_lastIniWinH < 0) {
+            g_lastIniWinW = iniWinW;
+            g_lastIniWinH = iniWinH;
+            dirty = true;
+        } else if (iniWinW != g_lastIniWinW || iniWinH != g_lastIniWinH) {
+            g_customWinW = 0;
+            g_customWinH = 0;
+            g_lastIniWinW = iniWinW;
+            g_lastIniWinH = iniWinH;
             dirty = true;
         }
     }
@@ -2578,7 +2633,7 @@ static int GetOptParentRowForCategory(int cat, bool inPause) {
 static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
     switch (cat) {
     case OPT_CAT_DISPLAY:
-        outItems[0] = OPT_FULLSCREEN;
+        outItems[0] = OPT_DISPLAY_MODE;
         outItems[1] = OPT_UI_SCALE;
         outItems[2] = OPT_AUTO_SCALE;
         outItems[3] = OPT_BACK;
@@ -2706,7 +2761,7 @@ static int __cdecl GetPauseOptRowCount() {
 
 static bool IsOptItemAdjustable(OptItem item) {
     switch (item) {
-    case OPT_FULLSCREEN:
+    case OPT_DISPLAY_MODE:
     case OPT_PREVIEW_LEVEL:
     case OPT_PRISM_VFX:
     case OPT_CHROMA_AB:
@@ -2863,10 +2918,7 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_MINIMAP_POS:
     case OPT_SPEEDOMETER_POS:      return &g_wstrTimerPosLbl;
     case OPT_RESET_SCORE:      return &g_wstrResetScore;
-    case OPT_FULLSCREEN:
-        Game_GetLocalizedWString(tmp, 0x34);
-        *outFreeHeap = true;
-        return tmp;
+    case OPT_DISPLAY_MODE:     return &g_wstrDisplayMode;
     case OPT_SOUNDS:
         Game_GetLocalizedWString(tmp, 0xa);
         *outFreeHeap = true;
@@ -2889,7 +2941,6 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
 
 static OptCtrlKind GetOptCtrlKind(OptItem item) {
     switch (item) {
-    case OPT_FULLSCREEN:
     case OPT_CHROMA_AB:
     case OPT_AUTO_SCALE:
     case OPT_CUBE_DISTORTION:
@@ -2905,6 +2956,7 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_MINIMAP_ENABLE:
     case OPT_SPEEDOMETER_ENABLE:
         return CTRL_TOGGLE;
+    case OPT_DISPLAY_MODE:
     case OPT_AA:
     case OPT_PREVIEW_LEVEL:
     case OPT_CAM_DIST:
@@ -3054,12 +3106,6 @@ static uint8_t* GetCustomThemeFieldPtr(OptItem item) {
 static int GetToggleState(OptItem item) {
     uint8_t* sm = GetScreenMgr();
     switch (item) {
-    case OPT_FULLSCREEN: {
-        void* app = reinterpret_cast<void*(__cdecl*)()>(0x4eecd0)();
-        using GetFsFn = uint8_t(__thiscall*)(void*);
-        uint8_t isFs = (*reinterpret_cast<GetFsFn**>(app))[0x14 / 4](app);
-        return isFs ? 1 : 0;
-    }
     case OPT_CHROMA_AB:       return g_chromaAb ? 1 : 0;
     case OPT_AUTO_SCALE:      return g_autoScale ? 1 : 0;
     case OPT_CUBE_DISTORTION:     return g_customTheme.cubeDistortion ? 1 : 0;
@@ -3080,6 +3126,7 @@ static int GetToggleState(OptItem item) {
 
 static int GetPopupChoiceCount(OptItem item) {
     switch (item) {
+    case OPT_DISPLAY_MODE:            return 3;
     case OPT_AA:
         if (g_aaLevelCount <= 0) ProbeSupportedAaLevels();
         return (g_aaLevelCount > 0) ? g_aaLevelCount : 1;
@@ -3120,6 +3167,7 @@ static int GetPopupCurrentChoice(OptItem item) {
         return (*field <= 2u) ? static_cast<int>(*field) : 0;
     }
     switch (item) {
+    case OPT_DISPLAY_MODE:       return static_cast<int>(GetDisplayMode());
     case OPT_AA: {
         int cnt = GetPopupChoiceCount(OPT_AA);
         int best = 0;
@@ -3166,6 +3214,7 @@ static int GetPopupCurrentChoice(OptItem item) {
 
 static int GetPopupDefaultChoice(OptItem item) {
     switch (item) {
+    case OPT_DISPLAY_MODE:       return 0; // fullscreen
     case OPT_AA: {
         int cnt = GetPopupChoiceCount(OPT_AA);
         int defAa = GetLegacyDefaultAa(1);
@@ -3197,6 +3246,11 @@ static int GetPopupDefaultChoice(OptItem item) {
 static const EdgeWString* GetPopupChoiceWstr(OptItem item, int idx, EdgeWString* tmp, bool* outFreeHeap) {
     *outFreeHeap = false;
     switch (item) {
+    case OPT_DISPLAY_MODE:
+        idx = std::clamp(idx, 0, 2);
+        if (idx == 1) return &g_wstrWindowed;
+        if (idx == 2) return &g_wstrBorderless;
+        return &g_wstrFullscreen;
     case OPT_AA: {
         int cnt = GetPopupChoiceCount(OPT_AA);
         idx = std::clamp(idx, 0, cnt - 1);
@@ -3328,6 +3382,10 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
     idx = std::clamp(idx, 0, cnt - 1);
     uint8_t* sm = GetScreenMgr();
     switch (item) {
+    case OPT_DISPLAY_MODE:
+        ApplyDisplayMode(static_cast<uint8_t>(idx), true);
+        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+        break;
     case OPT_RESET_SCORE:
         if (idx == 1) {
             ResetAllScores_Impl();
@@ -3898,13 +3956,11 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
     *outFreeHeap = false;
     uint8_t* sm = GetScreenMgr();
     switch (item) {
-    case OPT_FULLSCREEN: {
-        void* app = reinterpret_cast<void*(__cdecl*)()>(0x4eecd0)();
-        using GetFsFn = uint8_t(__thiscall*)(void*);
-        uint8_t isFs = (*reinterpret_cast<GetFsFn**>(app))[0x14 / 4](app);
-        Game_GetLocalizedWString(tmp, isFs ? 0xb : 0xc);
-        *outFreeHeap = true;
-        return tmp;
+    case OPT_DISPLAY_MODE: {
+        uint8_t mode = GetDisplayMode();
+        if (mode == DISPLAY_MODE_WINDOWED) return &g_wstrWindowed;
+        if (mode == DISPLAY_MODE_BORDERLESS) return &g_wstrBorderless;
+        return &g_wstrFullscreen;
     }
     case OPT_PREVIEW_LEVEL:
         if (!IsGraphicsPreviewFileValid()) return &g_wstrPreviewMissing;
@@ -4105,21 +4161,6 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
     }
 }
 
-static void ToggleFullscreenWithSfx(int sfxId) {
-    uint8_t* sm = GetScreenMgr();
-    void* app = reinterpret_cast<void*(__cdecl*)()>(0x4eecd0)();
-    if (app != nullptr) {
-        using GetFsFn = uint8_t(__thiscall*)(void*);
-        using SetFsFn = void(__thiscall*)(void*, int);
-        uint8_t isFs = (*reinterpret_cast<GetFsFn**>(app))[0x14 / 4](app);
-        (*reinterpret_cast<SetFsFn**>(app))[0x10 / 4](app, isFs ? 0 : 1);
-    }
-    if (sm != nullptr) {
-        if (sfxId > 0) Game_PlaySfx(sm, sfxId);
-        Game_SaveUserSettings(sm + 0x298);
-    }
-}
-
 static void ToggleUpKeyWithSfx(int sfxId) {
     uint8_t* sm = GetScreenMgr();
     if (sm == nullptr) return;
@@ -4148,7 +4189,6 @@ static void SpeedometerEnableAction_Impl(int sfxId) {
 
 static void ExecuteOptToggle(OptItem item, int sfxId) {
     switch (item) {
-    case OPT_FULLSCREEN:         ToggleFullscreenWithSfx(sfxId); break;
     case OPT_CHROMA_AB:          ChromaAbAction_Impl(sfxId); break;
     case OPT_AUTO_SCALE:         AutoScaleAction_Impl(sfxId); break;
     case OPT_CUBE_DISTORTION:    CubeDistortionAction_Impl(sfxId); break;
@@ -7424,6 +7464,10 @@ static void __declspec(naked) hk_scoresPrismGridOrCount() {
 } // namespace
 
 namespace edgemod {
+
+void __cdecl SaveModSettingsPublic() {
+    SaveModSettings();
+}
 
 void __cdecl ResetPreviewCubeFxWhiteFlash() {
     ResetPreviewCubeFxWhiteFlash_Impl();

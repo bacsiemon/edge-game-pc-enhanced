@@ -8,7 +8,7 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 
 | Category        | Option                 | Current / Target Values                                                          | Control           | Notes                                                                                                              |
 | --------------- | ---------------------- | -------------------------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------ |
-| **Display**     | `fullscreen`           | `off`, `on`                                                                      | toggle            | Instant 2-state switch                                                                                             |
+| **Display**     | `display mode`         | `fullscreen`, `windowed`, `borderless`                                           | popup             | Replaces vanilla fullscreen toggle; `windowed` supports corner-drag resizing (`settings.ini` compatible)           |
 | **Display**     | `ui scale`             | `0.5`..`2.5` presets (clamped `0.1..2.5`)                                        | slider            | Preview value while dragging/stepping; call `ApplyUiScale` + save on release so mouse coords don't jump mid-drag   |
 | **Display**     | `auto scale`           | `off`, `on`                                                                      | toggle            | Instant 2-state switch                                                                                             |
 | **Graphics**    | `preview level`        | `light 1`, `light 2`, `dark 1`, `dark 2` *(Main Menu only)*                      | popup             | Sets the live 3D preview level theme (`0..3`, default `light 1`, `missing` if `levels/graphics_preview.bin` invalid) |
@@ -87,12 +87,12 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
 
 ## Control Behavior Guidelines
 
-### 1. Toggles (15 items)
+### 1. Toggles (14 items)
 
 - **Display:** 2 dots under the value. Lighter dot indicates the selected option.
 - **Interaction:** Click / Enter / Left / Right toggles immediately and saves, playing hover SFX (`2`).
 
-### 2. Popups (28 setting popups + 1 confirm popup)
+### 2. Popups (29 setting popups + 1 confirm popup)
 
 - **Display:**
   - Setting popups show multiple horizontal dots under the value (lighter dot indicates the selected option). Action confirm popups (`reset score`) show no dots under the row.
@@ -113,5 +113,5 @@ Specification and mapping for every setting currently in `mod_menu_camera_option
   - **Mouse:** Click anywhere on the track to jump, drag thumb to scrub (pointer stays captured and row stays strong rainbow even if cursor leaves the row vertically), and release to save. Value changes during scrubbing play hover SFX (`2`).
   - **Keyboard / Gamepad:** Left / Right steps by preset or fixed increment (`5` for `sounds`/`music`, `10` for `background`/`drop shadow`, preset index for `prism vfx`/`ui scale`/`size`/`width`/`height`/`range`), playing hover SFX (`2`).
   - **Reset to default:** Press `R` / `Backspace` / `Delete` while a slider row is focused to snap back to the default value, playing hover SFX (`2`).
-  - **Special case (`ui scale`):** Update the displayed slider value while dragging/stepping, and call `ApplyUiScale` + `SaveModSettings` on mouse-up / Left-Right release (or cursor/focus change) without reverting `auto scale` to `off` (all mod options save atomically to `%LocalAppData%\Two Tribes\EDGE\edgemod_settings.ini`; vanilla options `fullscreen`, `sounds`, `music`, `up key`, and `reset score` continue using `Game_SaveUserSettings`).
+  - **Special case (`ui scale`):** Update the displayed slider value while dragging/stepping, and call `ApplyUiScale` + `SaveModSettings` on mouse-up / Left-Right release (or cursor/focus change) without reverting `auto scale` to `off` (all mod options save atomically to `%LocalAppData%\Two Tribes\EDGE\edgemod_settings.ini`; `display mode` also keeps vanilla `fullScreen` in `local_savedata.ttsav` synced alongside `sounds`, `music`, `up key`, and `reset score` via `Game_SaveUserSettings`).
   - **Special case (`minimap` `enable` / `width` / `height` / `range` / `position`):** Read-only against `%LocalAppData%\Two Tribes\EDGE\settings.ini`: until adjusted in the menu (`minimap_*_override = 0`), the game uses `settings.ini` values directly; once changed in Options (`minimap_*_override = 1`), the chosen option takes effect (with `width`/`height`/`range` scaling the `160px` / `19.5` baseline), unless `settings.ini` is later edited on disk.

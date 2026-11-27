@@ -53,6 +53,7 @@ DLL_SOURCES = [
     "mod_graphics_preview.cpp",
     "mod_leaderboards.cpp",
     "mod_turbo_mode.cpp",
+    "mod_display_mode.cpp",
 ]
 
 

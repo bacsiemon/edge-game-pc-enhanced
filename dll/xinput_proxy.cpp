@@ -74,6 +74,7 @@ void RegisterAllPatchesOnce() {
     RegisterGraphicsPreview();
     RegisterLeaderboards();
     RegisterTurboMode();
+    RegisterDisplayMode();
 }
 
 } // namespace

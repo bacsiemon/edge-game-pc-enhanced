@@ -225,3 +225,4 @@ void RegisterMinimap();
 void RegisterGraphicsPreview();
 void RegisterLeaderboards();
 void RegisterTurboMode();
+void RegisterDisplayMode();

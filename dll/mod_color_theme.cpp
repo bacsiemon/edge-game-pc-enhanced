@@ -1052,19 +1052,19 @@ static bool         g_anyNormalPrismRendered = false;
 static D3DMATERIAL9 g_prismMat{};
 
 static void PreparePrismMaterial(int32_t animTick, uint8_t prismStyle) {
-    uint8_t* sm = GetScreenMgr();
-    float alpha = (sm != nullptr && (*reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x11u || IsGraphicsPreviewActive()))
-        ? std::clamp(g_uiAlpha, 0.0f, 1.0f)
-        : 0.0f;
+    float visTick = GetVisualEntityTick(GetWorldScreen(), animTick);
 
     std::memset(&g_prismMat, 0, sizeof(g_prismMat));
     g_prismMat.Diffuse.a = 1.0f;
     g_prismMat.Ambient.a = 1.0f;
 
     if (prismStyle == 1u) {
-        int i0 = ((animTick % 18) + 18) % 18;
+        float mPhase = std::fmod(visTick, 18.0f);
+        if (mPhase < 0.0f) mPhase += 18.0f;
+        int i0 = static_cast<int>(mPhase) % 18;
         int i1 = (i0 + 1) % 18;
-        Rgb8 base = LerpRgb8(kAndroidPrismColors[i0], kAndroidPrismColors[i1], alpha);
+        float frac = mPhase - std::floor(mPhase);
+        Rgb8 base = LerpRgb8(kAndroidPrismColors[i0], kAndroidPrismColors[i1], frac);
         float diffScale = 80.0f / 205.0f;
         g_prismMat.Diffuse.r  = diffScale;
         g_prismMat.Diffuse.g  = diffScale;
@@ -1073,7 +1073,7 @@ static void PreparePrismMaterial(int32_t animTick, uint8_t prismStyle) {
         g_prismMat.Emissive.g = static_cast<float>(base.g) / 255.0f;
         g_prismMat.Emissive.b = static_cast<float>(base.b) / 255.0f;
     } else {
-        float phase = std::fmod((static_cast<float>(animTick) + alpha) / 1.35f, 9.0f);
+        float phase = std::fmod(visTick / 1.35f, 9.0f);
         if (phase < 0.0f) phase += 9.0f;
         int i0 = static_cast<int>(phase) % 9;
         int i1 = (i0 + 1) % 9;
@@ -1106,7 +1106,14 @@ static void __fastcall Hook_PrismRender(uint8_t* prism) {
         if (eff.prisms == 0u && eff.playerCube != 0u) {
             lightGuard.BeginRestorePc();
         }
-        orig(prism);
+        if (prism != nullptr && *reinterpret_cast<void* const*>(prism + 0x24) == nullptr) {
+            int32_t origTick = *reinterpret_cast<int32_t*>(prism + 0x14);
+            *reinterpret_cast<int32_t*>(prism + 0x14) = origTick + static_cast<int32_t>(std::floor(GetPauseExtraTicks()));
+            orig(prism);
+            *reinterpret_cast<int32_t*>(prism + 0x14) = origTick;
+        } else {
+            orig(prism);
+        }
         return;
     }
 
@@ -2323,17 +2330,15 @@ static void __fastcall Hook_MovingPlatformRender(uint8_t* plat) {
             if (s_anyPlatEdgeVbModified) {
                 SyncMovingPlatEdgeUVs(edgeModel, false);
             }
-            reinterpret_cast<void(__cdecl*)(void*, int32_t, int)>(0x495c50)(edgeModel, animTick, 0xd);
+            int32_t visTick = animTick + static_cast<int32_t>(std::floor(GetPauseExtraTicks()));
+            reinterpret_cast<void(__cdecl*)(void*, int32_t, int)>(0x495c50)(edgeModel, visTick, 0xd);
             reinterpret_cast<DrawMeshFn>(0x421460)(edgeModel, 0);
         } else {
             SyncMovingPlatEdgeUVs(edgeModel, true);
 
-            uint8_t* sm = GetScreenMgr();
-            float alpha = (sm != nullptr && (*reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x11u || IsGraphicsPreviewActive()))
-                ? std::clamp(g_uiAlpha, 0.0f, 1.0f)
-                : 0.0f;
+            float visTick = GetVisualEntityTick(GetWorldScreen(), animTick);
             float ticksPerColor = (borderStyle == 2u) ? 2.7f : 1.0f;
-            float phase = std::fmod((static_cast<float>(animTick) + alpha) / (9.0f * ticksPerColor), 1.0f);
+            float phase = std::fmod(visTick / (9.0f * ticksPerColor), 1.0f);
             if (phase < 0.0f) phase += 1.0f;
 
             float mat[16] = {
@@ -2588,7 +2593,7 @@ static void __fastcall Hook_HoloSwitchRender(uint8_t* holo) {
 
     uint8_t holoStyle = GetEffectiveTheme().hintTile;
     uint8_t* ws = *reinterpret_cast<uint8_t**>(0x5f9064);
-    float smoothFrame = (ws != nullptr) ? GetSmoothWsFrame(ws) : 0.0f;
+    float smoothFrame = (ws != nullptr) ? GetVisualWsFrame(ws) : 0.0f;
     float phase = 0.0f;
     if (holoStyle == 0u) {
         // PC: 13 pastel colors over 65 ticks (5 ticks/color, matching holoswitch.ema)
@@ -2666,7 +2671,7 @@ static void RenderMobileShrinker(
     float topY = static_cast<float>(*reinterpret_cast<const int32_t*>(shrinker + 0x0c)) + 0.45f;
     bool isToBig = (*reinterpret_cast<const int32_t*>(shrinker + 0x14) != 0);
 
-    float smoothFrame = (ws != nullptr) ? GetSmoothWsFrame(ws) : 0.0f;
+    float smoothFrame = (ws != nullptr) ? GetVisualWsFrame(ws) : 0.0f;
     float u = std::fmod(smoothFrame, 50.0f) / 50.0f;
     if (u < 0.0f) u += 1.0f;
     float raw = isToBig ? u : (1.0f - u);
@@ -2722,7 +2727,7 @@ static void RenderJavaShrinker(IDirect3DDevice9* dev, const uint8_t* shrinker, c
         42.0f / 50.0f, 36.0f / 50.0f, 30.0f / 50.0f, 22.0f / 50.0f, 14.0f / 50.0f
     };
 
-    float smoothFrame = (ws != nullptr) ? GetSmoothWsFrame(ws) : 0.0f;
+    float smoothFrame = (ws != nullptr) ? GetVisualWsFrame(ws) : 0.0f;
     float t = std::fmod(smoothFrame * (22.0f / 30.0f), 22.0f);
     if (t < 0.0f) t += 22.0f;
     float tEff = isToBig ? (22.0f - t) : t;
@@ -2963,7 +2968,7 @@ static void __fastcall Hook_HintGhostRender(void* cube) {
                 s_pcGhostHasPrev = false;
             }
             if (wsFrame != s_pcGhostLastFrame || !s_pcGhostHasPrev) {
-                uint8_t freshA = mat[0x38];
+                uint8_t freshA = mat[0x3f];
                 s_pcGhostPrevA = s_pcGhostHasPrev ? s_pcGhostCurA : freshA;
                 s_pcGhostCurA = freshA;
                 s_pcGhostHasPrev = true;
@@ -2972,20 +2977,22 @@ static void __fastcall Hook_HintGhostRender(void* cube) {
             }
             const uint8_t* sm = GetScreenMgr();
             uint32_t state = (sm != nullptr) ? *reinterpret_cast<const uint32_t*>(sm + 0x50) : 0u;
-            uint8_t smoothA = s_pcGhostCurA;
-            if (state == 0x11u) {
-                float a = std::clamp(g_uiAlpha, 0.0f, 1.0f);
-                smoothA = static_cast<uint8_t>(std::clamp(
-                    static_cast<int>(std::lround(
-                        static_cast<float>(s_pcGhostPrevA) +
-                        static_cast<float>(static_cast<int>(s_pcGhostCurA) - static_cast<int>(s_pcGhostPrevA)) * a
-                    )),
-                    0, 255
-                ));
+            if (state != 0x12u || IsGraphicsPreviewActive()) {
+                uint8_t smoothA = s_pcGhostCurA;
+                if (state == 0x11u) {
+                    float a = std::clamp(g_uiAlpha, 0.0f, 1.0f);
+                    smoothA = static_cast<uint8_t>(std::clamp(
+                        static_cast<int>(std::lround(
+                            static_cast<float>(s_pcGhostPrevA) +
+                            static_cast<float>(static_cast<int>(s_pcGhostCurA) - static_cast<int>(s_pcGhostPrevA)) * a
+                        )),
+                        0, 255
+                    ));
+                }
+                mat[0x3f] = smoothA;
+                mat[0x43] = smoothA;
+                *reinterpret_cast<uint32_t*>(mat + 0x08) |= 0x40u;
             }
-            mat[0x38] = smoothA;
-            mat[0x3c] = smoothA;
-            *reinterpret_cast<uint32_t*>(mat + 0x08) |= 0x40u;
         }
     } else if (ws == nullptr) {
         s_pcGhostWs = nullptr;
@@ -3014,6 +3021,14 @@ static uint8_t GetEffectiveCubeMatStyle() {
     return eff.darkCube;
 }
 
+static bool IsPcHintGhostWithJavaPlayerCube() {
+    if (g_curMatCubeType != 1) return false;
+    const uint8_t* ws = *reinterpret_cast<const uint8_t* const*>(0x5f9064);
+    if (ws == nullptr || ws[0x48] != 0) return false;
+    const CustomThemeSettings eff = GetEffectiveTheme();
+    return (eff.hintGhost == 0u && eff.playerCube == 2u);
+}
+
 static void* __cdecl Hook_ComputeCubeDiffuse(
     uint8_t* out, const uint8_t* baseColor,
     int multR, int multG, int multB,
@@ -3028,6 +3043,14 @@ static void* __cdecl Hook_ComputeCubeDiffuse(
         }
         out[3] = baseColor[3];
         return out;
+    }
+    uint8_t cleanBase[4]{};
+    if (baseColor != nullptr && IsPcHintGhostWithJavaPlayerCube()) {
+        cleanBase[0] = static_cast<uint8_t>((g_rawCubePal15 >> 16) & 0xffu);
+        cleanBase[1] = static_cast<uint8_t>((g_rawCubePal15 >> 8) & 0xffu);
+        cleanBase[2] = static_cast<uint8_t>(g_rawCubePal15 & 0xffu);
+        cleanBase[3] = baseColor[3];
+        baseColor = cleanBase;
     }
     using OrigFn = void*(__cdecl*)(uint8_t*, const uint8_t*, int, int, int, int, int, int);
     return reinterpret_cast<OrigFn>(0x490e30)(out, baseColor, multR, multG, multB, addR, addG, addB);
@@ -3057,6 +3080,14 @@ static void* __cdecl Hook_ComputeCubeMatColor(
         multG = scaleMult(multG);
         multB = scaleMult(multB);
     }
+    uint8_t cleanBase[4]{};
+    if (baseColor != nullptr && IsPcHintGhostWithJavaPlayerCube()) {
+        cleanBase[0] = static_cast<uint8_t>((g_rawCubePal15 >> 16) & 0xffu);
+        cleanBase[1] = static_cast<uint8_t>((g_rawCubePal15 >> 8) & 0xffu);
+        cleanBase[2] = static_cast<uint8_t>(g_rawCubePal15 & 0xffu);
+        cleanBase[3] = baseColor[3];
+        baseColor = cleanBase;
+    }
     using OrigFn = void*(__cdecl*)(uint8_t*, const uint8_t*, int, int, int, int, int, int);
     return reinterpret_cast<OrigFn>(0x490e30)(out, baseColor, multR, multG, multB, addR, addG, addB);
 }
@@ -3069,9 +3100,268 @@ static void __declspec(naked) Hook_ComputeCubeMatColor_Naked() {
     }
 }
 
+struct CubeMatColors {
+    uint8_t amb[4]{};
+    uint8_t diff[4]{};
+    uint8_t emi[4]{};
+    bool    valid = false;
+};
+
+static bool          s_pauseCubeActive     = false;
+static double        s_pauseCubeTickAcc    = 0.0;
+static uint8_t       s_pauseCubeLastStyle  = 0;
+static uint8_t       s_pauseGhostLastStyle = 0;
+static CubeMatColors s_pausePlayerPrev{};
+static CubeMatColors s_pausePlayerCur{};
+static CubeMatColors s_pauseGhostPrev{};
+static CubeMatColors s_pauseGhostCur{};
+
+static void SeedCubeMatColorsFromCube(const uint8_t* cube, CubeMatColors* out) {
+    if (cube == nullptr) {
+        out->valid = false;
+        return;
+    }
+    const uint8_t* mat = *reinterpret_cast<const uint8_t* const*>(cube + 0x204);
+    if (mat == nullptr) {
+        out->valid = false;
+        return;
+    }
+    std::memcpy(out->amb,  mat + 0x3c, 4);
+    std::memcpy(out->diff, mat + 0x40, 4);
+    std::memcpy(out->emi,  mat + 0x48, 4);
+    out->valid = true;
+}
+
+static void ComputeCubeMaterialColors(
+    const uint8_t* ws, const uint8_t* cube, bool isHintGhost, uint32_t visTickForGhost, CubeMatColors* out
+) {
+    if (ws == nullptr || cube == nullptr || out == nullptr) {
+        if (out != nullptr) out->valid = false;
+        return;
+    }
+    uint32_t pal15 = *reinterpret_cast<const uint32_t*>(0x5f914c);
+    uint8_t baseColor[4] = {
+        static_cast<uint8_t>((pal15 >> 16) & 0xffu),
+        static_cast<uint8_t>((pal15 >> 8) & 0xffu),
+        static_cast<uint8_t>(pal15 & 0xffu),
+        0xffu
+    };
+
+    if (!isHintGhost) {
+        float flashT = *reinterpret_cast<const float*>(cube + 0x2a8);
+        if (flashT > 0.0f) {
+            uint8_t flashCol[4] = {
+                *reinterpret_cast<const uint8_t*>(0x5e3de4),
+                *reinterpret_cast<const uint8_t*>(0x5e3de5),
+                *reinterpret_cast<const uint8_t*>(0x5e3de6),
+                0xffu
+            };
+            uint8_t tmp[4]{};
+            reinterpret_cast<void*(__cdecl*)(uint8_t*, const uint8_t*, const uint8_t*, float)>(0x490ce0)(
+                tmp, baseColor, flashCol, flashT
+            );
+            std::memcpy(baseColor, tmp, 4);
+        }
+    } else {
+        uint32_t m = visTickForGhost % 10u;
+        int32_t b = (m < 5u)
+            ? static_cast<int32_t>(5u * (50u + m))
+            : static_cast<int32_t>(5u * (60u - m));
+        if (ws[0x50] != 0u) {
+            int32_t fadeIn = *reinterpret_cast<const int32_t*>(ws + 0x64);
+            if (fadeIn > 0) {
+                b = (((6 - fadeIn) * 4096 / 6) * 250) >> 12;
+            }
+        } else {
+            int32_t fadeOut = *reinterpret_cast<const int32_t*>(ws + 0x68);
+            if (fadeOut > 0) {
+                b = ((fadeOut * 4096 / 5) * 250) >> 12;
+            }
+        }
+        baseColor[3] = static_cast<uint8_t>(std::clamp(b / 2, 0, 255));
+    }
+
+    void** cfgPtr = reinterpret_cast<void**(__cdecl*)()>(0x4764c0)();
+    void* cfg = (cfgPtr != nullptr) ? *cfgPtr : nullptr;
+    if (cfg == nullptr) {
+        out->valid = false;
+        return;
+    }
+    auto cfgInt = reinterpret_cast<int(__thiscall*)(void*, int)>(0x4408f0);
+
+    g_curMatCubeType = isHintGhost ? 1 : 0;
+    Hook_ComputeCubeDiffuse(
+        out->diff, baseColor,
+        cfgInt(cfg, *reinterpret_cast<const int*>(cube + 0x1c4)),
+        cfgInt(cfg, *reinterpret_cast<const int*>(cube + 0x1c8)),
+        cfgInt(cfg, *reinterpret_cast<const int*>(cube + 0x1cc)),
+        cfgInt(cfg, *reinterpret_cast<const int*>(cube + 0x1d0)),
+        cfgInt(cfg, *reinterpret_cast<const int*>(cube + 0x1d4)),
+        cfgInt(cfg, *reinterpret_cast<const int*>(cube + 0x1d8))
+    );
+    Hook_ComputeCubeMatColor(
+        out->amb, baseColor,
+        cfgInt(cfg, *reinterpret_cast<const int*>(cube + 0x1dc)),
+        cfgInt(cfg, *reinterpret_cast<const int*>(cube + 0x1e0)),
+        cfgInt(cfg, *reinterpret_cast<const int*>(cube + 0x1e4)),
+        cfgInt(cfg, *reinterpret_cast<const int*>(cube + 0x1e8)),
+        cfgInt(cfg, *reinterpret_cast<const int*>(cube + 0x1ec)),
+        cfgInt(cfg, *reinterpret_cast<const int*>(cube + 0x1f0))
+    );
+    out->emi[0] = *reinterpret_cast<const uint8_t*>(0x5f88e0);
+    out->emi[1] = *reinterpret_cast<const uint8_t*>(0x5f88e1);
+    out->emi[2] = *reinterpret_cast<const uint8_t*>(0x5f88e2);
+    out->emi[3] = 0xffu;
+    out->valid = true;
+}
+
+static void WriteLerpedCubeMat(
+    uint8_t* cube, const CubeMatColors& prev, const CubeMatColors& cur, float frac
+) {
+    if (cube == nullptr || !cur.valid) return;
+    uint8_t* mat = *reinterpret_cast<uint8_t**>(cube + 0x204);
+    if (mat == nullptr) return;
+    const CubeMatColors& p = prev.valid ? prev : cur;
+    float f = std::clamp(frac, 0.0f, 1.0f);
+    auto lerp4 = [f](const uint8_t a[4], const uint8_t b[4], uint8_t out[4]) {
+        for (int i = 0; i < 4; ++i) {
+            int v = static_cast<int>(std::lround(
+                static_cast<float>(a[i]) + static_cast<float>(static_cast<int>(b[i]) - static_cast<int>(a[i])) * f
+            ));
+            out[i] = static_cast<uint8_t>(std::clamp(v, 0, 255));
+        }
+    };
+    lerp4(p.amb,  cur.amb,  mat + 0x3c);
+    lerp4(p.diff, cur.diff, mat + 0x40);
+    lerp4(p.emi,  cur.emi,  mat + 0x48);
+    *reinterpret_cast<uint32_t*>(mat + 0x08) |= 0x40u;
+}
+
 } // namespace
 
 namespace edgemod {
+
+void __cdecl ResetPausedLevelVisualsState() {
+    s_pauseCubeActive = false;
+    s_pauseCubeTickAcc = 0.0;
+    s_pausePlayerPrev.valid = false;
+    s_pausePlayerCur.valid = false;
+    s_pauseGhostPrev.valid = false;
+    s_pauseGhostCur.valid = false;
+}
+
+void __cdecl UpdatePausedLevelVisuals(uint8_t* ws, float dt, bool wsFrozen) {
+    if (ws == nullptr) return;
+    uint8_t* lvl = GetLevel();
+
+    // 1. Keep PC finish platform, shrinker, and all-theme prism spinning animations running
+    if (lvl != nullptr) {
+        auto modelUpdate = reinterpret_cast<void(__thiscall*)(void*)>(0x421590);
+        uint8_t* fin = *reinterpret_cast<uint8_t**>(lvl + 0x0);
+        if (fin != nullptr) {
+            void* finModel = *reinterpret_cast<void**>(fin + 0xc);
+            if (finModel != nullptr) modelUpdate(finModel);
+        }
+
+        int32_t shrinkerCount = *reinterpret_cast<const int32_t*>(lvl + 0x50);
+        uint8_t** shrinkers = *reinterpret_cast<uint8_t***>(lvl + 0x54);
+        if (shrinkers != nullptr && shrinkerCount > 0) {
+            for (int32_t i = 0; i < shrinkerCount; ++i) {
+                uint8_t* sh = shrinkers[i];
+                if (sh != nullptr && sh[0x10] != 0u) {
+                    void* shModel = *reinterpret_cast<void**>(sh + 0x18);
+                    if (shModel != nullptr) modelUpdate(shModel);
+                }
+            }
+        }
+
+        int32_t prismCount = *reinterpret_cast<const int32_t*>(lvl + 0x30);
+        uint8_t** prisms = *reinterpret_cast<uint8_t***>(lvl + 0x34);
+        if (prisms != nullptr && prismCount > 0) {
+            for (int32_t i = 0; i < prismCount; ++i) {
+                uint8_t* pr = prisms[i];
+                if (pr != nullptr && *reinterpret_cast<void* const*>(pr + 0x24) == nullptr && pr[0x18] != 0u) {
+                    void* prModel = *reinterpret_cast<void**>(pr + 0x1c);
+                    void* prShadow = *reinterpret_cast<void**>(pr + 0x2c);
+                    if (prModel != nullptr) modelUpdate(prModel);
+                    if (prShadow != nullptr) modelUpdate(prShadow);
+                }
+            }
+        }
+    }
+
+    // 2. Advance Player Cube & PC Hint Ghost palette/material colors smoothly at 30 Hz + sub-tick lerp
+    if (!wsFrozen || lvl == nullptr) return;
+
+    int theme = *reinterpret_cast<const int*>(lvl + 0x6c);
+    uint8_t* cube0 = *reinterpret_cast<uint8_t**>(ws + 0x34);
+    uint8_t* cube1 = *reinterpret_cast<uint8_t**>(ws + 0x38);
+    bool hasPlayer = (cube0 != nullptr && cube0[0x171] == 0u);
+    bool hasHintGhost = (cube1 != nullptr && ws[0x48] == 0u &&
+                         (ws[0x50] != 0u || *reinterpret_cast<const int32_t*>(ws + 0x68) > 0));
+    const CustomThemeSettings eff = GetEffectiveTheme();
+
+    auto stepOneCubeTick = [&](uint32_t visTick, bool shiftPrev) {
+        uint32_t origWsFrame = *reinterpret_cast<uint32_t*>(ws + 0x4);
+        *reinterpret_cast<uint32_t*>(ws + 0x4) = visTick;
+        Hook_ComputeCubePalette(theme);
+        *reinterpret_cast<uint32_t*>(ws + 0x4) = origWsFrame;
+
+        if (shiftPrev) s_pausePlayerPrev = s_pausePlayerCur;
+        if (hasPlayer) {
+            ComputeCubeMaterialColors(ws, cube0, false, visTick, &s_pausePlayerCur);
+        } else {
+            s_pausePlayerCur.valid = false;
+        }
+
+        if (shiftPrev) s_pauseGhostPrev = s_pauseGhostCur;
+        if (hasHintGhost) {
+            ComputeCubeMaterialColors(ws, cube1, true, visTick, &s_pauseGhostCur);
+        } else {
+            s_pauseGhostCur.valid = false;
+        }
+    };
+
+    uint32_t baseVisTick = *reinterpret_cast<const uint32_t*>(ws + 0x4)
+                         + static_cast<uint32_t>(std::floor(GetPauseExtraTicks()));
+
+    if (!s_pauseCubeActive) {
+        if (hasPlayer) SeedCubeMatColorsFromCube(cube0, &s_pausePlayerPrev);
+        else s_pausePlayerPrev.valid = false;
+        if (hasHintGhost) SeedCubeMatColorsFromCube(cube1, &s_pauseGhostPrev);
+        else s_pauseGhostPrev.valid = false;
+        stepOneCubeTick(baseVisTick, false);
+        s_pauseCubeActive = true;
+        s_pauseCubeTickAcc = 0.0;
+    } else if (eff.playerCube != s_pauseCubeLastStyle || eff.hintGhost != s_pauseGhostLastStyle) {
+        uint32_t savedPhase = *reinterpret_cast<uint32_t*>(0x5f9104);
+        stepOneCubeTick(baseVisTick, false);
+        *reinterpret_cast<uint32_t*>(0x5f9104) = savedPhase;
+        s_pausePlayerPrev = s_pausePlayerCur;
+        s_pauseGhostPrev = s_pauseGhostCur;
+    }
+    s_pauseCubeLastStyle = eff.playerCube;
+    s_pauseGhostLastStyle = eff.hintGhost;
+
+    s_pauseCubeTickAcc += static_cast<double>(dt) * 30.0;
+    int steps = 0;
+    while (s_pauseCubeTickAcc >= 1.0 && steps < 4) {
+        s_pauseCubeTickAcc -= 1.0;
+        stepOneCubeTick(baseVisTick, true);
+        ++steps;
+    }
+    if (s_pauseCubeTickAcc >= 1.0) {
+        s_pauseCubeTickAcc = std::fmod(s_pauseCubeTickAcc, 1.0);
+    }
+
+    float frac = static_cast<float>(std::clamp(s_pauseCubeTickAcc, 0.0, 1.0));
+    if (hasPlayer) {
+        WriteLerpedCubeMat(cube0, s_pausePlayerPrev, s_pausePlayerCur, frac);
+    }
+    if (hasHintGhost && eff.hintGhost == 0u) {
+        WriteLerpedCubeMat(cube1, s_pauseGhostPrev, s_pauseGhostCur, frac);
+    }
+}
 
 void __cdecl ResetColorThemeLevelCaches() {
     s_wallSubMeshes.clear();

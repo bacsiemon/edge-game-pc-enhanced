@@ -435,6 +435,7 @@ static void __declspec(naked) hk_xactCreateSoundBank() {
 static void __stdcall GhostPlayLoop_Impl(uint8_t* sm, int sfxId) {
     if (sm == nullptr) return;
     reinterpret_cast<void(__thiscall*)(void*, int)>(0x481610)(sm, sfxId);
+    if (*reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x12u) return;
     Game_PlaySfx(sm, sfxId);
 }
 
@@ -462,6 +463,26 @@ static uint32_t __fastcall ResetGhost_Impl(uint8_t* ws) {
         reinterpret_cast<void(__thiscall*)(void*, int)>(0x481610)(sm, 0x15);
     }
     return 0;
+}
+
+static void __fastcall SetStateHideGhost_Impl(uint8_t* ws) {
+    uint8_t* sm = GetScreenMgr();
+    if (ws != nullptr && sm != nullptr) {
+        uint32_t newState  = *reinterpret_cast<const uint32_t*>(sm + 0x50);
+        uint32_t prevState = *reinterpret_cast<const uint32_t*>(sm + 0x54);
+        if (prevState == 0x11u && newState == 0x12u) {
+            reinterpret_cast<void(__thiscall*)(void*, int)>(0x481610)(sm, 0x15);
+            return;
+        }
+        if (prevState == 0x12u && newState == 0x11u) {
+            if (*reinterpret_cast<const int32_t*>(ws + 0x64) == 0) {
+                reinterpret_cast<void(__thiscall*)(void*, int)>(0x481610)(sm, 0x15);
+                Game_PlaySfx(sm, 0x15);
+            }
+            return;
+        }
+    }
+    reinterpret_cast<void(__thiscall*)(void*)>(0x479710)(ws);
 }
 
 static LRESULT CALLBACK hk_GameWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -670,5 +691,8 @@ void RegisterCoreFixes() {
             0x33, 0xc0, 0x88, 0x41, 0x48, 0x88, 0x41, 0x50, 0x89, 0x41, 0x64, 0x89, 0x41, 0x68, 0xc3
         };
         RegRelJmp(0x479740, expResetGhost, 15, 15, &ResetGhost_Impl, 0x90, 0x47974f);
+
+        static const uint8_t expSetStateHideGhost[5] = {0xe8, 0x0e, 0x78, 0xff, 0xff};
+        RegRelCall(0x481efd, expSetStateHideGhost, 5, 5, &SetStateHideGhost_Impl);
     }
 }

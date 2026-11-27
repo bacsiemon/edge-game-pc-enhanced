@@ -42,6 +42,10 @@ static float          g_camPrevFov  = 22.0f;
 static float          g_camTgtFov   = 22.0f;
 static bool           g_camFovValid = false;
 
+static const uint8_t* g_pauseVisWs          = nullptr;
+static uint32_t       g_pauseVisLastWsFrame = 0;
+static double         g_pauseExtraTicks     = 0.0;
+
 } // namespace
 
 namespace edgemod {
@@ -137,6 +141,39 @@ float __cdecl GetSmoothWsFrame(const uint8_t* ws) {
         return static_cast<float>(static_cast<uint32_t>(g_wsPrev4)) + g_uiAlpha;
     }
     return static_cast<float>(cur);
+}
+
+float __cdecl GetVisualWsFrame(const uint8_t* ws) {
+    float base = (ws != nullptr) ? GetSmoothWsFrame(ws) : 0.0f;
+    if (ws != nullptr && ws == g_pauseVisWs) {
+        base += static_cast<float>(g_pauseExtraTicks);
+    }
+    return base;
+}
+
+float __cdecl GetVisualEntityTick(const uint8_t* ws, int32_t animTick) {
+    float base = static_cast<float>(animTick);
+    if (ws != nullptr) {
+        uint32_t cur = *reinterpret_cast<const uint32_t*>(ws + 0x4);
+        if (g_wsPtr == ws && cur > static_cast<uint32_t>(g_wsPrev4)) {
+            base += std::clamp(g_uiAlpha, 0.0f, 1.0f) - 1.0f;
+        }
+        if (ws == g_pauseVisWs) {
+            base += static_cast<float>(g_pauseExtraTicks);
+        }
+    }
+    return base;
+}
+
+double __cdecl GetPauseExtraTicks() {
+    return g_pauseExtraTicks;
+}
+
+void __cdecl ResetPauseVisualClock() {
+    g_pauseVisWs = nullptr;
+    g_pauseVisLastWsFrame = 0;
+    g_pauseExtraTicks = 0.0;
+    ResetPausedLevelVisualsState();
 }
 
 uint32_t __cdecl CalcSmoothRainbow(float frame, float ticksPerColor) {
@@ -509,6 +546,35 @@ static void __cdecl OnInterpolate_Impl(uint8_t* sm, float alpha) {
 
     InterpolateMS(sm);
     OnInterpolate_Ext(sm);
+
+    uint32_t state = *reinterpret_cast<const uint32_t*>(sm + 0x50);
+    bool wsLoaded = (ws != nullptr && ws[0x2120] != 0);
+    bool previewActive = IsGraphicsPreviewActive();
+    if (!wsLoaded) {
+        ResetPauseVisualClock();
+    } else {
+        uint32_t wsFrame = *reinterpret_cast<const uint32_t*>(ws + 0x4);
+        if (ws != g_pauseVisWs || wsFrame < g_pauseVisLastWsFrame) {
+            g_pauseVisWs = ws;
+            g_pauseVisLastWsFrame = wsFrame;
+            g_pauseExtraTicks = 0.0;
+            ResetPausedLevelVisualsState();
+        } else {
+            g_pauseVisLastWsFrame = wsFrame;
+        }
+        if (state == 0x12u && !previewActive) {
+            uint8_t* renderer = GetRenderer();
+            float dt = (renderer != nullptr) ? std::clamp(*reinterpret_cast<const float*>(renderer + 0x08), 0.0f, 0.1f) : 0.0f;
+            bool wsFrozen = (g_wsPtr == ws && wsFrame == static_cast<uint32_t>(g_wsPrev4));
+            if (wsFrozen) {
+                g_pauseExtraTicks += static_cast<double>(dt) * 30.0;
+            }
+            UpdatePausedLevelVisuals(ws, dt, wsFrozen);
+        } else {
+            ResetPausedLevelVisualsState();
+        }
+    }
+
     g_justTicked = 0;
 }
 
@@ -1151,8 +1217,9 @@ static void __cdecl ToastRenderSmooth_Impl(const uint8_t* toast) {
     uint8_t fg[4] = {toast[0x28], toast[0x29], toast[0x2a], static_cast<uint8_t>(mainAlpha)};
     if (active && *reinterpret_cast<const int32_t*>(g_wsPtr + 0x218c) > 0) {
         uint8_t* sm = GetScreenMgr();
-        if (sm != nullptr && *reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x11u) {
-            uint32_t rb = CalcSmoothRainbow(GetSmoothWsFrame(g_wsPtr), 1.0f);
+        uint32_t state = (sm != nullptr) ? *reinterpret_cast<const uint32_t*>(sm + 0x50) : 0u;
+        if (state == 0x11u || state == 0x12u) {
+            uint32_t rb = CalcSmoothRainbow(GetVisualWsFrame(g_wsPtr), 1.0f);
             fg[0] = static_cast<uint8_t>((rb >> 16) & 0xffu);
             fg[1] = static_cast<uint8_t>((rb >> 8) & 0xffu);
             fg[2] = static_cast<uint8_t>(rb & 0xffu);

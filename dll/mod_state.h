@@ -287,6 +287,12 @@ void* CreateCustomMusicDecoder(const char* fullPath, const char* soundFontPath, 
 float __cdecl ComputeEdgeTimerZoomScale(const uint8_t* ws, int32_t slot);
 void  __cdecl RenderEdgeTimer3D();
 void  __cdecl GetEdgeTimerSmoothState(const uint8_t* ws, int32_t slot, float* outEffTicks, float* outEffRise, uint32_t* outBaseRgb);
+float  __cdecl GetVisualWsFrame(const uint8_t* ws);
+float  __cdecl GetVisualEntityTick(const uint8_t* ws, int32_t animTick);
+double __cdecl GetPauseExtraTicks();
+void   __cdecl ResetPauseVisualClock();
+void   __cdecl UpdatePausedLevelVisuals(uint8_t* ws, float dt, bool wsFrozen);
+void   __cdecl ResetPausedLevelVisualsState();
 
 // Menu hover state & helpers (mod_menu_hover.cpp)
 uint32_t __cdecl ApplyMenuSlotRainbowStyle(uint32_t rainbowRgb);

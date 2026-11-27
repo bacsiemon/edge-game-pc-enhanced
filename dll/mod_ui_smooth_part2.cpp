@@ -1380,9 +1380,9 @@ static void __cdecl HudTimerDigitsAndColor_Impl(
     if (cs > 99) cs = 99;
     *outCs = cs;
 
-    uint32_t col = CalcSmoothRainbow(GetSmoothWsFrame(ws), 1.0f);
+    uint32_t col = CalcSmoothRainbow(GetVisualWsFrame(ws), 1.0f);
     if (slot == 1 && ws[0x48] != 0) {
-        float pulse = 0.5f - 0.5f * std::cos(GetSmoothWsFrame(ws) * 0.25f);
+        float pulse = 0.5f - 0.5f * std::cos(GetVisualWsFrame(ws) * 0.25f);
         col = Game_ColorLerp(0x999999u, 0xaaaaaau, ClampPct0_100(pulse * 100.0f));
     }
     if (*reinterpret_cast<const int32_t*>(ws + slot * 4 + 0x78) != 0x55da && rem < 1.0f) {
@@ -1430,9 +1430,9 @@ void __cdecl GetEdgeTimerSmoothState(
     float rem = t - static_cast<float>(sec) * 22.0f;
     if (rem < 0.0f) rem = 0.0f;
 
-    uint32_t col = CalcSmoothRainbow(GetSmoothWsFrame(ws), 1.0f);
+    uint32_t col = CalcSmoothRainbow(GetVisualWsFrame(ws), 1.0f);
     if (slot == 1 && ws[0x48] != 0) {
-        float pulse = 0.5f - 0.5f * std::cos(GetSmoothWsFrame(ws) * 0.25f);
+        float pulse = 0.5f - 0.5f * std::cos(GetVisualWsFrame(ws) * 0.25f);
         col = Game_ColorLerp(0x999999u, 0xaaaaaau, ClampPct0_100(pulse * 100.0f));
     }
     if (curT != 0x55da && rem < 1.0f) {

@@ -66,9 +66,12 @@ void UpdateSmoothTime(const uint8_t* ws, uint32_t state, double* outJavaTime, do
 
     double smooth30 = s_lastSmooth30;
     double dt30 = 0.0;
-    if (state == 0x11u || IsGraphicsPreviewActive()) {
+    bool previewActive = IsGraphicsPreviewActive();
+    if (state == 0x11u || state == 0x12u || previewActive) {
         double alpha = static_cast<double>(std::clamp(g_uiAlpha, 0.0f, 1.0f));
-        smooth30 = static_cast<double>(wsFrame) + alpha;
+        smooth30 = previewActive
+            ? (static_cast<double>(wsFrame) + alpha)
+            : static_cast<double>(GetVisualWsFrame(ws));
         if (smooth30 < s_lastSmooth30 && (s_lastSmooth30 - smooth30) < 2.0) {
             smooth30 = s_lastSmooth30;
         }
@@ -376,7 +379,8 @@ void __cdecl BeginPlayerCubeDistortion(void* cubePtr) {
         s_playerIdleJavaTicks = 0.0;
     }
 
-    bool isIdle = (
+    bool pausedCountsIdle = (state == 0x12u && !previewActive && cube[0x171] == 0);
+    bool isIdle = pausedCountsIdle || (
         cubeState == 0 && cubeAnim == 0 &&
         velX == 0 && velY == 0 && velZ == 0 &&
         s_hasPrevCubePos &&
@@ -399,7 +403,7 @@ void __cdecl BeginPlayerCubeDistortion(void* cubePtr) {
         } else {
             s_playerIdleJavaTicks = 0.0;
         }
-    } else if (state == 0x11u) {
+    } else if (state == 0x11u || state == 0x12u) {
         if (isIdle) {
             s_playerIdleJavaTicks += dtJava;
         } else {
@@ -443,7 +447,7 @@ void __cdecl BeginGhostCubeDistortion(void* wsPtr) {
     UpdateSmoothTime(ws, state, &javaTime, &dtJava);
 
     uint32_t javaTickInt = static_cast<uint32_t>(std::floor(javaTime));
-    if ((state == 0x11u || previewActive) && javaTickInt != s_ghostLastJavaTick) {
+    if ((state == 0x11u || state == 0x12u || previewActive) && javaTickInt != s_ghostLastJavaTick) {
         bool firstInit = (s_ghostLastJavaTick == UINT32_MAX);
         s_ghostPrevSignedAmp = s_ghostSignedAmp;
         s_ghostLastJavaTick = javaTickInt;

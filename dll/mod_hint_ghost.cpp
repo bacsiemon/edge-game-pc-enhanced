@@ -259,9 +259,9 @@ void UpdateSmoothGhostTime(const uint8_t* ws, bool isPreview, double* outSmooth3
     uint32_t state = (sm != nullptr) ? *reinterpret_cast<const uint32_t*>(sm + 0x50) : 0u;
     float alpha = 0.0f;
     double smooth30 = s_lastSmooth30;
-    if (state == 0x11u && !isPreview && ws != nullptr) {
-        alpha = std::clamp(g_uiAlpha, 0.0f, 1.0f);
-        smooth30 = static_cast<double>(GetSmoothWsFrame(ws));
+    if ((state == 0x11u || state == 0x12u) && !isPreview && ws != nullptr) {
+        alpha = (state == 0x11u) ? std::clamp(g_uiAlpha, 0.0f, 1.0f) : 0.0f;
+        smooth30 = static_cast<double>(GetVisualWsFrame(ws));
         s_lastSmooth30 = smooth30;
     } else if (isPreview) {
         alpha = std::clamp(g_uiAlpha, 0.0f, 1.0f);
@@ -341,7 +341,7 @@ void RenderAndroidHintGhost(
     int32_t frame = static_cast<int32_t>(std::floor(smooth30));
     const uint8_t* sm = GetScreenMgr();
     uint32_t state = (sm != nullptr) ? *reinterpret_cast<const uint32_t*>(sm + 0x50) : 0u;
-    bool canAdvanceRng = (state == 0x11u || isPreview);
+    bool canAdvanceRng = (state == 0x11u || state == 0x12u || isPreview);
 
     if (canAdvanceRng && frame != s_androidLastTick) {
         bool firstInit = (s_androidLastTick < 0);
@@ -645,7 +645,7 @@ void RenderJavaHintGhost(
 
     const uint8_t* sm = GetScreenMgr();
     uint32_t state = (sm != nullptr) ? *reinterpret_cast<const uint32_t*>(sm + 0x50) : 0u;
-    if ((state == 0x11u || isPreview) && javaTick != s_javaLastTick) {
+    if ((state == 0x11u || state == 0x12u || isPreview) && javaTick != s_javaLastTick) {
         bool firstInit = (s_javaLastTick == UINT32_MAX);
         s_javaPrevSignedGlitch = s_javaSignedGlitch;
         s_javaLastTick = javaTick;

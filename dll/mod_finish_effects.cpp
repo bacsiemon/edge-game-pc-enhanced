@@ -378,7 +378,7 @@ static void __cdecl RenderMobileFinishPlatform_Impl(const uint8_t* finish) {
     uint8_t* game = GetWorldScreen();
     if (dev == nullptr || game == nullptr) return;
 
-    float t30 = GetSmoothWsFrame(game);
+    float t30 = GetVisualWsFrame(game);
     if (t30 < 0.0f) t30 = 0.0f;
     float tFloor = std::floor(t30);
     uint32_t frame = static_cast<uint32_t>(tFloor);
@@ -500,7 +500,7 @@ static void __cdecl RenderJavaFinishPlatform_Impl(const uint8_t* finish) {
     uint8_t* game = GetWorldScreen();
     if (dev == nullptr || game == nullptr) return;
 
-    float t30 = GetSmoothWsFrame(game);
+    float t30 = GetVisualWsFrame(game);
     if (t30 < 0.0f) t30 = 0.0f;
 
     // Java galaxia.spr cycles 11 frames at 2 ticks * 45 ms = 90 ms/frame (2.7 PC 30 Hz ticks)
@@ -676,6 +676,7 @@ static void __declspec(naked) hk_unloadLevelClear() {
         call ResetMinimapCache
         call ResetSpeedometerState
         call ResetColorThemeLevelCaches
+        call ResetPauseVisualClock
         pop edx
         pop ecx
         pop eax
@@ -951,7 +952,7 @@ static void RenderMobileFinishEffect(IDirect3DDevice9* dev, uint32_t curFrame, u
     dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, static_cast<UINT>(verts.size() / 3u), verts.data(), sizeof(FinishVert));
 }
 
-static void RenderJavaFinishEffect(IDirect3DDevice9* dev, uint32_t theme, float t) {
+static void RenderJavaFinishEffect(IDirect3DDevice9* dev, uint32_t theme, float t, double pauseTicks) {
     float bh = t * 0.80f;
     if (bh >= 50.0f) return;
     float scaleX = 1.0f - bh * (90.0f / 4096.0f);
@@ -999,7 +1000,7 @@ static void RenderJavaFinishEffect(IDirect3DDevice9* dev, uint32_t theme, float 
     float halfWFull = 0.5f * w0 * scaleX;
 
     // Exact J2ME palettes & per-frame strobe synced to ~24 Hz Java tick cadence
-    uint32_t javaTick = g_winFx.startFrame + static_cast<uint32_t>(std::floor(bh));
+    uint32_t javaTick = g_winFx.startFrame + static_cast<uint32_t>(std::floor((static_cast<double>(t) + pauseTicks) * 0.80));
     const uint32_t* pal = (theme >= 2u) ? kJavaPaletteDark : kJavaPaletteLight;
     uint32_t baseRgb = pal[javaTick % 13u];
     int strobe = ((javaTick & 1u) == 0u) ? 50 : 0;
@@ -1131,10 +1132,12 @@ static void __cdecl RenderCustomFinishEffect_Impl() {
     uint8_t* lvl = GetLevel();
     uint32_t theme = (lvl != nullptr) ? *reinterpret_cast<uint32_t*>(lvl + 0x6c) : 0u;
 
+    double pauseTicks = GetPauseExtraTicks();
     if (g_finishEffect == 1u) {
-        RenderMobileFinishEffect(dev, curFrame, theme, t);
+        uint32_t visFrame = curFrame + static_cast<uint32_t>(std::floor(pauseTicks));
+        RenderMobileFinishEffect(dev, visFrame, theme, t);
     } else if (g_finishEffect == 2u) {
-        RenderJavaFinishEffect(dev, theme, t);
+        RenderJavaFinishEffect(dev, theme, t, pauseTicks);
     }
 }
 

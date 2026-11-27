@@ -305,7 +305,8 @@ static void EmitGlyph2D(
 }
 
 static bool __cdecl RenderEdgeTimer2D_Impl(uint8_t* ws, int32_t slot) {
-    if (g_edgeTimerMode == 2u) return true;
+    uint8_t mode = GetEffectiveEdgeTimerMode();
+    if (mode == 2u) return true;
     if (ws == nullptr || slot < 0 || slot > 1) return false;
 
     uint8_t* renderer = GetRenderer();
@@ -376,7 +377,7 @@ static bool __cdecl RenderEdgeTimer2D_Impl(uint8_t* ws, int32_t slot) {
     float offsetX = getCfgFloat(*cfgHolder, offXKey);
     float offsetY = getCfgFloat(*cfgHolder, offYKey);
 
-    float zScale = (g_edgeTimerMode == 1u) ? ComputeEdgeTimerZoomScale(ws, slot) : 1.0f;
+    float zScale = (mode == 1u) ? ComputeEdgeTimerZoomScale(ws, slot) : 1.0f;
     float u = (drawH / 450.0f) * zScale;
 
     float effTicks = 0.0f;
@@ -547,7 +548,7 @@ float __cdecl ComputeEdgeTimerZoomScale(const uint8_t* ws, int32_t slot) {
 }
 
 void __cdecl RenderEdgeTimer3D() {
-    if (g_edgeTimerMode != 2u) {
+    if (GetEffectiveEdgeTimerMode() != 2u) {
         ResetEdge3DState();
         return;
     }

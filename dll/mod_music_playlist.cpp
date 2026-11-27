@@ -1119,6 +1119,9 @@ static void __cdecl DebriefEnterMusic_Impl() {
 }
 
 static int __cdecl OnLevelLoadMusic_Impl(const EdgeString* levelName, int rawFileMusicId, uint32_t playMusic) {
+    if (IsGraphicsPreviewLoading()) {
+        return rawFileMusicId;
+    }
     if (playMusic == 0 || levelName == nullptr || levelName->size == 0 || levelName->size >= 256) {
         return rawFileMusicId;
     }
@@ -1136,6 +1139,18 @@ static void __declspec(naked) hk_levelLoadMusic() {
     // At 0x476205: replaces `mov DWORD PTR [esi+0x94], eax` (6 bytes).
     // ebp+0x8 = LevelInfo* (starts with EdgeString filename at +0x0), eax = raw fileMusicId, esi+0x98 = playMusic.
     __asm {
+        push ecx
+        push edx
+        call IsGraphicsPreviewLoading
+        test al, al
+        pop edx
+        pop ecx
+        jz normal_load
+        mov byte ptr [esi + 0x98], 0
+        xor eax, eax
+        mov dword ptr [esi + 0x94], eax
+        ret
+    normal_load:
         push ecx
         push edx
         movzx edx, BYTE PTR [esi + 0x98]

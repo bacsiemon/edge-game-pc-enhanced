@@ -29,7 +29,6 @@ CustomThemeSettings MakePresetThemeSettings(uint8_t preset) {
         s.fallingPlatforms = 1;
         s.bumpers          = 1;
         s.switches         = 1;
-        s.holoSwitches     = 1;
         s.shrinkers        = 1;
         s.finishPlatform   = 1;
         s.finishEffect     = 1;
@@ -47,7 +46,6 @@ CustomThemeSettings MakePresetThemeSettings(uint8_t preset) {
         s.fallingPlatforms = 2;
         s.bumpers          = 2;
         s.switches         = 2;
-        s.holoSwitches     = 2;
         s.shrinkers        = 2;
         s.finishPlatform   = 2;
         s.finishEffect     = 2;
@@ -55,11 +53,7 @@ CustomThemeSettings MakePresetThemeSettings(uint8_t preset) {
     return s;
 }
 
-CustomThemeSettings GetEffectiveTheme() {
-    if (g_colorTheme <= 2u) {
-        return MakePresetThemeSettings(g_colorTheme);
-    }
-    CustomThemeSettings s = g_customTheme;
+CustomThemeSettings ClampCustomThemeSettings(CustomThemeSettings s) {
     auto clamp3 = [](uint8_t v) -> uint8_t { return (v <= 2u) ? v : 0u; };
     auto clamp2 = [](uint8_t v) -> uint8_t { return (v != 0u) ? 1u : 0u; };
     s.terrain          = clamp3(s.terrain);
@@ -75,10 +69,20 @@ CustomThemeSettings GetEffectiveTheme() {
     s.fallingPlatforms = clamp3(s.fallingPlatforms);
     s.bumpers          = clamp3(s.bumpers);
     s.switches         = clamp3(s.switches);
-    s.holoSwitches     = clamp3(s.holoSwitches);
     s.shrinkers        = clamp3(s.shrinkers);
     s.finishPlatform   = clamp3(s.finishPlatform);
     s.finishEffect     = clamp3(s.finishEffect);
+    return s;
+}
+
+CustomThemeSettings GetEffectiveTheme() {
+    CustomThemeSettings s{};
+    if (g_colorTheme <= 2u) {
+        s = MakePresetThemeSettings(g_colorTheme);
+    } else {
+        s = ClampCustomThemeSettings(g_customTheme);
+    }
+    ApplyGraphicsPreviewThemeOverrides(&s);
     return s;
 }
 
@@ -372,6 +376,8 @@ static IDirect3DTexture9* g_platEdgeTex[2][4] = {};
 static IDirect3DTexture9* g_holoSwitchTex[3] = {};
 static IDirect3DTexture9* g_javaStarTex[2] = {};
 static IDirect3DTexture9* g_mobileFallingTex[4][16] = {};
+static void*              g_pcLevelWallSp[4][2] = {};
+static void*              g_pcPlanetSp[4][2] = {};
 enum WallDrawTarget : uint8_t {
     WALL_TARGET_TERRAIN     = 0,
     WALL_TARGET_MOVING_PLAT = 1,
@@ -667,6 +673,77 @@ static IDirect3DTexture9* CreateMobileFallingTexture(IDirect3DDevice9* dev, uint
     return tex;
 }
 
+static void* GetVanillaThemeD3DTex(void* (&spCache)[4][2], int specBaseIdx, uint8_t themeIdx) {
+    if (themeIdx > 3u) return nullptr;
+    if (spCache[themeIdx][0] == nullptr) {
+        uint32_t resId[2] = {kTargetTexSpecs[specBaseIdx + themeIdx].hash0, kTexturesFolderHash};
+        void* tmpSp[2] = {nullptr, nullptr};
+        reinterpret_cast<void*(__cdecl*)(void*, const uint32_t*, int, int)>(0x404070)(tmpSp, resId, 0, 0);
+        if (tmpSp[0] != nullptr) {
+            reinterpret_cast<void*(__thiscall*)(void*, const void*)>(0x4ecfd0)(spCache[themeIdx], tmpSp);
+        }
+        reinterpret_cast<void(__thiscall*)(void*)>(0x421ff0)(tmpSp);
+    }
+    uint8_t* texObj = static_cast<uint8_t*>(spCache[themeIdx][0]);
+    if (texObj == nullptr) return nullptr;
+    return *reinterpret_cast<void**>(texObj + 0x2c);
+}
+
+static void* GetVanillaLevelWallD3DTex(uint8_t themeIdx) {
+    return GetVanillaThemeD3DTex(g_pcLevelWallSp, 0, themeIdx);
+}
+
+static void* GetVanillaPlanetD3DTex(uint8_t themeIdx) {
+    return GetVanillaThemeD3DTex(g_pcPlanetSp, 4, themeIdx);
+}
+
+static void ReleaseCachedTexturesOnDeviceChange(IDirect3DDevice9* d3dDev) {
+    if (d3dDev == nullptr || d3dDev == g_cachedDev) return;
+    for (int t = 0; t < 2; ++t) {
+        for (int i = 0; i < kTargetTexCount; ++i) {
+            if (g_themeTex[t][i] != nullptr) {
+                g_themeTex[t][i]->Release();
+                g_themeTex[t][i] = nullptr;
+            }
+        }
+        for (int i = 0; i < 4; ++i) {
+            if (g_platEdgeTex[t][i] != nullptr) {
+                g_platEdgeTex[t][i]->Release();
+                g_platEdgeTex[t][i] = nullptr;
+            }
+        }
+    }
+    for (int i = 0; i < 4; ++i) {
+        if (g_javaMovingPlatTex[i] != nullptr) {
+            g_javaMovingPlatTex[i]->Release();
+            g_javaMovingPlatTex[i] = nullptr;
+        }
+        if (g_javaBumperTex[i] != nullptr) {
+            g_javaBumperTex[i]->Release();
+            g_javaBumperTex[i] = nullptr;
+        }
+        for (int b = 0; b < 16; ++b) {
+            if (g_mobileFallingTex[i][b] != nullptr) {
+                g_mobileFallingTex[i][b]->Release();
+                g_mobileFallingTex[i][b] = nullptr;
+            }
+        }
+    }
+    for (int i = 0; i < 3; ++i) {
+        if (g_holoSwitchTex[i] != nullptr) {
+            g_holoSwitchTex[i]->Release();
+            g_holoSwitchTex[i] = nullptr;
+        }
+    }
+    for (int i = 0; i < 2; ++i) {
+        if (g_javaStarTex[i] != nullptr) {
+            g_javaStarTex[i]->Release();
+            g_javaStarTex[i] = nullptr;
+        }
+    }
+    g_cachedDev = d3dDev;
+}
+
 static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DDevice9* d3dDev) {
     if (texObj == nullptr) return nullptr;
     void* defaultTex = *reinterpret_cast<void* const*>(texObj + 0x2c);
@@ -692,51 +769,7 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
         if (slot < 0) return defaultTex;
     }
 
-    if (d3dDev != g_cachedDev) {
-        for (int t = 0; t < 2; ++t) {
-            for (int i = 0; i < kTargetTexCount; ++i) {
-                if (g_themeTex[t][i] != nullptr) {
-                    g_themeTex[t][i]->Release();
-                    g_themeTex[t][i] = nullptr;
-                }
-            }
-            for (int i = 0; i < 4; ++i) {
-                if (g_platEdgeTex[t][i] != nullptr) {
-                    g_platEdgeTex[t][i]->Release();
-                    g_platEdgeTex[t][i] = nullptr;
-                }
-            }
-        }
-        for (int i = 0; i < 4; ++i) {
-            if (g_javaMovingPlatTex[i] != nullptr) {
-                g_javaMovingPlatTex[i]->Release();
-                g_javaMovingPlatTex[i] = nullptr;
-            }
-            if (g_javaBumperTex[i] != nullptr) {
-                g_javaBumperTex[i]->Release();
-                g_javaBumperTex[i] = nullptr;
-            }
-            for (int b = 0; b < 16; ++b) {
-                if (g_mobileFallingTex[i][b] != nullptr) {
-                    g_mobileFallingTex[i][b]->Release();
-                    g_mobileFallingTex[i][b] = nullptr;
-                }
-            }
-        }
-        for (int i = 0; i < 3; ++i) {
-            if (g_holoSwitchTex[i] != nullptr) {
-                g_holoSwitchTex[i]->Release();
-                g_holoSwitchTex[i] = nullptr;
-            }
-        }
-        for (int i = 0; i < 2; ++i) {
-            if (g_javaStarTex[i] != nullptr) {
-                g_javaStarTex[i]->Release();
-                g_javaStarTex[i] = nullptr;
-            }
-        }
-        g_cachedDev = d3dDev;
-    }
+    ReleaseCachedTexturesOnDeviceChange(d3dDev);
 
     if (isPlatEdge) {
         if (eff.platformBorders == 0u) return defaultTex;
@@ -753,7 +786,7 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
             ? static_cast<void*>(g_platEdgeTex[modeSlot][themeIdx])
             : defaultTex;
     } else if (isHolo) {
-        uint8_t mode = (eff.holoSwitches <= 2u) ? eff.holoSwitches : 0u;
+        uint8_t mode = (eff.switches <= 2u) ? eff.switches : 0u;
         if (g_holoSwitchTex[mode] == nullptr) {
             if (mode == 0u) {
                 g_holoSwitchTex[mode] = CreateHorizontalCycleTexture(d3dDev, kPcHoloSwitchColors, 13);
@@ -775,6 +808,19 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
         return g_javaStarTex[idx] != nullptr ? static_cast<void*>(g_javaStarTex[idx]) : defaultTex;
     }
 
+    bool remapPreviewTerrainWall = IsGraphicsPreviewActive()
+        && kTargetTexSpecs[slot].kind == TEX_LEVELWALL
+        && g_wallDrawTarget == WALL_TARGET_TERRAIN
+        && lvl != nullptr;
+    bool remapPreviewPlanet = IsGraphicsPreviewActive()
+        && kTargetTexSpecs[slot].kind == TEX_PLANET
+        && lvl != nullptr;
+    if (remapPreviewTerrainWall) {
+        slot = static_cast<int>(lvl[0x6c] & 3u);
+    } else if (remapPreviewPlanet) {
+        slot = 4 + static_cast<int>(lvl[0x6c] & 3u);
+    }
+
     const TargetTexSpec& spec = kTargetTexSpecs[slot];
     uint8_t style = 0;
     if (spec.kind == TEX_LEVELWALL) {
@@ -793,7 +839,16 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
         style = eff.switches;
     }
 
-    if (style == 0u) return defaultTex;
+    if (style == 0u) {
+        if (remapPreviewTerrainWall && spec.themeIdx != 0u) {
+            void* pcTex = GetVanillaLevelWallD3DTex(spec.themeIdx);
+            if (pcTex != nullptr) return pcTex;
+        } else if (remapPreviewPlanet && spec.themeIdx != 0u) {
+            void* pcTex = GetVanillaPlanetD3DTex(spec.themeIdx);
+            if (pcTex != nullptr) return pcTex;
+        }
+        return defaultTex;
+    }
     bool isJava = (style == 2u);
 
     if (!isJava && g_mobileFallingBucket >= 0 && spec.kind == TEX_FALLING_PLATFORM) {
@@ -989,7 +1044,7 @@ static D3DMATERIAL9 g_prismMat{};
 
 static void PreparePrismMaterial(int32_t animTick, uint8_t prismStyle) {
     uint8_t* sm = GetScreenMgr();
-    float alpha = (sm != nullptr && *reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x11u)
+    float alpha = (sm != nullptr && (*reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x11u || IsGraphicsPreviewActive()))
         ? std::clamp(g_uiAlpha, 0.0f, 1.0f)
         : 0.0f;
 
@@ -1246,6 +1301,206 @@ static void CollectLevelWallSubMeshes(uint8_t* nodePtr, std::vector<CachedWallSu
     }
 }
 
+struct PreviewPlanetVert {
+    float x, y, z, u, v;
+};
+
+static IDirect3DTexture9* GetPreviewPlanetD3DTex(IDirect3DDevice9* dev, uint8_t themeIdx, uint8_t planetStyle) {
+    themeIdx &= 3u;
+    ReleaseCachedTexturesOnDeviceChange(dev);
+    if (planetStyle == 0u) {
+        return reinterpret_cast<IDirect3DTexture9*>(GetVanillaPlanetD3DTex(themeIdx));
+    }
+    bool isJava = (planetStyle == 2u);
+    int tSlot = isJava ? 1 : 0;
+    int texSlot = 4 + static_cast<int>(themeIdx);
+    if (g_themeTex[tSlot][texSlot] == nullptr) {
+        g_themeTex[tSlot][texSlot] = CreateThemeTexture(dev, kTargetTexSpecs[texSlot], isJava);
+    }
+    return g_themeTex[tSlot][texSlot];
+}
+
+static void AddPreviewPlanetBox(
+    std::vector<PreviewPlanetVert>& out, float cx, float topY, float cz, float halfW, float height
+) {
+    float x0 = cx - halfW, x1 = cx + halfW;
+    float z0 = cz - halfW, z1 = cz + halfW;
+    float y0 = topY - height, y1 = topY;
+
+    // Top face (+Y): solid top band across PC (x=56..63) and Mobile/Java (x=48..63)
+    out.push_back({x0, y1, z0, 0.91f, 0.05f});
+    out.push_back({x1, y1, z0, 0.98f, 0.05f});
+    out.push_back({x1, y1, z1, 0.98f, 0.95f});
+    out.push_back({x0, y1, z0, 0.91f, 0.05f});
+    out.push_back({x1, y1, z1, 0.98f, 0.95f});
+    out.push_back({x0, y1, z1, 0.91f, 0.95f});
+
+    // Left face (+Z): left band u in [0.05, 0.38], v = 0.02 top -> 0.98 bottom
+    out.push_back({x0, y1, z1, 0.05f, 0.02f});
+    out.push_back({x1, y1, z1, 0.38f, 0.02f});
+    out.push_back({x1, y0, z1, 0.38f, 0.98f});
+    out.push_back({x0, y1, z1, 0.05f, 0.02f});
+    out.push_back({x1, y0, z1, 0.38f, 0.98f});
+    out.push_back({x0, y0, z1, 0.05f, 0.98f});
+
+    // Right face (+X): mid band u in [0.55, 0.70], v = 0.02 top -> 0.98 bottom
+    out.push_back({x1, y1, z1, 0.55f, 0.02f});
+    out.push_back({x1, y1, z0, 0.70f, 0.02f});
+    out.push_back({x1, y0, z0, 0.70f, 0.98f});
+    out.push_back({x1, y1, z1, 0.55f, 0.02f});
+    out.push_back({x1, y0, z0, 0.70f, 0.98f});
+    out.push_back({x1, y0, z1, 0.55f, 0.98f});
+}
+
+struct ScopedPreviewPlanetD3DState {
+    IDirect3DDevice9* dev = nullptr;
+    D3DMATRIX         world{};
+    DWORD             fvf = 0;
+    IDirect3DVertexShader9* vs = nullptr;
+    IDirect3DPixelShader9*  ps = nullptr;
+    IDirect3DBaseTexture9*  tex0 = nullptr;
+    DWORD             rsLighting = FALSE, rsAlphaBlend = FALSE, rsAlphaTest = FALSE, rsFog = FALSE;
+    DWORD             rsSpecular = FALSE, rsStencil = FALSE, rsZEnable = TRUE, rsZWrite = TRUE;
+    DWORD             rsCull = D3DCULL_CCW, rsDepthBias = 0, rsSlopeBias = 0;
+    DWORD             tssColorOp = 0, tssColorArg1 = 0, tssAlphaOp = 0, tssTexXform = 0, tssTexCoordIdx = 0;
+    DWORD             tss1ColorOp = 0, tss1AlphaOp = 0;
+    DWORD             smpAddrU = 0, smpAddrV = 0, smpMag = 0, smpMin = 0, smpMip = 0;
+
+    explicit ScopedPreviewPlanetD3DState(IDirect3DDevice9* d, IDirect3DTexture9* tex) : dev(d) {
+        if (dev == nullptr) return;
+        dev->GetTransform(D3DTS_WORLD, &world);
+        dev->GetFVF(&fvf);
+        dev->GetVertexShader(&vs);
+        dev->GetPixelShader(&ps);
+        dev->GetTexture(0, &tex0);
+        dev->GetRenderState(D3DRS_LIGHTING, &rsLighting);
+        dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &rsAlphaBlend);
+        dev->GetRenderState(D3DRS_ALPHATESTENABLE, &rsAlphaTest);
+        dev->GetRenderState(D3DRS_FOGENABLE, &rsFog);
+        dev->GetRenderState(D3DRS_SPECULARENABLE, &rsSpecular);
+        dev->GetRenderState(D3DRS_STENCILENABLE, &rsStencil);
+        dev->GetRenderState(D3DRS_ZENABLE, &rsZEnable);
+        dev->GetRenderState(D3DRS_ZWRITEENABLE, &rsZWrite);
+        dev->GetRenderState(D3DRS_CULLMODE, &rsCull);
+        dev->GetRenderState(D3DRS_DEPTHBIAS, &rsDepthBias);
+        dev->GetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, &rsSlopeBias);
+        dev->GetTextureStageState(0, D3DTSS_COLOROP, &tssColorOp);
+        dev->GetTextureStageState(0, D3DTSS_COLORARG1, &tssColorArg1);
+        dev->GetTextureStageState(0, D3DTSS_ALPHAOP, &tssAlphaOp);
+        dev->GetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS, &tssTexXform);
+        dev->GetTextureStageState(0, D3DTSS_TEXCOORDINDEX, &tssTexCoordIdx);
+        dev->GetTextureStageState(1, D3DTSS_COLOROP, &tss1ColorOp);
+        dev->GetTextureStageState(1, D3DTSS_ALPHAOP, &tss1AlphaOp);
+        dev->GetSamplerState(0, D3DSAMP_ADDRESSU, &smpAddrU);
+        dev->GetSamplerState(0, D3DSAMP_ADDRESSV, &smpAddrV);
+        dev->GetSamplerState(0, D3DSAMP_MAGFILTER, &smpMag);
+        dev->GetSamplerState(0, D3DSAMP_MINFILTER, &smpMin);
+        dev->GetSamplerState(0, D3DSAMP_MIPFILTER, &smpMip);
+
+        static constexpr D3DMATRIX kIdentity = {
+            1.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f
+        };
+        dev->SetTransform(D3DTS_WORLD, &kIdentity);
+        dev->SetFVF(D3DFVF_XYZ | D3DFVF_TEX1);
+        dev->SetVertexShader(nullptr);
+        dev->SetPixelShader(nullptr);
+        dev->SetTexture(0, tex);
+        dev->SetRenderState(D3DRS_LIGHTING, FALSE);
+        dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+        dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+        dev->SetRenderState(D3DRS_FOGENABLE, FALSE);
+        dev->SetRenderState(D3DRS_SPECULARENABLE, FALSE);
+        dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+        dev->SetRenderState(D3DRS_ZENABLE, TRUE);
+        dev->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+        dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+        dev->SetRenderState(D3DRS_DEPTHBIAS, 0);
+        dev->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, 0);
+        dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+        dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+        dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+        dev->SetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+        dev->SetTextureStageState(0, D3DTSS_TEXCOORDINDEX, 0);
+        dev->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+        dev->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+        dev->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+        dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+        dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    }
+
+    ~ScopedPreviewPlanetD3DState() {
+        if (dev == nullptr) return;
+        dev->SetTransform(D3DTS_WORLD, &world);
+        dev->SetFVF(fvf);
+        dev->SetVertexShader(vs);
+        dev->SetPixelShader(ps);
+        dev->SetTexture(0, tex0);
+        if (vs != nullptr) vs->Release();
+        if (ps != nullptr) ps->Release();
+        if (tex0 != nullptr) tex0->Release();
+        dev->SetRenderState(D3DRS_LIGHTING, rsLighting);
+        dev->SetRenderState(D3DRS_ALPHABLENDENABLE, rsAlphaBlend);
+        dev->SetRenderState(D3DRS_ALPHATESTENABLE, rsAlphaTest);
+        dev->SetRenderState(D3DRS_FOGENABLE, rsFog);
+        dev->SetRenderState(D3DRS_SPECULARENABLE, rsSpecular);
+        dev->SetRenderState(D3DRS_STENCILENABLE, rsStencil);
+        dev->SetRenderState(D3DRS_ZENABLE, rsZEnable);
+        dev->SetRenderState(D3DRS_ZWRITEENABLE, rsZWrite);
+        dev->SetRenderState(D3DRS_CULLMODE, rsCull);
+        dev->SetRenderState(D3DRS_DEPTHBIAS, rsDepthBias);
+        dev->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, rsSlopeBias);
+        dev->SetTextureStageState(0, D3DTSS_COLOROP, tssColorOp);
+        dev->SetTextureStageState(0, D3DTSS_COLORARG1, tssColorArg1);
+        dev->SetTextureStageState(0, D3DTSS_ALPHAOP, tssAlphaOp);
+        dev->SetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS, tssTexXform);
+        dev->SetTextureStageState(0, D3DTSS_TEXCOORDINDEX, tssTexCoordIdx);
+        dev->SetTextureStageState(1, D3DTSS_COLOROP, tss1ColorOp);
+        dev->SetTextureStageState(1, D3DTSS_ALPHAOP, tss1AlphaOp);
+        dev->SetSamplerState(0, D3DSAMP_ADDRESSU, smpAddrU);
+        dev->SetSamplerState(0, D3DSAMP_ADDRESSV, smpAddrV);
+        dev->SetSamplerState(0, D3DSAMP_MAGFILTER, smpMag);
+        dev->SetSamplerState(0, D3DSAMP_MINFILTER, smpMin);
+        dev->SetSamplerState(0, D3DSAMP_MIPFILTER, smpMip);
+        OnColorThemeChanged();
+    }
+};
+
+static void RenderPreviewTopPlanets(IDirect3DDevice9* dev) {
+    if (dev == nullptr) return;
+    uint8_t* lvl = GetLevel();
+    uint8_t themeIdx = (lvl != nullptr) ? (lvl[0x6c] & 3u) : 0u;
+    const CustomThemeSettings eff = GetEffectiveTheme();
+    IDirect3DTexture9* tex = GetPreviewPlanetD3DTex(dev, themeIdx, eff.planets);
+    if (tex == nullptr) return;
+
+    struct TopPlanetSpec { float cx, topY, cz, halfW, height; };
+    static constexpr TopPlanetSpec kTopPlanets[7] = {
+        {-147.4f,  -7.7f,  142.9f, 22.0f, 220.0f},
+        {-125.3f,   7.0f,   54.1f, 27.0f, 250.0f},
+        { -93.4f,  19.4f,  -24.8f, 24.0f, 250.0f},
+        { -41.6f,  21.6f,  -96.2f, 26.0f, 260.0f},
+        {  43.3f,  27.0f, -134.5f, 25.0f, 250.0f},
+        { 118.1f,  10.5f, -158.2f, 23.0f, 230.0f},
+        { 180.6f,  -6.0f, -169.6f, 20.0f, 210.0f},
+    };
+
+    std::vector<PreviewPlanetVert> verts;
+    verts.reserve(7 * 18);
+    for (const auto& p : kTopPlanets) {
+        AddPreviewPlanetBox(verts, p.cx, p.topY, p.cz, p.halfW, p.height);
+    }
+
+    ScopedPreviewPlanetD3DState guard(dev, tex);
+    dev->DrawPrimitiveUP(
+        D3DPT_TRIANGLELIST, static_cast<UINT>(verts.size() / 3u), verts.data(), sizeof(PreviewPlanetVert)
+    );
+}
+
 static void __fastcall Hook_StaticLevelRender(uint8_t* model, void*, int arg) {
     using OrigFn = void(__thiscall*)(void*, int);
     auto orig = reinterpret_cast<OrigFn>(0x421460);
@@ -1315,6 +1570,14 @@ static void __fastcall Hook_StaticLevelRender(uint8_t* model, void*, int arg) {
     }
 
     orig(model, arg);
+
+    if (IsGraphicsPreviewActive()) {
+        uint8_t* renderer = *reinterpret_cast<uint8_t**>(0x5f8770);
+        if (renderer != nullptr) {
+            auto* dev = *reinterpret_cast<IDirect3DDevice9**>(renderer + 0xcc);
+            RenderPreviewTopPlanets(dev);
+        }
+    }
 }
 
 static void __cdecl Hook_SetHeightUV(void* model, int y) {
@@ -1596,12 +1859,13 @@ static void __fastcall Hook_BumperRender(uint8_t* bumper) {
     uint8_t* flashNode = GetBumperRoofFlashNode(roofMesh);
 
     if (bumperStyle == 0u) {
-        bool diffTex = (eff.terrain != 0u);
         ScopedThemeLight lightGuard;
         if (eff.playerCube != 0u) {
             lightGuard.BeginRestorePc();
         }
-        if (diffTex) OnColorThemeChanged();
+        // Always flush tcache[0] even if styles match: Java/themed bumpers use distinct D3D9 textures
+        // on the same engine Texture* (levelwall_<t+1>.img).
+        OnColorThemeChanged();
         g_wallDrawTarget = WALL_TARGET_BUMPER;
         uint8_t savedVis = 0;
         if (flashNode != nullptr) {
@@ -1613,7 +1877,7 @@ static void __fastcall Hook_BumperRender(uint8_t* bumper) {
             flashNode[0x1a1] = savedVis;
         }
         g_wallDrawTarget = WALL_TARGET_TERRAIN;
-        if (diffTex) OnColorThemeChanged();
+        OnColorThemeChanged();
         RenderSmoothBumperRoofFlash(bumper);
         return;
     }
@@ -1622,8 +1886,7 @@ static void __fastcall Hook_BumperRender(uint8_t* bumper) {
     using DrawMeshFn    = void(__thiscall*)(void*, int);
 
     uint8_t* renderer = GetRenderer();
-    bool diffTex = (bumperStyle != eff.terrain);
-    if (diffTex) OnColorThemeChanged();
+    OnColorThemeChanged();
     g_wallDrawTarget = WALL_TARGET_BUMPER;
 
     int param = *reinterpret_cast<const int*>(bumper + 0x10);
@@ -1661,7 +1924,7 @@ static void __fastcall Hook_BumperRender(uint8_t* bumper) {
     }
 
     g_wallDrawTarget = WALL_TARGET_TERRAIN;
-    if (diffTex) OnColorThemeChanged();
+    OnColorThemeChanged();
 
     if (renderer != nullptr) {
         reinterpret_cast<SetLightingFn>(0x405e40)(renderer, 1);
@@ -2033,13 +2296,12 @@ static void __fastcall Hook_MovingPlatformRender(uint8_t* plat) {
             double yVal = static_cast<double>(*reinterpret_cast<const float*>(bodyModel + 0x34))
                         - *reinterpret_cast<const double*>(0x585020);
             int yInt = static_cast<int>(yVal);
-            bool diffTex = (bodyStyle != eff.terrain);
-            if (diffTex) OnColorThemeChanged();
+            OnColorThemeChanged();
             g_wallDrawTarget = WALL_TARGET_MOVING_PLAT;
             Hook_SetHeightUV(bodyModel, yInt);
             reinterpret_cast<DrawMeshFn>(0x421460)(bodyModel, 0);
             g_wallDrawTarget = WALL_TARGET_TERRAIN;
-            if (diffTex) OnColorThemeChanged();
+            OnColorThemeChanged();
         }
     }
 
@@ -2056,7 +2318,7 @@ static void __fastcall Hook_MovingPlatformRender(uint8_t* plat) {
             SyncMovingPlatEdgeUVs(edgeModel, true);
 
             uint8_t* sm = GetScreenMgr();
-            float alpha = (sm != nullptr && *reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x11u)
+            float alpha = (sm != nullptr && (*reinterpret_cast<const uint32_t*>(sm + 0x50) == 0x11u || IsGraphicsPreviewActive()))
                 ? std::clamp(g_uiAlpha, 0.0f, 1.0f)
                 : 0.0f;
             float ticksPerColor = (borderStyle == 2u) ? 2.7f : 1.0f;
@@ -2313,7 +2575,7 @@ static void __fastcall Hook_HoloSwitchRender(uint8_t* holo) {
         return;
     }
 
-    uint8_t holoStyle = GetEffectiveTheme().holoSwitches;
+    uint8_t holoStyle = GetEffectiveTheme().switches;
     uint8_t* ws = *reinterpret_cast<uint8_t**>(0x5f9064);
     float smoothFrame = (ws != nullptr) ? GetSmoothWsFrame(ws) : 0.0f;
     float phase = 0.0f;

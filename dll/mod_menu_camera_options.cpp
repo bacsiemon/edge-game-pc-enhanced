@@ -458,6 +458,12 @@ EDGE_STATIC_WSTR(g_wstrFinishEffect,   "finish effect");
 EDGE_STATIC_WSTR(g_wstrFinishPlatform, "finish platform");
 EDGE_STATIC_WSTR(g_wstrColorTheme,     "theme");
 EDGE_STATIC_WSTR(g_wstrCustomizeTheme, "customize theme");
+EDGE_STATIC_WSTR(g_wstrPreviewLevel,   "preview level");
+EDGE_STATIC_WSTR(g_wstrPreviewLight1,  "light 1");
+EDGE_STATIC_WSTR(g_wstrPreviewLight2,  "light 2");
+EDGE_STATIC_WSTR(g_wstrPreviewDark1,   "dark 1");
+EDGE_STATIC_WSTR(g_wstrPreviewDark2,   "dark 2");
+EDGE_STATIC_WSTR(g_wstrPreviewMissing, "missing");
 EDGE_STATIC_WSTR(g_wstrCubeDistortion, "cube idle distortion");
 EDGE_STATIC_WSTR(g_wstrThemeTerrain,   "terrain");
 EDGE_STATIC_WSTR(g_wstrThemeWallGrad,  "wall gradient");
@@ -473,7 +479,6 @@ EDGE_STATIC_WSTR(g_wstrThemePlatEdge,  "platform borders");
 EDGE_STATIC_WSTR(g_wstrThemeFallPlat,  "falling platforms");
 EDGE_STATIC_WSTR(g_wstrThemeBumpers,   "bumpers");
 EDGE_STATIC_WSTR(g_wstrThemeSwitches,  "switches");
-EDGE_STATIC_WSTR(g_wstrThemeHoloSwitch,"holo switches");
 EDGE_STATIC_WSTR(g_wstrThemeShrinkers, "shrinkers");
 EDGE_STATIC_WSTR(g_wstrDef,          "def");
 EDGE_STATIC_WSTR(g_wstrNew,          "new");
@@ -561,6 +566,7 @@ enum OptItem : int {
     OPT_CAT_BTN_SPEEDOMETER,
     OPT_CAT_BTN_GAMEPLAY,
     OPT_FULLSCREEN,
+    OPT_PREVIEW_LEVEL,
     OPT_PRISM_VFX,
     OPT_CHROMA_AB,
     OPT_AA,
@@ -584,7 +590,6 @@ enum OptItem : int {
     OPT_THEME_FALLING_PLATFORMS,
     OPT_THEME_BUMPERS,
     OPT_THEME_SWITCHES,
-    OPT_THEME_HOLO_SWITCHES,
     OPT_THEME_SHRINKERS,
     OPT_SOUNDS,
     OPT_MUSIC,
@@ -1191,10 +1196,10 @@ static void SaveModSettings() {
     writeInt("theme_custom_falling_platforms", std::clamp<int>(g_customTheme.fallingPlatforms, 0, 2));
     writeInt("theme_custom_bumpers", std::clamp<int>(g_customTheme.bumpers, 0, 2));
     writeInt("theme_custom_switches", std::clamp<int>(g_customTheme.switches, 0, 2));
-    writeInt("theme_custom_holo_switches", std::clamp<int>(g_customTheme.holoSwitches, 0, 2));
     writeInt("theme_custom_shrinkers", std::clamp<int>(g_customTheme.shrinkers, 0, 2));
     writeInt("theme_custom_finish_platform", std::clamp<int>(g_customTheme.finishPlatform, 0, 2));
     writeInt("theme_custom_finish_effect", std::clamp<int>(g_customTheme.finishEffect, 0, 2));
+    writeInt("preview_level_theme", std::clamp<int>(g_previewLevelTheme, 0, 3));
     writeInt("timer_mode", timerMode);
     writeFloat("timer_size", timerSize);
     writeInt("timer_pos", timerPos);
@@ -1527,14 +1532,14 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
             if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.bumpers = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 13); }
         } else if (AsciiEqIc(kP, kE, "theme_custom_switches")) {
             if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.switches = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 14); }
-        } else if (AsciiEqIc(kP, kE, "theme_custom_holo_switches")) {
-            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.holoSwitches = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 15); }
         } else if (AsciiEqIc(kP, kE, "theme_custom_shrinkers")) {
-            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.shrinkers = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 16); }
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.shrinkers = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 15); }
         } else if (AsciiEqIc(kP, kE, "theme_custom_finish_platform")) {
-            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.finishPlatform = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 17); }
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.finishPlatform = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 16); }
         } else if (AsciiEqIc(kP, kE, "theme_custom_finish_effect")) {
-            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.finishEffect = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 18); }
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.finishEffect = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 17); }
+        } else if (AsciiEqIc(kP, kE, "preview_level_theme")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 3) { g_previewLevelTheme = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 18); }
         } else if (AsciiEqIc(kP, kE, "timer_mode")) {
             if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 3) {
                 g_timerMode = static_cast<uint8_t>(iv);
@@ -2197,20 +2202,11 @@ static void SyncCubeScreenEffectNow(uint8_t* sm) {
 
 static void SyncGraphicsRuntime(uint8_t* sm, bool forceAaReset) {
     if (sm == nullptr) return;
-    bool needPp = (g_chromaAb != 0 || g_prismVfx != 0);
     uint8_t* renderer = GetRenderer();
     uint8_t* pp = (renderer != nullptr) ? *reinterpret_cast<uint8_t**>(renderer + 0xb0) : nullptr;
-    bool wasPp = (pp != nullptr && pp[0x21] != 0);
+    bool ppSupported = (pp != nullptr && reinterpret_cast<bool(__thiscall*)(void*)>(0x41fd30)(pp));
 
-    sm[0x2b5] = needPp ? 1u : 0u;
-    if (needPp != wasPp) {
-        reinterpret_cast<void(__thiscall*)(void*, int)>(0x482600)(sm, needPp ? 1 : 0);
-    }
-
-    pp = (renderer != nullptr) ? *reinterpret_cast<uint8_t**>(renderer + 0xb0) : nullptr;
-    bool nowPp = (pp != nullptr && pp[0x21] != 0);
-    bool needReset = forceAaReset || ((nowPp != wasPp) && g_aaSamples > 0);
-    if (needReset && renderer != nullptr) {
+    if (renderer != nullptr && (forceAaReset || g_aaSamples > 0)) {
         using SetAaFn = int(__thiscall*)(void*, int, int);
         auto setAa = reinterpret_cast<SetAaFn>(0x405a60);
         int req = (g_aaSamples > 0) ? g_aaSamples : 0;
@@ -2221,6 +2217,20 @@ static void SyncGraphicsRuntime(uint8_t* sm, bool forceAaReset) {
         } else {
             g_aaSamples = actual;
         }
+    }
+
+    bool needPp = (g_chromaAb != 0 || g_prismVfx != 0 || (ppSupported && g_aaSamples > 0));
+    bool wasPp = (pp != nullptr && pp[0x21] != 0);
+    sm[0x2b5] = needPp ? 1u : 0u;
+    if (needPp != wasPp) {
+        reinterpret_cast<void(__thiscall*)(void*, int)>(0x482600)(sm, needPp ? 1 : 0);
+    } else if (ppSupported && needPp && forceAaReset) {
+        // Recreate [pp+0x18] MSAA target on the live device without calling 0x4816d0 (which toggles fullscreen).
+        reinterpret_cast<void(__thiscall*)(void*)>(0x4204a0)(pp);
+        reinterpret_cast<void(__thiscall*)(void*)>(0x41fdc0)(pp);
+    }
+
+    if (!ppSupported && forceAaReset && renderer != nullptr) {
         reinterpret_cast<void(__thiscall*)(void*, int, int)>(0x4816d0)(sm, g_aaSamples, 1);
         ApplyUiScale(sm);
     }
@@ -2304,9 +2314,34 @@ static void __cdecl CubeFxTrigger_Impl(uint8_t* fx, int type) {
         int theme = GetLevelThemeIdx();
         *reinterpret_cast<float*>(fx + 0x68) = GetBcfgFloat(*reinterpret_cast<uint32_t*>(fx + 0x54 + theme * 4));
     } else if (type == 2) {
+        if (IsGraphicsPreviewActive() || IsGraphicsPreviewLoading()) {
+            return;
+        }
         g_prismOverrideSec = 0.0f;
         int theme = GetLevelThemeIdx();
         *reinterpret_cast<float*>(fx + 0x68) = GetBcfgFloat(*reinterpret_cast<uint32_t*>(fx + 0x54 + theme * 4));
+    }
+}
+
+static void ResetPreviewCubeFxWhiteFlash_Impl() {
+    uint8_t* sm = GetScreenMgr();
+    if (sm == nullptr) return;
+    uint8_t* fx = *reinterpret_cast<uint8_t**>(sm + 0x304);
+    if (fx == nullptr) return;
+    if (g_prismOverrideSec <= 0.0f) {
+        float baseWhite = GetBcfgFloat(*reinterpret_cast<uint32_t*>(fx + 0x50));
+        if (baseWhite <= 0.0f) baseWhite = 1.0f;
+        *reinterpret_cast<float*>(fx + 0x68) = baseWhite;
+    }
+}
+
+static void TriggerPrismVfxPreviewInternal() {
+    if (g_prismVfx == 0) return;
+    uint8_t* sm = GetScreenMgr();
+    if (sm == nullptr) return;
+    uint8_t* fx = *reinterpret_cast<uint8_t**>(sm + 0x304);
+    if (fx != nullptr) {
+        CubeFxTrigger_Impl(fx, 1);
     }
 }
 
@@ -2482,14 +2517,14 @@ static int GetOptCategoryDepth(int cat) {
     return 1;
 }
 
-static int GetOptParentRowForCategory(int cat) {
+static int GetOptParentRowForCategory(int cat, bool inPause) {
     switch (cat) {
     case OPT_CAT_DISPLAY:         return 0;
     case OPT_CAT_GRAPHICS:        return 1;
     case OPT_CAT_AUDIO:           return 2;
     case OPT_CAT_UI:              return 3;
     case OPT_CAT_GAMEPLAY:        return 4;
-    case OPT_CAT_CUSTOMIZE_THEME: return 5; // row 5 in OPT_CAT_GRAPHICS (below theme)
+    case OPT_CAT_CUSTOMIZE_THEME: return inPause ? 5 : 6; // below theme (+1 in Main Menu for preview level)
     case OPT_CAT_TIMER:           return 1; // row 1 in OPT_CAT_UI (below time format)
     case OPT_CAT_PRISM_COUNTER:   return 2; // row 2 in OPT_CAT_UI (below timer)
     case OPT_CAT_MINIMAP:         return 3; // row 3 in OPT_CAT_UI (below prism counter)
@@ -2508,6 +2543,9 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         return 4;
     case OPT_CAT_GRAPHICS: {
         int n = 0;
+        if (!inPause) {
+            outItems[n++] = OPT_PREVIEW_LEVEL;
+        }
         outItems[n++] = OPT_AA;
         outItems[n++] = OPT_CHROMA_AB;
         outItems[n++] = OPT_PRISM_VFX;
@@ -2533,12 +2571,11 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         outItems[10] = OPT_THEME_FALLING_PLATFORMS;
         outItems[11] = OPT_THEME_BUMPERS;
         outItems[12] = OPT_THEME_SWITCHES;
-        outItems[13] = OPT_THEME_HOLO_SWITCHES;
-        outItems[14] = OPT_THEME_SHRINKERS;
-        outItems[15] = OPT_FINISH_PLATFORM;
-        outItems[16] = OPT_FINISH_EFFECT;
-        outItems[17] = OPT_BACK;
-        return 18;
+        outItems[13] = OPT_THEME_SHRINKERS;
+        outItems[14] = OPT_FINISH_PLATFORM;
+        outItems[15] = OPT_FINISH_EFFECT;
+        outItems[16] = OPT_BACK;
+        return 17;
     case OPT_CAT_AUDIO:
         outItems[0] = OPT_SOUNDS;
         outItems[1] = OPT_MUSIC;
@@ -2624,6 +2661,7 @@ static int __cdecl GetPauseOptRowCount() {
 static bool IsOptItemAdjustable(OptItem item) {
     switch (item) {
     case OPT_FULLSCREEN:
+    case OPT_PREVIEW_LEVEL:
     case OPT_PRISM_VFX:
     case OPT_CHROMA_AB:
     case OPT_AA:
@@ -2647,7 +2685,6 @@ static bool IsOptItemAdjustable(OptItem item) {
     case OPT_THEME_FALLING_PLATFORMS:
     case OPT_THEME_BUMPERS:
     case OPT_THEME_SWITCHES:
-    case OPT_THEME_HOLO_SWITCHES:
     case OPT_THEME_SHRINKERS:
     case OPT_SOUNDS:
     case OPT_MUSIC:
@@ -2719,6 +2756,7 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_CAT_BTN_MINIMAP:       return &g_wstrMinimap;
     case OPT_CAT_BTN_SPEEDOMETER:   return &g_wstrSpeedometer;
     case OPT_CAT_BTN_GAMEPLAY:      return &g_wstrCatGameplay;
+    case OPT_PREVIEW_LEVEL:    return &g_wstrPreviewLevel;
     case OPT_PRISM_VFX:        return &g_wstrPrismVfx;
     case OPT_CHROMA_AB:        return &g_wstrChromaAb;
     case OPT_AA:               return &g_wstrAntiAlias;
@@ -2742,7 +2780,6 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_THEME_FALLING_PLATFORMS: return &g_wstrThemeFallPlat;
     case OPT_THEME_BUMPERS:           return &g_wstrThemeBumpers;
     case OPT_THEME_SWITCHES:          return &g_wstrThemeSwitches;
-    case OPT_THEME_HOLO_SWITCHES:     return &g_wstrThemeHoloSwitch;
     case OPT_THEME_SHRINKERS:         return &g_wstrThemeShrinkers;
     case OPT_MUSIC_START:      return &g_wstrMusicStart;
     case OPT_MUSIC_PLAYLIST:   return &g_wstrMusicPlaylist;
@@ -2814,6 +2851,7 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_SPEEDOMETER_ENABLE:
         return CTRL_TOGGLE;
     case OPT_AA:
+    case OPT_PREVIEW_LEVEL:
     case OPT_CAM_DIST:
     case OPT_DOLLY_ZOOM:
     case OPT_COLOR_THEME:
@@ -2829,7 +2867,6 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_THEME_FALLING_PLATFORMS:
     case OPT_THEME_BUMPERS:
     case OPT_THEME_SWITCHES:
-    case OPT_THEME_HOLO_SWITCHES:
     case OPT_THEME_SHRINKERS:
     case OPT_EDGE_TIMER:
     case OPT_TIMER:
@@ -2946,7 +2983,6 @@ static uint8_t* GetCustomThemeFieldPtr(OptItem item) {
     case OPT_THEME_FALLING_PLATFORMS: return &g_customTheme.fallingPlatforms;
     case OPT_THEME_BUMPERS:           return &g_customTheme.bumpers;
     case OPT_THEME_SWITCHES:          return &g_customTheme.switches;
-    case OPT_THEME_HOLO_SWITCHES:     return &g_customTheme.holoSwitches;
     case OPT_THEME_SHRINKERS:         return &g_customTheme.shrinkers;
     case OPT_FINISH_PLATFORM:         return &g_customTheme.finishPlatform;
     case OPT_FINISH_EFFECT:           return &g_customTheme.finishEffect;
@@ -2985,6 +3021,7 @@ static int GetPopupChoiceCount(OptItem item) {
     case OPT_AA:
         if (g_aaLevelCount <= 0) ProbeSupportedAaLevels();
         return (g_aaLevelCount > 0) ? g_aaLevelCount : 1;
+    case OPT_PREVIEW_LEVEL:           return 4;
     case OPT_CAM_DIST:                return 8;
     case OPT_DOLLY_ZOOM:              return 11;
     case OPT_COLOR_THEME:             return 4;
@@ -3000,7 +3037,6 @@ static int GetPopupChoiceCount(OptItem item) {
     case OPT_THEME_FALLING_PLATFORMS:
     case OPT_THEME_BUMPERS:
     case OPT_THEME_SWITCHES:
-    case OPT_THEME_HOLO_SWITCHES:
     case OPT_THEME_SHRINKERS:         return 3;
     case OPT_EDGE_TIMER:              return 3;
     case OPT_TIMER:                   return 4;
@@ -3050,6 +3086,7 @@ static int GetPopupCurrentChoice(OptItem item) {
         return best;
     }
     case OPT_COLOR_THEME:        return (g_colorTheme <= 3u) ? static_cast<int>(g_colorTheme) : 0;
+    case OPT_PREVIEW_LEVEL:      return (g_previewLevelTheme <= 3u) ? static_cast<int>(g_previewLevelTheme) : 0;
     case OPT_EDGE_TIMER:         return (g_edgeTimerMode <= 2u) ? static_cast<int>(g_edgeTimerMode) : 0;
     case OPT_TIMER:              return std::clamp<int>(g_timerMode, 0, 3);
     case OPT_TIMER_POS:          return std::clamp<int>(g_timerPos, 0, 3);
@@ -3076,6 +3113,7 @@ static int GetPopupDefaultChoice(OptItem item) {
     }
     case OPT_CAM_DIST:           return 4; // 1
     case OPT_DOLLY_ZOOM:         return 0; // pc (-1)
+    case OPT_PREVIEW_LEVEL:      return 0; // light 1
     case OPT_COLOR_THEME:        return 0; // pc
     case OPT_FINISH_EFFECT:      return 0; // pc
     case OPT_FINISH_PLATFORM:    return 0; // pc
@@ -3128,6 +3166,12 @@ static const EdgeWString* GetPopupChoiceWstr(OptItem item, int idx, EdgeWString*
         if (idx == 2) return &g_wstrJava;
         if (idx == 3) return &g_wstrCustom;
         return &g_wstrPc;
+    case OPT_PREVIEW_LEVEL:
+        idx = std::clamp(idx, 0, 3);
+        if (idx == 1) return &g_wstrPreviewLight2;
+        if (idx == 2) return &g_wstrPreviewDark1;
+        if (idx == 3) return &g_wstrPreviewDark2;
+        return &g_wstrPreviewLight1;
     case OPT_FINISH_EFFECT:
     case OPT_FINISH_PLATFORM:
     case OPT_THEME_TERRAIN:
@@ -3140,7 +3184,6 @@ static const EdgeWString* GetPopupChoiceWstr(OptItem item, int idx, EdgeWString*
     case OPT_THEME_FALLING_PLATFORMS:
     case OPT_THEME_BUMPERS:
     case OPT_THEME_SWITCHES:
-    case OPT_THEME_HOLO_SWITCHES:
     case OPT_THEME_SHRINKERS:
         idx = std::clamp(idx, 0, 2);
         if (idx == 1) return &g_wstrMobile;
@@ -3233,6 +3276,12 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
         }
         SaveModSettings();
         break;
+    case OPT_PREVIEW_LEVEL:
+        g_previewLevelTheme = static_cast<uint8_t>(std::clamp(idx, 0, 3));
+        OnGraphicsPreviewThemeChanged();
+        if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
+        SaveModSettings();
+        break;
     case OPT_CAM_DIST:
         g_camDist = g_distPresets[idx];
         ApplyOptionScaleChange(sfxId);
@@ -3266,12 +3315,14 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
     case OPT_THEME_FALLING_PLATFORMS:
     case OPT_THEME_BUMPERS:
     case OPT_THEME_SWITCHES:
-    case OPT_THEME_HOLO_SWITCHES:
     case OPT_THEME_SHRINKERS:
         if (uint8_t* field = GetCustomThemeFieldPtr(item)) {
             *field = static_cast<uint8_t>(std::clamp(idx, 0, 2));
             g_customThemeInited = 1u;
             SyncEffectiveThemeGlobals();
+            if (item == OPT_FINISH_EFFECT && IsGraphicsPreviewActive()) {
+                TriggerGraphicsPreviewFinishEffect();
+            }
             if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
             SaveModSettings();
         }
@@ -3452,6 +3503,7 @@ static void SetPrismVfxValue(int idx, int sfxId, bool save) {
             Game_PlaySfx(sm, sfxId);
         }
         SyncGraphicsRuntime(sm, false);
+        TriggerPrismVfxPreviewInternal();
     }
     if (save) {
         SaveModSettings();
@@ -3781,6 +3833,12 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
         *outFreeHeap = true;
         return tmp;
     }
+    case OPT_PREVIEW_LEVEL:
+        if (!IsGraphicsPreviewFileValid()) return &g_wstrPreviewMissing;
+        if (g_previewLevelTheme == 1) return &g_wstrPreviewLight2;
+        if (g_previewLevelTheme == 2) return &g_wstrPreviewDark1;
+        if (g_previewLevelTheme == 3) return &g_wstrPreviewDark2;
+        return &g_wstrPreviewLight1;
     case OPT_PRISM_VFX:
         if (g_prismVfx == 0) {
             Game_GetLocalizedWString(tmp, 0xc);
@@ -3848,7 +3906,6 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_THEME_FALLING_PLATFORMS:
     case OPT_THEME_BUMPERS:
     case OPT_THEME_SWITCHES:
-    case OPT_THEME_HOLO_SWITCHES:
     case OPT_THEME_SHRINKERS:
         if (const uint8_t* field = GetCustomThemeFieldPtr(item)) {
             if (*field == 1) return &g_wstrMobile;
@@ -4710,12 +4767,65 @@ static void ComputeMainOptLayout(int nRows, int virtH, int* outStride, int* outB
 }
 
 // --- Main OptionsMenu (state 9) hooks ---
+static PreviewHoverKind OptItemToPreviewHoverKind(OptItem item) {
+    switch (item) {
+    case OPT_PREVIEW_LEVEL:           return PREVIEW_HOVER_LEVEL;
+    case OPT_EDGE_TIMER:              return PREVIEW_HOVER_EDGE_TIMER;
+    case OPT_COLOR_THEME:             return PREVIEW_HOVER_THEME;
+    case OPT_THEME_TERRAIN:           return PREVIEW_HOVER_TERRAIN;
+    case OPT_THEME_WALL_GRADIENT:     return PREVIEW_HOVER_WALL_GRADIENT;
+    case OPT_THEME_PLANETS:           return PREVIEW_HOVER_PLANETS;
+    case OPT_THEME_STARS:             return PREVIEW_HOVER_STARS;
+    case OPT_THEME_PLAYER_CUBE:       return PREVIEW_HOVER_PLAYER_CUBE;
+    case OPT_THEME_DARK_CUBE:         return PREVIEW_HOVER_DARK_CUBE;
+    case OPT_CUBE_DISTORTION:         return PREVIEW_HOVER_CUBE_DISTORTION;
+    case OPT_THEME_PRISMS:            return PREVIEW_HOVER_PRISMS;
+    case OPT_THEME_MOVING_PLATFORMS:  return PREVIEW_HOVER_MOVING_PLATFORMS;
+    case OPT_THEME_PLATFORM_BORDERS:  return PREVIEW_HOVER_PLATFORM_BORDERS;
+    case OPT_THEME_FALLING_PLATFORMS: return PREVIEW_HOVER_FALLING_PLATFORMS;
+    case OPT_THEME_BUMPERS:           return PREVIEW_HOVER_BUMPERS;
+    case OPT_THEME_SWITCHES:          return PREVIEW_HOVER_SWITCHES;
+    case OPT_THEME_SHRINKERS:         return PREVIEW_HOVER_SHRINKERS;
+    case OPT_FINISH_PLATFORM:         return PREVIEW_HOVER_FINISH_PLATFORM;
+    case OPT_FINISH_EFFECT:           return PREVIEW_HOVER_FINISH_EFFECT;
+    default:                          return PREVIEW_HOVER_NONE;
+    }
+}
+
+static void SyncMainOptionsGraphicsPreview(const uint8_t* optionsMenu) {
+    bool inMainGraphics = (g_mainOptCat == OPT_CAT_GRAPHICS || g_mainOptCat == OPT_CAT_CUSTOMIZE_THEME);
+    if (!inMainGraphics || optionsMenu == nullptr) {
+        SetGraphicsPreviewHoverState(false, PREVIEW_HOVER_NONE, false, PREVIEW_HOVER_NONE, false, -1);
+        return;
+    }
+    int enterFrames = *reinterpret_cast<const int*>(optionsMenu + 4);
+    int exitTimer   = *reinterpret_cast<const int*>(optionsMenu + 8);
+    int selRow      = *reinterpret_cast<const int*>(optionsMenu + 0x10);
+    bool popupOpen  = (g_optUi.popupOpen && !g_optUi.popupInPause);
+    PreviewHoverKind popupKind = popupOpen ? OptItemToPreviewHoverKind(g_optUi.popupItem) : PREVIEW_HOVER_NONE;
+    PreviewHoverKind hoveredKind = PREVIEW_HOVER_NONE;
+    if (popupOpen) {
+        hoveredKind = popupKind;
+    } else if (enterFrames >= 8 && exitTimer < 0 && IsCurrentMenuSlotVisible()) {
+        OptItem items[kMaxOptRows];
+        int nRows = GetOptItems(g_mainOptCat, false, items);
+        if (selRow >= 0 && selRow < nRows) {
+            hoveredKind = OptItemToPreviewHoverKind(items[selRow]);
+        }
+    }
+    SetGraphicsPreviewHoverState(
+        true, hoveredKind, popupOpen, popupKind, g_optUi.popupSlotVisible, g_optUi.popupHighlight
+    );
+}
+
 static void __cdecl OptionsOnEnter_Impl(uint8_t* optionsMenu) {
     reinterpret_cast<void(__thiscall*)(void*)>(0x495ed0)(optionsMenu);
     ResetOptUiState(false);
     g_mainOptScroll.Reset();
     g_mainOptPendingReturnCat = -1;
     g_mainOptCat = OPT_CAT_ROOT;
+    SetGraphicsPreviewHoverState(false, PREVIEW_HOVER_NONE, false, PREVIEW_HOVER_NONE, false, -1);
+    UnloadGraphicsPreviewIfActive();
     *reinterpret_cast<int*>(optionsMenu + 0x10) = 0;
 }
 
@@ -4999,7 +5109,7 @@ static void __cdecl OptionsUpdate_Impl(uint8_t* optionsMenu, float dt) {
             int targetCat = g_mainOptPendingReturnCat;
             g_mainOptPendingReturnCat = -1;
             g_mainOptCat = targetCat;
-            selRow = GetOptParentRowForCategory(prevCat);
+            selRow = GetOptParentRowForCategory(prevCat, false);
             enterFrames = 0;
             exitTimer = -1;
             exitDest = 0;
@@ -5013,6 +5123,7 @@ static void __cdecl OptionsUpdate_Impl(uint8_t* optionsMenu, float dt) {
     } else {
         reinterpret_cast<void(__thiscall*)(void*, float)>(0x495e70)(optionsMenu, dt);
     }
+    SyncMainOptionsGraphicsPreview(optionsMenu);
 }
 
 static void __declspec(naked) hk_optUpdate() {
@@ -5268,7 +5379,7 @@ static void __cdecl PauseP1Cancel_Impl(uint8_t* pauseMenu) {
         int depth = GetOptCategoryDepth(g_pauseOptCat);
         g_pauseSubRow[depth] = *reinterpret_cast<int*>(pauseMenu + 0x50);
         g_pauseSubCatAtDepth[depth] = g_pauseOptCat;
-        int parentRow = GetOptParentRowForCategory(g_pauseOptCat);
+        int parentRow = GetOptParentRowForCategory(g_pauseOptCat, true);
         g_pauseOptCat = parentCat;
         g_pauseSubRow[depth - 1] = parentRow;
         *reinterpret_cast<int*>(pauseMenu + 0x50) = parentRow;
@@ -6191,7 +6302,8 @@ static void __declspec(naked) hk_adjustNearFar() {
 }
 
 static void __cdecl SkyboxProjWrap_Impl(const uint8_t* renderer, void (__cdecl* origRender)(const uint8_t*)) {
-    if (*reinterpret_cast<const uint32_t*>(renderer + 0x58) == 0 || !CheckInLevel()) {
+    bool previewActive = IsGraphicsPreviewActive();
+    if (*reinterpret_cast<const uint32_t*>(renderer + 0x58) == 0 || (!CheckInLevel() && !previewActive)) {
         origRender(renderer);
         return;
     }
@@ -7224,6 +7336,10 @@ static void __declspec(naked) hk_scoresPrismGridOrCount() {
 } // namespace
 
 namespace edgemod {
+
+void __cdecl ResetPreviewCubeFxWhiteFlash() {
+    ResetPreviewCubeFxWhiteFlash_Impl();
+}
 
 int32_t __cdecl GetPauseContentShiftY() {
     const uint8_t* level = GetLevel();

@@ -21,8 +21,8 @@ These rules apply whenever working in this repository to keep workflows fast, to
 
 - **Target binary**: Steam PC `edge.exe` (`2,714,624` bytes, SHA-256 `b73a0df8e07d47f3d3e4b57642514033c00449c0070876513323c257c3cabe9b`).
 - **Repository layout**:
-  - `dll/`: 8 C++ proxy DLL source modules (`449` verified runtime hooks) compiled into `XINPUT1_3.dll` + `verify_dll.cpp` offline expected-bytes verifier.
-  - `tools/`: Cached disassembly viewer ([safe_disasm.py](../../tools/safe_disasm.py)) and shared backup hash/size + `EDGE_GAME_DIR` / WSL path helpers ([common.py](../../tools/common.py)).
+  - `dll/`: 15 C++ proxy DLL source modules (`563` verified runtime hooks) compiled into `XINPUT1_3.dll` + `verify_dll.cpp` offline expected-bytes verifier.
+  - `tools/`: Cached disassembly viewer ([safe_disasm.py](../../tools/safe_disasm.py)), preview showcase builder ([build_preview_level.py](../../tools/build_preview_level.py)), and shared backup hash/size + `EDGE_GAME_DIR` / WSL path helpers ([common.py](../../tools/common.py)).
   - `docs/`: Technical reverse-engineering reference ([MEMORY_MAP.md](../../docs/MEMORY_MAP.md), [RESEARCH_NOTES.md](../../docs/RESEARCH_NOTES.md), [OPTIONS_UI.md](../../docs/OPTIONS_UI.md)).
   - `.agents/`: Always-on rules ([rules/edge-game-pc-enhanced.md](edge-game-pc-enhanced.md)), AI patching playbook ([PATCHING_GUIDE.md](../PATCHING_GUIDE.md)), and skill ([edge-pc-patching/SKILL.md](../skills/edge-pc-patching/SKILL.md)).
   - `releases/` & `.cache/`: Local gitignored packaging and SQLite disassembly cache folders.

@@ -2,7 +2,6 @@
 """Build, offline-verify, deploy, and restore the C++ XINPUT1_3.dll EDGE PC mod."""
 
 import argparse
-import hashlib
 import os
 import pathlib
 import shutil
@@ -50,6 +49,7 @@ DLL_SOURCES = [
     "mod_edge_timer.cpp",
     "mod_menu_hover.cpp",
     "mod_cube_distortion.cpp",
+    "mod_graphics_preview.cpp",
 ]
 
 
@@ -228,6 +228,12 @@ def main() -> int:
                 return 1
         shutil.copy2(DLL_OUT, installed_dll)
         print(f"Installed {installed_dll} ({installed_dll.stat().st_size} bytes, sha256={sha256_file(installed_dll)})")
+        preview_src = REPO_ROOT / "releases" / "levels" / "graphics_preview.bin"
+        if preview_src.is_file():
+            preview_dst = game_dir / "levels" / "graphics_preview.bin"
+            preview_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(preview_src, preview_dst)
+            print(f"Installed {preview_dst} ({preview_dst.stat().st_size} bytes)")
     else:
         print(f"Staged {DLL_OUT} ({DLL_OUT.stat().st_size} bytes, sha256={sha256_file(DLL_OUT)})")
     return 0

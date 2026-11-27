@@ -61,7 +61,6 @@ struct CustomThemeSettings {
     uint8_t fallingPlatforms; // 0=pc, 1=mobile, 2=java
     uint8_t bumpers;          // 0=pc, 1=mobile, 2=java
     uint8_t switches;         // 0=pc, 1=mobile, 2=java
-    uint8_t holoSwitches;     // 0=pc, 1=mobile, 2=java
     uint8_t shrinkers;        // 0=pc, 1=mobile, 2=java
     uint8_t finishPlatform;   // 0=pc, 1=mobile, 2=java
     uint8_t finishEffect;     // 0=pc, 1=mobile, 2=java
@@ -71,6 +70,7 @@ extern CustomThemeSettings g_customTheme;
 extern uint8_t g_customThemeInited;
 
 CustomThemeSettings MakePresetThemeSettings(uint8_t preset);
+CustomThemeSettings ClampCustomThemeSettings(CustomThemeSettings s);
 CustomThemeSettings GetEffectiveTheme();
 void SyncEffectiveThemeGlobals();
 extern uint8_t g_timerMode;   // 0=off, 1=level, 2=rank, 3=both
@@ -293,5 +293,47 @@ bool     __cdecl IsOptionsScrollbarDragging(bool inPause);
 bool     __cdecl IsOptionsMenuReadyForHover(const uint8_t* menuObj, bool inPause);
 void     __cdecl OnOptionsMouseWheel(int32_t wheelDelta);
 uint32_t __cdecl GetOptionsScrollRevision(bool inPause);
+
+// Main Menu Graphics live preview level (mod_graphics_preview.cpp & mod_menu_camera_options.cpp)
+enum PreviewHoverKind : int {
+    PREVIEW_HOVER_NONE = 0,
+    PREVIEW_HOVER_LEVEL,
+    PREVIEW_HOVER_EDGE_TIMER,
+    PREVIEW_HOVER_THEME,
+    PREVIEW_HOVER_TERRAIN,
+    PREVIEW_HOVER_WALL_GRADIENT,
+    PREVIEW_HOVER_PLANETS,
+    PREVIEW_HOVER_STARS,
+    PREVIEW_HOVER_PLAYER_CUBE,
+    PREVIEW_HOVER_DARK_CUBE,
+    PREVIEW_HOVER_CUBE_DISTORTION,
+    PREVIEW_HOVER_PRISMS,
+    PREVIEW_HOVER_MOVING_PLATFORMS,
+    PREVIEW_HOVER_PLATFORM_BORDERS,
+    PREVIEW_HOVER_FALLING_PLATFORMS,
+    PREVIEW_HOVER_BUMPERS,
+    PREVIEW_HOVER_SWITCHES,
+    PREVIEW_HOVER_SHRINKERS,
+    PREVIEW_HOVER_FINISH_PLATFORM,
+    PREVIEW_HOVER_FINISH_EFFECT
+};
+
+extern uint8_t g_previewLevelTheme; // 0=light 1, 1=light 2, 2=dark 1, 3=dark 2
+bool    __cdecl IsGraphicsPreviewActive();
+bool    __cdecl IsGraphicsPreviewLoading();
+bool    __cdecl IsGraphicsPreviewFileValid();
+bool    __cdecl IsGraphicsPreviewHoveringCubeDistortion();
+bool    __cdecl IsGraphicsPreviewHoveringEdgeTimer();
+uint8_t __cdecl GetEffectiveEdgeTimerMode();
+void    __cdecl SetGraphicsPreviewHoverState(
+    bool inMainGraphics, PreviewHoverKind hoveredKind, bool popupOpen,
+    PreviewHoverKind popupKind, bool popupSlotVisible, int popupHighlight
+);
+void    __cdecl OnGraphicsPreviewThemeChanged();
+void    __cdecl TriggerGraphicsPreviewFinishEffect();
+void    __cdecl UnloadGraphicsPreviewIfActive();
+void    __cdecl ApplyGraphicsPreviewThemeOverrides(CustomThemeSettings* eff);
+void    __cdecl ResetCustomFinishEffectState();
+void    __cdecl ResetPreviewCubeFxWhiteFlash();
 
 } // namespace edgemod

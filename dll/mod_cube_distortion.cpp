@@ -65,7 +65,7 @@ void UpdateSmoothTime(const uint8_t* ws, uint32_t state, double* outJavaTime, do
 
     double smooth30 = s_lastSmooth30;
     double dt30 = 0.0;
-    if (state == 0x11u) {
+    if (state == 0x11u || IsGraphicsPreviewActive()) {
         double alpha = static_cast<double>(std::clamp(g_uiAlpha, 0.0f, 1.0f));
         smooth30 = static_cast<double>(wsFrame) + alpha;
         if (smooth30 < s_lastSmooth30 && (s_lastSmooth30 - smooth30) < 2.0) {
@@ -342,7 +342,8 @@ void __cdecl BeginPlayerCubeDistortion(void* cubePtr) {
     if (sm == nullptr || ws == nullptr || ws[0x2120] == 0) return;
 
     uint32_t state = *reinterpret_cast<const uint32_t*>(sm + 0x50);
-    if (state != 0x11u && state != 0x12u) return;
+    bool previewActive = IsGraphicsPreviewActive();
+    if (state != 0x11u && state != 0x12u && !previewActive) return;
     if (ws[0xb5] != 0) return;
 
     double javaTime = 0.0;
@@ -380,7 +381,16 @@ void __cdecl BeginPlayerCubeDistortion(void* cubePtr) {
     s_prevScaleInv = scaleInv;
     s_hasPrevCubePos = true;
 
-    if (state == 0x11u) {
+    if (previewActive) {
+        if (isIdle && IsGraphicsPreviewHoveringCubeDistortion()) {
+            if (s_playerIdleJavaTicks < 100.0) {
+                s_playerIdleJavaTicks = 100.1;
+            }
+            s_playerIdleJavaTicks += dtJava;
+        } else {
+            s_playerIdleJavaTicks = 0.0;
+        }
+    } else if (state == 0x11u) {
         if (isIdle) {
             s_playerIdleJavaTicks += dtJava;
         } else {
@@ -411,7 +421,8 @@ void __cdecl BeginGhostCubeDistortion(void* wsPtr) {
     if (sm == nullptr || ws[0x2120] == 0) return;
 
     uint32_t state = *reinterpret_cast<const uint32_t*>(sm + 0x50);
-    if (state != 0x11u && state != 0x12u) return;
+    bool previewActive = IsGraphicsPreviewActive();
+    if (state != 0x11u && state != 0x12u && !previewActive) return;
     if (ws[0x48] != 0 || ws[0x50] == 0) return;
 
     int32_t ay = *reinterpret_cast<const int32_t*>(ws + 0x64);
@@ -423,7 +434,7 @@ void __cdecl BeginGhostCubeDistortion(void* wsPtr) {
     UpdateSmoothTime(ws, state, &javaTime, &dtJava);
 
     uint32_t javaTickInt = static_cast<uint32_t>(std::floor(javaTime));
-    if (state == 0x11u && javaTickInt != s_ghostLastJavaTick) {
+    if ((state == 0x11u || previewActive) && javaTickInt != s_ghostLastJavaTick) {
         s_ghostLastJavaTick = javaTickInt;
         bool rngHit = ((NextRand() % 10u) == 0u);
         bool periodicHit = (

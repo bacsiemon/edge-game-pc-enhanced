@@ -1046,6 +1046,14 @@ static void __declspec(naked) hk_renderBeforeSpark() {
 
 } // namespace
 
+namespace edgemod {
+
+void __cdecl ResetCustomFinishEffectState() {
+    g_winFx.active = false;
+}
+
+} // namespace edgemod
+
 void RegisterFinishEffects() {
     // 1. Finish::render call in WorldScreen::render (0x47b283, 5B)
     static const uint8_t exFinish[5] = {0xe8, 0x58, 0x84, 0x00, 0x00};

@@ -222,3 +222,4 @@ void RegisterEdgeTimer();
 void RegisterMenuHover();
 void RegisterCubeDistortion();
 void RegisterMinimap();
+void RegisterGraphicsPreview();

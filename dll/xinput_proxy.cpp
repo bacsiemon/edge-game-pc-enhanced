@@ -71,6 +71,7 @@ void RegisterAllPatchesOnce() {
     RegisterEdgeTimer();
     RegisterMenuHover();
     RegisterCubeDistortion();
+    RegisterGraphicsPreview();
 }
 
 } // namespace

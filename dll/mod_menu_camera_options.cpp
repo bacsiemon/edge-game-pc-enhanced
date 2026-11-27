@@ -6894,22 +6894,6 @@ static int __cdecl MainMenuDrawRowText_Impl(
     return MenuListDrawRowText_Impl(ws, x, y, scaleX, scaleY, extraX, extraY, alignFlags, hasSub);
 }
 
-static int __cdecl ModeSelectDrawRowText_Impl(
-    const EdgeWString* ws, int x, int y, int scaleX, int scaleY,
-    int extraX, int extraY, int alignFlags, int row
-) {
-    int hasSub = (row == 1 || row == 2 || row == 3) ? 1 : 0; // normal, extended, bonus levels
-    return MenuListDrawRowText_Impl(ws, x, y, scaleX, scaleY, extraX, extraY, alignFlags, hasSub);
-}
-
-static int __cdecl ScoresSelectDrawRowText_Impl(
-    const EdgeWString* ws, int x, int y, int scaleX, int scaleY,
-    int extraX, int extraY, int alignFlags, int row
-) {
-    int hasSub = (row == 0 || row == 1 || row == 2) ? 1 : 0; // normal, extended, bonus scores
-    return MenuListDrawRowText_Impl(ws, x, y, scaleX, scaleY, extraX, extraY, alignFlags, hasSub);
-}
-
 static void __declspec(naked) hk_mainMenuDrawRowText() {
     __asm {
         push ebx
@@ -6922,40 +6906,6 @@ static void __declspec(naked) hk_mainMenuDrawRowText() {
         push DWORD PTR [esp + 36]
         push DWORD PTR [esp + 36]
         call MainMenuDrawRowText_Impl
-        add esp, 36
-        ret
-    }
-}
-
-static void __declspec(naked) hk_modeSelectDrawRowText() {
-    __asm {
-        push ebx
-        push DWORD PTR [esp + 36]
-        push DWORD PTR [esp + 36]
-        push DWORD PTR [esp + 36]
-        push DWORD PTR [esp + 36]
-        push DWORD PTR [esp + 36]
-        push DWORD PTR [esp + 36]
-        push DWORD PTR [esp + 36]
-        push DWORD PTR [esp + 36]
-        call ModeSelectDrawRowText_Impl
-        add esp, 36
-        ret
-    }
-}
-
-static void __declspec(naked) hk_scoresSelectDrawRowText() {
-    __asm {
-        push esi
-        push DWORD PTR [esp + 36]
-        push DWORD PTR [esp + 36]
-        push DWORD PTR [esp + 36]
-        push DWORD PTR [esp + 36]
-        push DWORD PTR [esp + 36]
-        push DWORD PTR [esp + 36]
-        push DWORD PTR [esp + 36]
-        push DWORD PTR [esp + 36]
-        call ScoresSelectDrawRowText_Impl
         add esp, 36
         ret
     }
@@ -8088,44 +8038,6 @@ void RegisterMenuCameraOptions() {
         RegBytes(0x4b3860, exInstr3, rpInstr2, 2);
         RegBytes(0x4b3a15, exInstr3, rpInstr2, 2);
 
-        // ModeSelect ("edge challenge"): remove instructions (6 rows -> 5 rows; row 4 is back)
-        const uint8_t exMsCase4[5] = {0xb8, 0x05, 0x00, 0x00, 0x00};
-        const uint8_t rpMsCase4[5] = {0xb8, 0x00, 0x00, 0x00, 0x00};
-        RegBytes(0x4b8b2f, exMsCase4, rpMsCase4, 5);
-        RegBytes(0x4b956d, exMsCase4, rpMsCase4, 5);
-
-        const uint8_t exMsHit5[5] = {0x83, 0xff, 0x05, 0x75, 0x0d};
-        const uint8_t rpMsHit4[5] = {0x83, 0xff, 0x04, 0x75, 0x0d};
-        RegBytes(0x4b8b82, exMsHit5, rpMsHit4, 5);
-
-        const uint8_t exMsHit6[5] = {0x83, 0xff, 0x06, 0x7c, 0xa9};
-        const uint8_t rpMsHit5[5] = {0x83, 0xff, 0x05, 0x7c, 0xa9};
-        RegBytes(0x4b8bd4, exMsHit6, rpMsHit5, 5);
-
-        const uint8_t exMsAct[7] = {0x83, 0xf8, 0x04, 0x75, 0x18, 0x8b, 0x0d};
-        const uint8_t rpMsAct[7] = {0x83, 0xf8, 0x04, 0x74, 0x1d, 0x5e, 0xc3};
-        RegBytes(0x4b8cf4, exMsAct, rpMsAct, 7);
-
-        const uint8_t exMsUp6[3] = {0x8d, 0x4a, 0x06};
-        const uint8_t rpMsUp5[3] = {0x8d, 0x4a, 0x05};
-        RegBytes(0x4b8d63, exMsUp6, rpMsUp5, 3);
-
-        const uint8_t exMsDn6[4] = {0x83, 0x7e, 0x10, 0x06};
-        const uint8_t rpMsDn5[4] = {0x83, 0x7e, 0x10, 0x05};
-        RegBytes(0x4b8d97, exMsDn6, rpMsDn5, 4);
-
-        const uint8_t exMsBar5[4] = {0x83, 0x7f, 0x10, 0x05};
-        const uint8_t rpMsBar4[4] = {0x83, 0x7f, 0x10, 0x04};
-        RegBytes(0x4b93f9, exMsBar5, rpMsBar4, 4);
-
-        const uint8_t exMsLoop5[3] = {0x83, 0xfb, 0x05};
-        const uint8_t rpMsLoop4[3] = {0x83, 0xfb, 0x04};
-        RegBytes(0x4b94f2, exMsLoop5, rpMsLoop4, 3);
-
-        const uint8_t exMsLoop6[3] = {0x83, 0xfb, 0x06};
-        const uint8_t rpMsLoop5[3] = {0x83, 0xfb, 0x05};
-        RegBytes(0x4b9634, exMsLoop6, rpMsLoop5, 3);
-
         auto b3c = [](uint32_t va, uint8_t op1, uint8_t op2, uint8_t eo, uint8_t en) {
             uint8_t ex[3] = {op1, op2, eo}, rp[3] = {op1, op2, en};
             RegBytes(va, ex, rp, 3);
@@ -8713,13 +8625,11 @@ void RegisterMenuCameraOptions() {
     // 11. Menu text auto-fit when overflow or column overlap is detected
     {
         struct AutoFitSite { uint32_t va; uint8_t exp[5]; void* fn; };
-        const AutoFitSite sites[21] = {
+        const AutoFitSite sites[19] = {
             {0x4b9dc6, {0xe8, 0xb5, 0xce, 0xfe, 0xff}, reinterpret_cast<void*>(&DrawTextAutoFitConst<324>)},
             {0x4b9fbe, {0xe8, 0xbd, 0xcc, 0xfe, 0xff}, reinterpret_cast<void*>(&hk_mainMenuDrawRowText)},
             {0x4b93dc, {0xe8, 0x9f, 0xd8, 0xfe, 0xff}, reinterpret_cast<void*>(&DrawTextAutoFitConst<330>)},
-            {0x4b9615, {0xe8, 0x66, 0xd6, 0xfe, 0xff}, reinterpret_cast<void*>(&hk_modeSelectDrawRowText)},
             {0x4b214c, {0xe8, 0x2f, 0x4b, 0xff, 0xff}, reinterpret_cast<void*>(&DrawTextAutoFitConst<330>)},
-            {0x4b2357, {0xe8, 0x24, 0x49, 0xff, 0xff}, reinterpret_cast<void*>(&hk_scoresSelectDrawRowText)},
             {0x4a936d, {0xe8, 0x0e, 0xd9, 0xff, 0xff}, reinterpret_cast<void*>(&DrawTextAutoFitConst<106>)},
             {0x4a948f, {0xe8, 0xec, 0xd7, 0xff, 0xff}, reinterpret_cast<void*>(&DrawTextAutoFitConst<106>)},
             {0x4b7fcc, {0xe8, 0xaf, 0xec, 0xfe, 0xff}, reinterpret_cast<void*>(&DrawTextAutoFitConst<330>)},

@@ -261,6 +261,24 @@ void __cdecl DrawSmoothRainbowSprite(
     drawSpriteAlpha(sprites[idx1], 0, 0, w, h, x, y, a2);
 }
 
+int32_t __cdecl GetSmoothSubmenuFadePct(const uint8_t* sub, int32_t mode) {
+    return CalcSubFadePct(sub, mode);
+}
+
+void __cdecl GetSmoothSubmenuCounters(const uint8_t* sub, float* outSm4, float* outSm8) {
+    if (sub == nullptr) {
+        if (outSm4) *outSm4 = 0.0f;
+        if (outSm8) *outSm8 = -1.0f;
+        return;
+    }
+    int32_t cur4 = *reinterpret_cast<const int32_t*>(sub + 0x4);
+    int32_t cur8 = *reinterpret_cast<const int32_t*>(sub + 0x8);
+    int32_t prev4 = (g_subPtr == sub) ? g_subPrev4 : cur4;
+    int32_t prev8 = (g_subPtr == sub) ? g_subPrev8 : cur8;
+    if (outSm4) *outSm4 = SmoothCounterPair(cur4, prev4, false);
+    if (outSm8) *outSm8 = SmoothCounterPair(cur8, prev8, true);
+}
+
 } // namespace edgemod
 
 namespace {
@@ -926,6 +944,7 @@ static void __declspec(naked) hk_endFadePct() {
 }
 
 static int32_t __cdecl CalcSubSlideY_Impl(const uint8_t* sub, int32_t mode, int32_t rowArg) {
+    (void)rowArg;
     int32_t cur8 = *reinterpret_cast<const int32_t*>(sub + 0x8);
     bool isOut = false;
     float sm = 0.0f;
@@ -953,16 +972,24 @@ static int32_t __cdecl CalcSubSlideY_Impl(const uint8_t* sub, int32_t mode, int3
     pctRem /= 4.0f;
 
     int32_t sel = *reinterpret_cast<const int32_t*>(sub + 0x10);
+    if (mode == 1 || mode == 3) {
+        int basePt[2] = {0, 0};
+        reinterpret_cast<void(__cdecl*)(int*)>(0x496030)(basePt);
+        int panelH = reinterpret_cast<int(__cdecl*)()>(0x496060)();
+        int menuW = *reinterpret_cast<const int32_t*>(0x589ddc);
+        MenuRowRect r = (mode == 1)
+            ? GetModeSelectRowRect(sel, basePt[0], basePt[1], panelH, menuW)
+            : GetScoresSelectRowRect(sel, basePt[0], basePt[1], panelH, menuW);
+        return static_cast<int32_t>(static_cast<float>((basePt[1] + 2) - r.y) * pctRem);
+    }
+
     int32_t base = 0;
     if (mode == 0) {
         base = sel * -50 - 82;
     } else if (mode == 2) {
         base = sel * -50 - 82;
-    } else if ((mode == 1 && sel == 4) || (mode == 3 && sel == 4)) {
-        int32_t fy = reinterpret_cast<int32_t(__cdecl*)()>(0x496060)();
-        base = -fy + 0x3d;
     } else {
-        int32_t r = (mode == 1) ? rowArg : sel;
+        int32_t r = sel;
         base = r * -50 - 82;
     }
     int32_t off = static_cast<int32_t>(static_cast<float>(base) * pctRem);

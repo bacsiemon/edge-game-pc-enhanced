@@ -414,4 +414,21 @@ void __cdecl ResetMotionBlurHistory();
 void __cdecl ResetMotionBlurEntity(const void* entityPtr);
 void __cdecl ReleaseMotionBlurResources();
 
+// Android-style level category button cards (mod_category_buttons.cpp)
+struct MenuRowRect {
+    int  x;
+    int  y;
+    int  w;
+    int  h;
+    bool isCard;
+};
+MenuRowRect __cdecl GetModeSelectRowRect(int row, int bx, int by, int panelH, int menuW);
+MenuRowRect __cdecl GetScoresSelectRowRect(int row, int bx, int by, int panelH, int menuW);
+int32_t     __cdecl GetModeSelectRowCount();
+int32_t     __cdecl GetScoresSelectRowCount();
+int32_t     __cdecl GetEffectiveLastPlayedType();
+int32_t     __cdecl GetSmoothSubmenuFadePct(const uint8_t* sub, int32_t mode);
+void        __cdecl GetSmoothSubmenuCounters(const uint8_t* sub, float* outSm4, float* outSm8);
+bool        __cdecl IsMenuRenderForceWhite();
+
 } // namespace edgemod

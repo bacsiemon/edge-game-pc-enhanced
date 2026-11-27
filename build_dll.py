@@ -55,6 +55,7 @@ DLL_SOURCES = [
     "mod_turbo_mode.cpp",
     "mod_display_mode.cpp",
     "mod_motion_blur.cpp",
+    "mod_category_buttons.cpp",
 ]
 
 

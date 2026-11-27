@@ -76,6 +76,7 @@ void RegisterAllPatchesOnce() {
     RegisterTurboMode();
     RegisterDisplayMode();
     RegisterMotionBlur();
+    RegisterCategoryButtons();
 }
 
 } // namespace

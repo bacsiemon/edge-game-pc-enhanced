@@ -639,6 +639,15 @@ void __cdecl ResetTurboScores() {
     SaveTurboScores();
 }
 
+int32_t __cdecl GetEffectiveLastPlayedType() {
+    if (g_turboMode != 0) {
+        EnsureTurboScoresLoaded();
+        return std::clamp(g_turboLastPlayedType, 0, 2);
+    }
+    uint8_t* sm = GetScreenMgr();
+    return sm ? std::clamp(*reinterpret_cast<const int32_t*>(sm + 0x2c4), 0, 2) : 0;
+}
+
 } // namespace edgemod
 
 void RegisterTurboMode() {

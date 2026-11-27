@@ -126,12 +126,12 @@ static int HitTestMenuSlot(const uint8_t* menu, uint32_t vtbl, int pausePage, in
     if (vtbl == kVtblModeSel) {
         if (mx < bx || mx >= bx + menuW) return -1;
         int panelH = GetMenuPanelH();
-        int top = by + 0x51;
-        for (int i = 0; i < 5; ++i) {
-            int rowTop = (i == 4) ? (by + panelH - 0x3e) : top;
+        const int count = GetModeSelectRowCount();
+        for (int i = 0; i < count; ++i) {
             bool visible = (i < 1 || i > 3 || menu[0x14] != 0);
-            if (visible && my >= rowTop && my < rowTop + 0x32) return i;
-            if (visible) top += 0x32;
+            if (!visible) continue;
+            MenuRowRect r = GetModeSelectRowRect(i, bx, by, panelH, menuW);
+            if (mx >= r.x && mx < r.x + r.w && my >= r.y && my < r.y + r.h) return i;
         }
         return -1;
     }
@@ -139,9 +139,10 @@ static int HitTestMenuSlot(const uint8_t* menu, uint32_t vtbl, int pausePage, in
     if (vtbl == kVtblScoresSel) {
         if (mx < bx || mx >= bx + menuW) return -1;
         int panelH = GetMenuPanelH();
-        for (int i = 0; i < 5; ++i) {
-            int rowTop = (i == 4) ? (by + panelH - 0x3e) : (by + 0x51 + i * 0x32);
-            if (my >= rowTop && my < rowTop + 0x32) return i;
+        const int count = GetScoresSelectRowCount();
+        for (int i = 0; i < count; ++i) {
+            MenuRowRect r = GetScoresSelectRowRect(i, bx, by, panelH, menuW);
+            if (mx >= r.x && mx < r.x + r.w && my >= r.y && my < r.y + r.h) return i;
         }
         return -1;
     }
@@ -262,22 +263,16 @@ static void DrawHoveredSlotBorder(const uint8_t* menu, uint32_t vtbl, int pauseP
             Game_DrawRainbowRectBorder(frame, bx + 2, by + 0x51 + sel * 0x32, menuW - 4, 0x32, 2, 255);
         }
     } else if (vtbl == kVtblModeSel) {
-        int panelH = GetMenuPanelH();
-        int top = by + 0x51;
-        for (int i = 0; i < 5; ++i) {
-            int rowTop = (i == 4) ? (by + panelH - 0x3e) : top;
-            bool visible = (i < 1 || i > 3 || menu[0x14] != 0);
-            if (visible && i == sel) {
-                Game_DrawRainbowRectBorder(frame, bx + 2, rowTop, menuW - 4, 0x32, 2, 255);
-                break;
-            }
-            if (visible) top += 0x32;
+        if (sel < GetModeSelectRowCount() && (sel < 1 || sel > 3 || menu[0x14] != 0)) {
+            int panelH = GetMenuPanelH();
+            MenuRowRect r = GetModeSelectRowRect(sel, bx, by, panelH, menuW);
+            Game_DrawRainbowRectBorder(frame, r.x, r.y, r.w, r.h, 2, 255);
         }
     } else if (vtbl == kVtblScoresSel) {
-        if (sel < 5) {
+        if (sel < GetScoresSelectRowCount()) {
             int panelH = GetMenuPanelH();
-            int rowTop = (sel == 4) ? (by + panelH - 0x3e) : (by + 0x51 + sel * 0x32);
-            Game_DrawRainbowRectBorder(frame, bx + 2, rowTop, menuW - 4, 0x32, 2, 255);
+            MenuRowRect r = GetScoresSelectRowRect(sel, bx, by, panelH, menuW);
+            Game_DrawRainbowRectBorder(frame, r.x, r.y, r.w, r.h, 2, 255);
         }
     } else if (vtbl == kVtblConfirmExit) {
         if (sel == 0) {
@@ -383,7 +378,8 @@ static bool AnyRelevantKeyPressed(const uint8_t* sm, uint32_t vtbl, int pausePag
     if (vtbl == kVtblConfirmExit || (vtbl == kVtblPause && pausePage == 2)) {
         return lr || enter;
     }
-    if (vtbl == kVtblOptions || (vtbl == kVtblPause && pausePage == 1)) {
+    if (vtbl == kVtblOptions || vtbl == kVtblModeSel || vtbl == kVtblScoresSel ||
+        (vtbl == kVtblPause && pausePage == 1)) {
         return ud || lr || enter;
     }
     return ud || enter;
@@ -799,45 +795,6 @@ static void __declspec(naked) hk_mainMenuBarGuard() {
     }
 }
 
-static void __declspec(naked) hk_modeSelectBarGuard() {
-    __asm {
-        cmp DWORD PTR [edi + 0x10], 0
-        jl ms_skip_bar
-        mov eax, DWORD PTR [ebp - 0x58]
-        mov BYTE PTR [ebp - 0x3d], 0xff
-        cmp eax, ebx
-        je ms_eq_bar
-        mov edx, 0x4b941d
-        jmp edx
-    ms_eq_bar:
-        mov edx, 0x4b949b
-        jmp edx
-    ms_skip_bar:
-        mov edx, 0x4b94d1
-        jmp edx
-    }
-}
-
-static void __declspec(naked) hk_scoresSelectBarGuard() {
-    __asm {
-        mov ecx, DWORD PTR [ebp - 0x6c]
-        cmp DWORD PTR [ecx + 0x10], 0
-        jl ss_skip_bar
-        mov eax, DWORD PTR [ebp - 0x48]
-        mov BYTE PTR [ebp - 0x3d], 0xff
-        cmp eax, ebx
-        je ss_eq_bar
-        mov ecx, 0x4b218c
-        jmp ecx
-    ss_eq_bar:
-        mov ecx, 0x4b2208
-        jmp ecx
-    ss_skip_bar:
-        mov ecx, 0x4b223e
-        jmp ecx
-    }
-}
-
 static int __cdecl CalcDrawButtonFillAlpha_Impl(int x, int y, int w, int h, int alpha, uint8_t pressed) {
     bool hovered = false;
     if (g_hover.renderInteractive && g_hover.lastInputMode == HoverInputMode::Mouse) {
@@ -928,6 +885,10 @@ bool __cdecl IsMenuRenderInteractive() {
     return g_hover.renderInteractive;
 }
 
+bool __cdecl IsMenuRenderForceWhite() {
+    return g_hover.renderForceWhite;
+}
+
 } // namespace edgemod
 
 void RegisterMenuHover() {
@@ -953,19 +914,7 @@ void RegisterMenuHover() {
     };
     RegRelJmp(0x4b9dd9, exMmBar, 15, 5, &hk_mainMenuBarGuard, 0x90, 0x4b9de8);
 
-    // 4. ModeSelectMenu highlight bar guard when sel < 0 (0x4b9412, 11 bytes)
-    static const uint8_t exMsBar[11] = {
-        0x8b, 0x45, 0xa8, 0xc6, 0x45, 0xc3, 0xff, 0x3b, 0xc3, 0x74, 0x7e
-    };
-    RegRelJmp(0x4b9412, exMsBar, 11, 5, &hk_modeSelectBarGuard, 0x90, 0x4b941d);
-
-    // 5. ScoresSelectMenu highlight bar guard when sel < 0 (0x4b2181, 11 bytes)
-    static const uint8_t exSsBar[11] = {
-        0x8b, 0x45, 0xb8, 0xc6, 0x45, 0xc3, 0xff, 0x3b, 0xc3, 0x74, 0x7c
-    };
-    RegRelJmp(0x4b2181, exSsBar, 11, 5, &hk_scoresSelectBarGuard, 0x90, 0x4b218c);
-
-    // 6. Menu::drawButton hover alpha (0x4961dd, 28 bytes) & border (0x49628d, 5 bytes)
+    // 4. Menu::drawButton hover alpha (0x4961dd, 28 bytes) & border (0x49628d, 5 bytes)
     static const uint8_t exBtnAlpha[28] = {
         0x80, 0x7d, 0x24, 0x00, 0x74, 0x05, 0x8b, 0x45, 0x20, 0xeb, 0x11, 0xb8, 0x67, 0x66,
         0x66, 0x66, 0xf7, 0x6d, 0x20, 0xd1, 0xfa, 0x8b, 0xc2, 0xc1, 0xe8, 0x1f, 0x03, 0xc2
@@ -1010,24 +959,6 @@ void RegisterMenuHover() {
     patchBytes(0x4b9e59, {0x8d, 0x54, 0x31, 0x56}, {0x8d, 0x54, 0x31, 0x51});
     patchBytes(0x4b9e96, {0x6a, 0x28},             {0x6a, 0x32});
     patchBytes(0x4b9e9c, {0x8d, 0x4c, 0x02, 0x56}, {0x8d, 0x4c, 0x02, 0x51});
-    // ModeSelectMenu hit test + render
-    patchBytes(0x4b8b7b, {0xb8, 0x56, 0x00, 0x00, 0x00}, {0xb8, 0x51, 0x00, 0x00, 0x00});
-    patchBytes(0x4b8b8f, {0x83, 0xe8, 0x39}, {0x83, 0xe8, 0x3e});
-    patchBytes(0x4b8bc9, {0x83, 0xc2, 0x28}, {0x83, 0xc2, 0x32});
-    patchBytes(0x4b9404, {0x8d, 0x70, 0xc7}, {0x8d, 0x70, 0xc2});
-    patchBytes(0x4b940f, {0x83, 0xc6, 0x56}, {0x83, 0xc6, 0x51});
-    patchBytes(0x4b943a, {0x6a, 0x2c},       {0x6a, 0x36});
-    patchBytes(0x4b947a, {0x6a, 0x28},       {0x6a, 0x32});
-    patchBytes(0x4b94b8, {0x6a, 0x28},       {0x6a, 0x32});
-    // ScoresSelectMenu hit test + render
-    patchBytes(0x4b198b, {0xb8, 0x56, 0x00, 0x00, 0x00}, {0xb8, 0x51, 0x00, 0x00, 0x00});
-    patchBytes(0x4b199f, {0x83, 0xe8, 0x39}, {0x83, 0xe8, 0x3e});
-    patchBytes(0x4b19c6, {0x83, 0xc2, 0x28}, {0x83, 0xc2, 0x32});
-    patchBytes(0x4b2176, {0x8d, 0x70, 0xc7}, {0x8d, 0x70, 0xc2});
-    patchBytes(0x4b217e, {0x83, 0xc6, 0x56}, {0x83, 0xc6, 0x51});
-    patchBytes(0x4b21ab, {0x6a, 0x2c},       {0x6a, 0x36});
-    patchBytes(0x4b21e7, {0x6a, 0x28},       {0x6a, 0x32});
-    patchBytes(0x4b2225, {0x6a, 0x28},       {0x6a, 0x32});
 
     // 9. Keep PauseMenu P0 & DebriefMenu option labels stationary (disable vanilla selected left-shift)
     patchBytes(0x4ad2ce, {0x83, 0xe2, 0x0e}, {0x83, 0xe2, 0x00}); // PauseMenu P0: and edx, 0 (was 14)

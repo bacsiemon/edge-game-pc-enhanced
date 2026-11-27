@@ -524,19 +524,55 @@ static void __declspec(naked) hk_lsTileFlashPct() {
     }
 }
 
-static uint32_t __cdecl LsTileBadgeRainbow_Impl(int32_t frame, uint32_t tileIdx) {
-    float f = (static_cast<float>(frame) + g_uiAlpha) / 3.0f - static_cast<float>(tileIdx >> 1) + 130.0f;
-    return CalcSmoothRainbow(f, 1.0f);
+static void __cdecl RenderLsTileBadgeDots_Impl(
+    const uint8_t* ls,
+    uint32_t tileIdx,
+    int32_t frame,
+    int32_t fadePct,
+    int32_t tileX,
+    int32_t tileY
+) {
+    if (ls == nullptr) return;
+    int32_t count = *reinterpret_cast<const int32_t*>(ls + 0x18);
+    if (tileIdx >= static_cast<uint32_t>(count)) return;
+    const uint8_t* tileFlags = *reinterpret_cast<const uint8_t* const*>(ls + 0x4c);
+    if (tileFlags == nullptr) return;
+
+    int32_t dotCount = static_cast<int32_t>(tileFlags[tileIdx * 2 + 1]);
+    if (dotCount <= 0) return;
+    if (dotCount > 3) dotCount = 3;
+
+    // Vanilla dot 0 is 4x4 at (tileX + 3, tileY + 3).
+    // Dots sit at left (+3), center (+15), and right (+27) with an 8px gap (12px pitch),
+    // fitting symmetrically inside the 30x30 inner square [tileX+2..tileX+32) with 1px side margins.
+    for (int32_t i = 0; i < dotCount; ++i) {
+        float f = (static_cast<float>(frame) + g_uiAlpha) / 3.0f
+                - static_cast<float>(tileIdx >> 1)
+                - static_cast<float>(i)
+                + 130.0f;
+        uint32_t rawRgb = CalcSmoothRainbow(f, 1.0f);
+        uint32_t fadedRgb = Game_ColorLerp(0xffffffu, rawRgb, fadePct);
+        uint8_t rgba[4] = {
+            static_cast<uint8_t>((fadedRgb >> 16) & 0xffu),
+            static_cast<uint8_t>((fadedRgb >> 8) & 0xffu),
+            static_cast<uint8_t>(fadedRgb & 0xffu),
+            0xffu
+        };
+        Game_DrawQuad(tileX + 3 + i * 12, tileY + 3, 4, 4, rgba);
+    }
 }
+
 static void __declspec(naked) hk_lsTileBadgeRainbow() {
     __asm {
-        push ebx
-        push DWORD PTR [ebp - 0x54]
-        call LsTileBadgeRainbow_Impl
-        add esp, 8
-        mov edx, eax
-        push esi
-        mov eax, 0x4b828a
+        push DWORD PTR [ebp - 0x60] // tileY
+        push DWORD PTR [ebp - 0x44] // tileX
+        push esi                    // fadePct
+        push DWORD PTR [ebp - 0x54] // frame
+        push ebx                    // tileIdx
+        push edi                    // ls
+        call RenderLsTileBadgeDots_Impl
+        add esp, 24
+        mov eax, 0x4b82d9
         jmp eax
     }
 }
@@ -2948,7 +2984,7 @@ void RegisterUiSmoothPart2() {
         RegRelJmp(0x4b81a3, exFlash, 12, 5, &hk_lsTileFlashPct, 0x90, 0x4b81c5);
 
         const uint8_t exBadge[12] = {0x8b, 0xc3, 0x99, 0x2b, 0xc2, 0x8b, 0xc8, 0xb8, 0xab, 0xaa, 0xaa, 0xaa};
-        RegRelJmp(0x4b825f, exBadge, 12, 5, &hk_lsTileBadgeRainbow, 0x90, 0x4b828a);
+        RegRelJmp(0x4b825f, exBadge, 12, 5, &hk_lsTileBadgeRainbow, 0x90, 0x4b82d9);
 
         const uint8_t exPct7[8] = {0x8b, 0x4f, 0x28, 0x6b, 0xc9, 0x64, 0xb8, 0x93};
         RegRelJmp(0x4b8527, exPct7, 8, 5, &hk_lsInfoCardPct7, 0x90, 0x4b8566);

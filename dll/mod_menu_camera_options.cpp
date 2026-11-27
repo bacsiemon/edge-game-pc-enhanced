@@ -6997,6 +6997,25 @@ static uint8_t __stdcall LevelSelectTileFlag_Impl(int mode, int idx) {
     return 1; // unlocked & not played (raised white/#BFBFBF diagonal tile when unselected)
 }
 
+static uint8_t __stdcall LevelSelectTileDotCount_Impl(int mode, int idx) {
+    uint8_t* sm = GetScreenMgr();
+    if (sm == nullptr || mode < 0 || mode > 2) return 0;
+    if (!reinterpret_cast<uint8_t(__thiscall*)(void*, int, int)>(0x4a45d0)(sm + 0x24c, mode, idx)) return 0;
+    const uint8_t* lvlInfo = reinterpret_cast<const uint8_t*(__thiscall*)(void*, int, int)>(0x4a4620)(sm + 0x24c, mode, idx);
+    if (lvlInfo == nullptr) return 0;
+    int32_t levelId = *reinterpret_cast<const int32_t*>(lvlInfo + 0x3c);
+    const uint8_t* saveInfo = reinterpret_cast<const uint8_t*(__thiscall*)(void*, int32_t)>(0x4920e0)(sm + 0x298, levelId);
+    if (saveInfo == nullptr || saveInfo[0] == 0) return 0;
+
+    int32_t bestRank    = *reinterpret_cast<const int32_t*>(saveInfo + 0x0c);
+    int32_t bestPrisms  = *reinterpret_cast<const int32_t*>(saveInfo + 0x08);
+    int32_t totalPrisms = *reinterpret_cast<const int16_t*>(lvlInfo + 0x70);
+    if (bestRank >= 5) return 3;             // S+ rank
+    if (bestRank >= 4) return 2;             // S rank
+    if (bestPrisms >= totalPrisms) return 1; // All prisms collected
+    return 0;
+}
+
 static void __cdecl LsTileInnerQuad_Impl(
     uint8_t* ls, int32_t tileIdx, const uint8_t* ebpFrame,
     int32_t innerX, int32_t innerY, int32_t w, int32_t h, const uint8_t* innerRgba
@@ -8208,6 +8227,10 @@ void RegisterMenuCameraOptions() {
         // LevelSelect::refreshTiles (0x4b5fcd): call 0x494990 (ret 8) -> return 2 if completed, 1 if unlocked & unplayed
         const uint8_t exLs[5] = {0xe8, 0xbe, 0xe9, 0xfd, 0xff};
         RegRelCall(0x4b5fcd, exLs, 5, 5, &LevelSelectTileFlag_Impl);
+
+        // LevelSelect::refreshTiles (0x4b5fdf): call 0x4942c0 (ret 8) -> return 0..3 badge dots (1=all prisms, 2=S, 3=S+)
+        const uint8_t exLsDot[5] = {0xe8, 0xdc, 0xe2, 0xfd, 0xff};
+        RegRelCall(0x4b5fdf, exLsDot, 5, 5, &LevelSelectTileDotCount_Impl);
 
         // ScoresMenu::buildRows (0x4b1625): call 0x494990 (ret 8) -> add esp, 8; mov al, byte ptr [edi] (LevelSaveInfo::completed)
         const uint8_t exSc[5] = {0xe8, 0x66, 0x33, 0xfe, 0xff};

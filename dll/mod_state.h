@@ -62,6 +62,9 @@ struct CustomThemeSettings {
     uint8_t fallingPlatforms; // 0=pc, 1=mobile, 2=java
     uint8_t bumpers;          // 0=pc, 1=mobile, 2=java
     uint8_t switches;         // 0=pc, 1=mobile, 2=java
+    uint8_t hintTile;         // 0=pc, 1=mobile, 2=java
+    uint8_t hintGhost;        // 0=pc, 1=mobile, 2=java
+    uint8_t cubeShatter;      // 0=pc, 1=mobile, 2=java
     uint8_t shrinkers;        // 0=pc, 1=mobile, 2=java
     uint8_t finishPlatform;   // 0=pc, 1=mobile, 2=java
     uint8_t finishEffect;     // 0=pc, 1=mobile, 2=java
@@ -234,7 +237,17 @@ void __cdecl RenderMinimapMenuPreview(uint8_t* renderer, uint8_t* ws, uint32_t e
 void __cdecl RenderPauseHeaderTimer(int x, int y, int width);
 void OnColorThemeChanged();
 void __cdecl ResetColorThemeLevelCaches();
+uint32_t __cdecl GetCleanHintGhostBaseRgb();
 uint32_t __fastcall RenderPlayerCubeWithColorTheme(void* cube);
+void __cdecl TriggerMobileCubeShatter(float cx, float cy, float cz, bool isPreview);
+void __cdecl ResetCustomShatterEffectState();
+void __cdecl RenderCustomShatterEffect_Impl();
+void __cdecl BeginCustomHintGhostOverride(const uint8_t* ws, uint8_t style);
+void __cdecl EndCustomHintGhostOverride();
+bool __cdecl IsCustomHintGhostOverrideActive();
+bool __cdecl TryDrawCustomHintGhostSubMesh(void* d3dDev, const uint8_t* subMesh, const uint8_t* renderParams);
+void __cdecl RenderPreviewHintGhostIfActive();
+void __cdecl ResetHintGhostState();
 void __cdecl BeginPlayerCubeDistortion(void* cube);
 void __cdecl EndCubeDistortion();
 void __cdecl BeginGhostCubeDistortion(void* worldScreen);
@@ -314,6 +327,9 @@ enum PreviewHoverKind : int {
     PREVIEW_HOVER_FALLING_PLATFORMS,
     PREVIEW_HOVER_BUMPERS,
     PREVIEW_HOVER_SWITCHES,
+    PREVIEW_HOVER_HINT_TILE,
+    PREVIEW_HOVER_HINT_GHOST,
+    PREVIEW_HOVER_CUBE_SHATTER,
     PREVIEW_HOVER_SHRINKERS,
     PREVIEW_HOVER_FINISH_PLATFORM,
     PREVIEW_HOVER_FINISH_EFFECT
@@ -332,6 +348,7 @@ void    __cdecl SetGraphicsPreviewHoverState(
 );
 void    __cdecl OnGraphicsPreviewThemeChanged();
 void    __cdecl TriggerGraphicsPreviewFinishEffect();
+void    __cdecl TriggerGraphicsPreviewCubeShatter();
 void    __cdecl UnloadGraphicsPreviewIfActive();
 void    __cdecl ApplyGraphicsPreviewThemeOverrides(CustomThemeSettings* eff);
 void    __cdecl ResetCustomFinishEffectState();

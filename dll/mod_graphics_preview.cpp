@@ -25,7 +25,8 @@ constexpr int32_t kPreviewFinishX = 11;
 constexpr int32_t kPreviewFinishZ = 12;
 constexpr int32_t kPreviewFinishY = 1; // resting on finish tile (11, 12, 1)
 
-constexpr int32_t kPreviewFinishDurationTicks = 95;
+constexpr int32_t kPreviewFinishDurationTicks  = 95;
+constexpr int32_t kPreviewShatterDurationTicks = 55;
 
 struct PreviewState {
     bool             inMainGraphics     = false;
@@ -53,10 +54,19 @@ struct PreviewState {
     int32_t          finishTicks        = 0;
     bool             pendingFinishTrig  = false;
 
+    bool             shatterActive        = false;
+    bool             shatterHideCube      = false;
+    int32_t          shatterTicks         = 0;
+    int32_t          shatterDurationTicks = kPreviewShatterDurationTicks;
+    bool             pendingShatterTrig   = false;
+    void*            shatterSpark[2]      = {nullptr, nullptr};
+
     bool             hadThemeOverride   = false;
     CustomThemeSettings lastEffTheme{};
-    PreviewHoverKind lastPopupFinishKind = PREVIEW_HOVER_NONE;
-    int              lastPopupFinishHi   = -1;
+    PreviewHoverKind lastPopupFinishKind  = PREVIEW_HOVER_NONE;
+    int              lastPopupFinishHi    = -1;
+    PreviewHoverKind lastPopupShatterKind = PREVIEW_HOVER_NONE;
+    int              lastPopupShatterHi   = -1;
 
     bool             savedMenuState     = false;
     bool             hasSavedMenuPose   = false;
@@ -313,6 +323,33 @@ static void ResetCubeToTile(uint8_t* cube, int32_t gx, int32_t gz, int32_t gy) {
     *reinterpret_cast<uint32_t*>(cube + 0x16c) = 0u;
 }
 
+static void ClearShatterSparkEmitter() {
+    if (g_pv.shatterSpark[0] == nullptr && g_pv.shatterSpark[1] == nullptr) return;
+    uint8_t* sm = GetScreenMgr();
+    if (sm != nullptr && g_pv.shatterSpark[0] != nullptr) {
+        void* sparkMgr = *reinterpret_cast<void**>(sm + 0x3c);
+        if (sparkMgr != nullptr) {
+            reinterpret_cast<void(__thiscall*)(void*, void*)>(0x4ea9a0)(sparkMgr, g_pv.shatterSpark);
+        }
+    }
+    reinterpret_cast<void(__thiscall*)(void*)>(0x421ff0)(g_pv.shatterSpark);
+    g_pv.shatterSpark[0] = nullptr;
+    g_pv.shatterSpark[1] = nullptr;
+}
+
+static void SetCubeInterpVisible(uint8_t* cube, bool visible) {
+    if (cube == nullptr) return;
+    uint8_t* lvl = GetLevel();
+    if (lvl == nullptr) return;
+    int32_t id = *reinterpret_cast<const int32_t*>(cube);
+    for (int bufIdx = 0; bufIdx < 2; ++bufIdx) {
+        uint8_t* interpBase = *reinterpret_cast<uint8_t**>(lvl + bufIdx * 4 + 0xa8);
+        if (interpBase != nullptr) {
+            interpBase[id * 68 + 0x0d] = visible ? 1 : 0;
+        }
+    }
+}
+
 static void ClearCubeInterpFinishState(uint8_t* cube) {
     if (cube == nullptr) return;
     *reinterpret_cast<int32_t*>(cube + 0x1a0) = 0;
@@ -373,6 +410,9 @@ static void ResetPreviewFinishState(uint8_t* ws) {
     }
     EnsurePreviewDarkCubeVisible(ws);
     ApplyPreviewPlayerPrismBuff(ws);
+    if (g_pv.shatterActive && g_pv.shatterHideCube) {
+        SetCubeInterpVisible(*reinterpret_cast<uint8_t**>(ws + 0x34), false);
+    }
     auto** vt = *reinterpret_cast<void***>(ws);
     reinterpret_cast<void(__thiscall*)(void*, float)>(vt[4])(ws, 1.0f);
 }
@@ -424,11 +464,95 @@ static void SpawnPreviewDarkCube(uint8_t* ws) {
     EnsurePreviewDarkCubeVisible(ws);
 }
 
+static void ResetPreviewShatterState(uint8_t* ws) {
+    g_pv.shatterActive = false;
+    g_pv.shatterHideCube = false;
+    g_pv.shatterTicks = 0;
+    g_pv.shatterDurationTicks = kPreviewShatterDurationTicks;
+    ClearShatterSparkEmitter();
+    ResetCustomShatterEffectState();
+    if (ws == nullptr || ws[0x2120] == 0) return;
+    ws[0xb4] = 0;
+    uint8_t* playerCube = *reinterpret_cast<uint8_t**>(ws + 0x34);
+    if (playerCube != nullptr) {
+        ClearCubeInterpFinishState(playerCube);
+        ResetCubeToTile(playerCube, kPreviewSpawnX, kPreviewSpawnZ, kPreviewSpawnY);
+    }
+    EnsurePreviewDarkCubeVisible(ws);
+    ApplyPreviewPlayerPrismBuff(ws);
+    auto** vt = *reinterpret_cast<void***>(ws);
+    reinterpret_cast<void(__thiscall*)(void*, float)>(vt[4])(ws, 1.0f);
+}
+
+static void ExecuteTriggerCubeShatter(uint8_t* ws) {
+    if (ws == nullptr || ws[0x2120] == 0) return;
+    uint8_t* playerCube = *reinterpret_cast<uint8_t**>(ws + 0x34);
+    if (playerCube == nullptr) return;
+
+    if (g_pv.finishActive) {
+        ResetPreviewFinishState(ws);
+    }
+    ClearShatterSparkEmitter();
+    ResetCustomShatterEffectState();
+    ws[0xb4] = 0;
+
+    ClearCubeInterpFinishState(playerCube);
+    ResetCubeToTile(playerCube, kPreviewSpawnX, kPreviewSpawnZ, kPreviewSpawnY);
+    EnsurePreviewDarkCubeVisible(ws);
+    ApplyPreviewPlayerPrismBuff(ws);
+    auto** vt = *reinterpret_cast<void***>(ws);
+    reinterpret_cast<void(__thiscall*)(void*, float)>(vt[4])(ws, 1.0f);
+
+    float pos[3] = {
+        static_cast<float>(kPreviewSpawnX) * 30.0f + 15.0f,
+        static_cast<float>(kPreviewSpawnY) * 30.0f + 15.0f,
+        static_cast<float>(kPreviewSpawnZ) * 30.0f + 15.0f
+    };
+
+    uint8_t style = GetEffectiveTheme().cubeShatter;
+    if (style == 0u) {
+        uint8_t* sm = GetScreenMgr();
+        void* sparkMgr = (sm != nullptr) ? *reinterpret_cast<void**>(sm + 0x3c) : nullptr;
+        if (sparkMgr != nullptr) {
+            EdgeString nameStr{};
+            nameStr.ctor_cstr("cube_crushed");
+            reinterpret_cast<void(__thiscall*)(void*, void**, const EdgeString*, const float*, int)>(0x4eb750)(
+                sparkMgr, g_pv.shatterSpark, &nameStr, pos, 0
+            );
+            nameStr.dtor();
+        }
+        g_pv.shatterHideCube = true;
+        g_pv.shatterDurationTicks = kPreviewShatterDurationTicks;
+        SetCubeInterpVisible(playerCube, false);
+    } else if (style == 1u) {
+        TriggerMobileCubeShatter(pos[0], pos[1], pos[2], true);
+        g_pv.shatterHideCube = true;
+        g_pv.shatterDurationTicks = kPreviewShatterDurationTicks;
+        SetCubeInterpVisible(playerCube, false);
+    } else {
+        // Java crush: cube drops straight through the floor without particles
+        playerCube[0x171] = 1;
+        *reinterpret_cast<int32_t*>(playerCube + 0x04) = 3; // STATE_FALLING
+        *reinterpret_cast<int32_t*>(playerCube + 0x58) = 0;
+        *reinterpret_cast<int32_t*>(playerCube + 0x5c) = 0;
+        *reinterpret_cast<int32_t*>(playerCube + 0x60) = 0;
+        g_pv.shatterHideCube = false;
+        g_pv.shatterDurationTicks = 42;
+        SetCubeInterpVisible(playerCube, true);
+    }
+
+    g_pv.shatterActive = true;
+    g_pv.shatterTicks = 0;
+}
+
 static void ExecuteTriggerFinishEffect(uint8_t* ws) {
     if (ws == nullptr || ws[0x2120] == 0) return;
     uint8_t* playerCube = *reinterpret_cast<uint8_t**>(ws + 0x34);
     if (playerCube == nullptr) return;
 
+    if (g_pv.shatterActive) {
+        ResetPreviewShatterState(ws);
+    }
     ClearSparkEmitter(ws);
     ResetCustomFinishEffectState();
     ws[0xb5] = 0;
@@ -439,6 +563,9 @@ static void ExecuteTriggerFinishEffect(uint8_t* ws) {
     ResetCubeToTile(playerCube, kPreviewFinishX, kPreviewFinishZ, kPreviewFinishY);
     EnsurePreviewDarkCubeVisible(ws);
     ApplyPreviewPlayerPrismBuff(ws);
+    if (g_pv.shatterActive && g_pv.shatterHideCube) {
+        SetCubeInterpVisible(*reinterpret_cast<uint8_t**>(ws + 0x34), false);
+    }
     *reinterpret_cast<int32_t*>(playerCube + 0x04) = 0; // idle so Cube::onWin animates cleanly
     auto** vt = *reinterpret_cast<void***>(ws);
     reinterpret_cast<void(__thiscall*)(void*, float)>(vt[4])(ws, 1.0f);
@@ -669,6 +796,8 @@ static bool LoadPreviewLevelInternal(uint8_t* ws, uint8_t theme) {
     g_pv.loadedTheme = theme;
     g_pv.finishActive = false;
     g_pv.finishTicks = 0;
+    g_pv.shatterActive = false;
+    g_pv.shatterTicks = 0;
     g_pv.edgeTimerActive = false;
     g_pv.edgeTimerTicks = 1;
     SyncEffectiveThemeGlobals();
@@ -710,16 +839,35 @@ static void SyncGraphicsPreviewLifecycle(uint8_t* sm) {
 static void PreUpdatePreviewEntities(uint8_t* ws) {
     if (ws == nullptr || ws[0x2120] == 0) return;
 
-    // 1. Trigger deferred finish effect safely inside WorldScreen update phase
+    // 1. Trigger deferred finish / shatter effects safely inside WorldScreen update phase
     if (g_pv.pendingFinishTrig) {
         g_pv.pendingFinishTrig = false;
         ExecuteTriggerFinishEffect(ws);
+    }
+    if (g_pv.pendingShatterTrig) {
+        g_pv.pendingShatterTrig = false;
+        ExecuteTriggerCubeShatter(ws);
     }
     if (g_pv.finishActive) {
         ++g_pv.finishTicks;
         *reinterpret_cast<int32_t*>(ws + 0xbc) = 0; // keep camera locked on overview
         if (g_pv.finishTicks >= kPreviewFinishDurationTicks) {
             ResetPreviewFinishState(ws);
+        }
+    }
+    if (g_pv.shatterActive) {
+        ++g_pv.shatterTicks;
+        if (!g_pv.shatterHideCube) {
+            uint8_t* pc = *reinterpret_cast<uint8_t**>(ws + 0x34);
+            if (pc != nullptr && *reinterpret_cast<const int32_t*>(pc + 0x54) <= -480) {
+                *reinterpret_cast<int32_t*>(pc + 0x04) = 0;
+                *reinterpret_cast<int32_t*>(pc + 0x60) = 0;
+                g_pv.shatterHideCube = true;
+                SetCubeInterpVisible(pc, false);
+            }
+        }
+        if (g_pv.shatterTicks >= g_pv.shatterDurationTicks) {
+            ResetPreviewShatterState(ws);
         }
     }
 
@@ -778,6 +926,9 @@ static void __cdecl OnScreenMgrStepFixed_Impl(uint8_t* sm) {
     reinterpret_cast<void(__thiscall*)(void*)>(vt[3])(ws);
     EnsurePreviewDarkCubeVisible(ws);
     ApplyPreviewPlayerPrismBuff(ws);
+    if (g_pv.shatterActive && g_pv.shatterHideCube) {
+        SetCubeInterpVisible(*reinterpret_cast<uint8_t**>(ws + 0x34), false);
+    }
     if (IsGraphicsPreviewHoveringEdgeTimer()) {
         if (!g_pv.edgeTimerActive) {
             g_pv.edgeTimerActive = true;
@@ -809,12 +960,22 @@ static void UnloadGraphicsPreviewInternal(bool restoreMenuScene) {
     g_pv.pendingFinishTrig = false;
     g_pv.finishActive = false;
     g_pv.finishTicks = 0;
+    g_pv.pendingShatterTrig = false;
+    g_pv.shatterActive = false;
+    g_pv.shatterHideCube = false;
+    g_pv.shatterTicks = 0;
+    g_pv.shatterDurationTicks = kPreviewShatterDurationTicks;
+    ClearShatterSparkEmitter();
     ResetCustomFinishEffectState();
+    ResetCustomShatterEffectState();
+    ResetHintGhostState();
     g_pv.edgeTimerActive = false;
     g_pv.edgeTimerTicks = 1;
     g_pv.hadThemeOverride = false;
     g_pv.lastPopupFinishKind = PREVIEW_HOVER_NONE;
     g_pv.lastPopupFinishHi = -1;
+    g_pv.lastPopupShatterKind = PREVIEW_HOVER_NONE;
+    g_pv.lastPopupShatterHi = -1;
 
     if (g_pv.previewLoaded) {
         g_pv.previewLoaded = false;
@@ -1265,6 +1426,9 @@ void __cdecl ApplyGraphicsPreviewThemeOverrides(CustomThemeSettings* eff) {
     case PREVIEW_HOVER_FALLING_PLATFORMS: if (hi <= 2) eff->fallingPlatforms = static_cast<uint8_t>(hi); break;
     case PREVIEW_HOVER_BUMPERS:           if (hi <= 2) eff->bumpers          = static_cast<uint8_t>(hi); break;
     case PREVIEW_HOVER_SWITCHES:          if (hi <= 2) eff->switches         = static_cast<uint8_t>(hi); break;
+    case PREVIEW_HOVER_HINT_TILE:         if (hi <= 2) eff->hintTile         = static_cast<uint8_t>(hi); break;
+    case PREVIEW_HOVER_HINT_GHOST:        if (hi <= 2) eff->hintGhost        = static_cast<uint8_t>(hi); break;
+    case PREVIEW_HOVER_CUBE_SHATTER:      if (hi <= 2) eff->cubeShatter      = static_cast<uint8_t>(hi); break;
     case PREVIEW_HOVER_SHRINKERS:         if (hi <= 2) eff->shrinkers        = static_cast<uint8_t>(hi); break;
     case PREVIEW_HOVER_FINISH_PLATFORM:   if (hi <= 2) eff->finishPlatform   = static_cast<uint8_t>(hi); break;
     case PREVIEW_HOVER_FINISH_EFFECT:     if (hi <= 2) eff->finishEffect     = static_cast<uint8_t>(hi); break;
@@ -1314,10 +1478,29 @@ void __cdecl SetGraphicsPreviewHoverState(
             g_pv.lastPopupFinishKind = PREVIEW_HOVER_NONE;
             g_pv.lastPopupFinishHi = -1;
         }
+
+        if (popupOpen && popupKind == PREVIEW_HOVER_CUBE_SHATTER && popupSlotVisible &&
+            popupHighlight >= 0 && popupHighlight <= 2) {
+            if (g_pv.lastPopupShatterKind != PREVIEW_HOVER_CUBE_SHATTER ||
+                g_pv.lastPopupShatterHi != popupHighlight) {
+                g_pv.lastPopupShatterKind = PREVIEW_HOVER_CUBE_SHATTER;
+                g_pv.lastPopupShatterHi = popupHighlight;
+                TriggerGraphicsPreviewCubeShatter();
+            }
+        } else {
+            if (!popupOpen && g_pv.lastPopupShatterKind == PREVIEW_HOVER_CUBE_SHATTER &&
+                !g_pv.pendingShatterTrig && g_pv.shatterActive) {
+                ResetPreviewShatterState(GetWorldScreen());
+            }
+            g_pv.lastPopupShatterKind = PREVIEW_HOVER_NONE;
+            g_pv.lastPopupShatterHi = -1;
+        }
     } else {
         g_pv.hadThemeOverride = false;
         g_pv.lastPopupFinishKind = PREVIEW_HOVER_NONE;
         g_pv.lastPopupFinishHi = -1;
+        g_pv.lastPopupShatterKind = PREVIEW_HOVER_NONE;
+        g_pv.lastPopupShatterHi = -1;
     }
 }
 
@@ -1333,6 +1516,11 @@ void __cdecl OnGraphicsPreviewThemeChanged() {
 void __cdecl TriggerGraphicsPreviewFinishEffect() {
     if (!IsGraphicsPreviewActive()) return;
     g_pv.pendingFinishTrig = true;
+}
+
+void __cdecl TriggerGraphicsPreviewCubeShatter() {
+    if (!IsGraphicsPreviewActive()) return;
+    g_pv.pendingShatterTrig = true;
 }
 
 void __cdecl UnloadGraphicsPreviewIfActive() {

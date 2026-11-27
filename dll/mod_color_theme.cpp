@@ -29,6 +29,9 @@ CustomThemeSettings MakePresetThemeSettings(uint8_t preset) {
         s.fallingPlatforms = 1;
         s.bumpers          = 1;
         s.switches         = 1;
+        s.hintTile         = 1;
+        s.hintGhost        = 1;
+        s.cubeShatter      = 1;
         s.shrinkers        = 1;
         s.finishPlatform   = 1;
         s.finishEffect     = 1;
@@ -46,6 +49,9 @@ CustomThemeSettings MakePresetThemeSettings(uint8_t preset) {
         s.fallingPlatforms = 2;
         s.bumpers          = 2;
         s.switches         = 2;
+        s.hintTile         = 2;
+        s.hintGhost        = 2;
+        s.cubeShatter      = 2;
         s.shrinkers        = 2;
         s.finishPlatform   = 2;
         s.finishEffect     = 2;
@@ -69,6 +75,9 @@ CustomThemeSettings ClampCustomThemeSettings(CustomThemeSettings s) {
     s.fallingPlatforms = clamp3(s.fallingPlatforms);
     s.bumpers          = clamp3(s.bumpers);
     s.switches         = clamp3(s.switches);
+    s.hintTile         = clamp3(s.hintTile);
+    s.hintGhost        = clamp3(s.hintGhost);
+    s.cubeShatter      = clamp3(s.cubeShatter);
     s.shrinkers        = clamp3(s.shrinkers);
     s.finishPlatform   = clamp3(s.finishPlatform);
     s.finishEffect     = clamp3(s.finishEffect);
@@ -786,7 +795,7 @@ static void* __cdecl ResolveD3DTextureForApply(const uint8_t* texObj, IDirect3DD
             ? static_cast<void*>(g_platEdgeTex[modeSlot][themeIdx])
             : defaultTex;
     } else if (isHolo) {
-        uint8_t mode = (eff.switches <= 2u) ? eff.switches : 0u;
+        uint8_t mode = (eff.hintTile <= 2u) ? eff.hintTile : 0u;
         if (g_holoSwitchTex[mode] == nullptr) {
             if (mode == 0u) {
                 g_holoSwitchTex[mode] = CreateHorizontalCycleTexture(d3dDev, kPcHoloSwitchColors, 13);
@@ -1190,11 +1199,14 @@ static void __declspec(naked) Hook_SelectCubePaletteTable() {
 }
 
 static int g_javaCubeDeltaTopRight[3] = {55, 55, 55};
+static uint32_t g_rawCubePal15 = 0xffffffu;
 
 static void __cdecl Hook_ComputeCubePalette(int theme) {
     reinterpret_cast<void(__cdecl*)(int)>(0x48b980)(theme);
+    uint32_t* pal = reinterpret_cast<uint32_t*>(0x5f9110);
+    g_rawCubePal15 = pal[15];
     const CustomThemeSettings eff = GetEffectiveTheme();
-    if (eff.playerCube == 2u || eff.darkCube == 2u) {
+    if (eff.playerCube == 2u || eff.darkCube == 2u || eff.hintGhost == 2u) {
         uint8_t* ws = *reinterpret_cast<uint8_t**>(0x5f9064);
         bool isRainbow = (ws != nullptr && ws[0xb5] != 0);
         int t = (theme >= 0 && theme <= 3) ? theme : 2;
@@ -1203,7 +1215,6 @@ static void __cdecl Hook_ComputeCubePalette(int theme) {
         static const int kJavaDeltaTop[4]   = { 5,  0, 27, 18};
         static const int kJavaDeltaRight[4] = {-50, -60, -36, -40};
 
-        uint32_t* pal = reinterpret_cast<uint32_t*>(0x5f9110);
         uint32_t midCol = pal[isRainbow ? 11 : kJavaMid[t]];
         int mr = static_cast<int>((midCol >> 16) & 0xffu);
         int mg = static_cast<int>((midCol >> 8) & 0xffu);
@@ -2575,7 +2586,7 @@ static void __fastcall Hook_HoloSwitchRender(uint8_t* holo) {
         return;
     }
 
-    uint8_t holoStyle = GetEffectiveTheme().switches;
+    uint8_t holoStyle = GetEffectiveTheme().hintTile;
     uint8_t* ws = *reinterpret_cast<uint8_t**>(0x5f9064);
     float smoothFrame = (ws != nullptr) ? GetSmoothWsFrame(ws) : 0.0f;
     float phase = 0.0f;
@@ -2855,11 +2866,12 @@ static void __declspec(naked) Hook_LitMeshColorOp() {
 }
 
 static void BeginDarkCubeLight(ScopedThemeLight& guard, const CustomThemeSettings& eff, bool isSolid) {
-    if (eff.darkCube == 0u) {
+    uint8_t style = isSolid ? eff.darkCube : eff.hintGhost;
+    if (style == 0u) {
         if (eff.playerCube != 0u) {
             guard.BeginRestorePc();
         }
-    } else if (eff.darkCube == 1u) {
+    } else if (style == 1u) {
         if (isSolid) {
             uint8_t themeIdx = 0;
             uint8_t* lvl = GetLevel();
@@ -2904,6 +2916,16 @@ struct ScopedGhostCubeDistort {
     }
 };
 
+struct ScopedCustomHintGhost {
+    bool active = false;
+    explicit ScopedCustomHintGhost(const uint8_t* ws, uint8_t style) : active(style == 1u || style == 2u) {
+        if (active) BeginCustomHintGhostOverride(ws, style);
+    }
+    ~ScopedCustomHintGhost() {
+        if (active) EndCustomHintGhostOverride();
+    }
+};
+
 static void __fastcall Hook_GhostCubeTransparents(void* renderer) {
     using OrigFn = void(__thiscall*)(void*);
     const CustomThemeSettings eff = GetEffectiveTheme();
@@ -2911,22 +2933,93 @@ static void __fastcall Hook_GhostCubeTransparents(void* renderer) {
     bool isGhostDarkCube = (ws != nullptr && ws[0x48] == 0);
     bool isSolidDarkCube = (ws != nullptr && ws[0x48] != 0);
     ScopedThemeLight darkLight;
-    if (isGhostDarkCube || isSolidDarkCube) {
-        BeginDarkCubeLight(darkLight, eff, isSolidDarkCube);
+    if (isSolidDarkCube) {
+        BeginDarkCubeLight(darkLight, eff, true);
+    } else if (isGhostDarkCube && eff.hintGhost == 0u) {
+        BeginDarkCubeLight(darkLight, eff, false);
     }
-    ScopedGhostCubeDistort ghostDistort(ws, isGhostDarkCube);
+    bool usePcDistort = isGhostDarkCube && (eff.hintGhost == 0u);
+    ScopedGhostCubeDistort ghostDistort(ws, usePcDistort);
+    ScopedCustomHintGhost  customGhost(ws, isGhostDarkCube ? eff.hintGhost : 0u);
     reinterpret_cast<OrigFn>(0x407410)(renderer);
 }
 
+static void __fastcall Hook_HintGhostRender(void* cube) {
+    using OrigFn = void(__thiscall*)(void*);
+    const CustomThemeSettings eff = GetEffectiveTheme();
+    uint8_t* ws = *reinterpret_cast<uint8_t**>(0x5f9064);
+
+    static const uint8_t* s_pcGhostWs = nullptr;
+    static uint32_t s_pcGhostLastFrame = 0;
+    static uint8_t s_pcGhostPrevA = 0;
+    static uint8_t s_pcGhostCurA = 0;
+    static bool s_pcGhostHasPrev = false;
+
+    if (eff.hintGhost == 0u && cube != nullptr && ws != nullptr) {
+        uint8_t* mat = *reinterpret_cast<uint8_t**>(static_cast<uint8_t*>(cube) + 0x204);
+        if (mat != nullptr) {
+            uint32_t wsFrame = *reinterpret_cast<const uint32_t*>(ws + 0x04);
+            if (ws != s_pcGhostWs || wsFrame < s_pcGhostLastFrame) {
+                s_pcGhostHasPrev = false;
+            }
+            if (wsFrame != s_pcGhostLastFrame || !s_pcGhostHasPrev) {
+                uint8_t freshA = mat[0x38];
+                s_pcGhostPrevA = s_pcGhostHasPrev ? s_pcGhostCurA : freshA;
+                s_pcGhostCurA = freshA;
+                s_pcGhostHasPrev = true;
+                s_pcGhostLastFrame = wsFrame;
+                s_pcGhostWs = ws;
+            }
+            const uint8_t* sm = GetScreenMgr();
+            uint32_t state = (sm != nullptr) ? *reinterpret_cast<const uint32_t*>(sm + 0x50) : 0u;
+            uint8_t smoothA = s_pcGhostCurA;
+            if (state == 0x11u) {
+                float a = std::clamp(g_uiAlpha, 0.0f, 1.0f);
+                smoothA = static_cast<uint8_t>(std::clamp(
+                    static_cast<int>(std::lround(
+                        static_cast<float>(s_pcGhostPrevA) +
+                        static_cast<float>(static_cast<int>(s_pcGhostCurA) - static_cast<int>(s_pcGhostPrevA)) * a
+                    )),
+                    0, 255
+                ));
+            }
+            mat[0x38] = smoothA;
+            mat[0x3c] = smoothA;
+            *reinterpret_cast<uint32_t*>(mat + 0x08) |= 0x40u;
+        }
+    } else if (ws == nullptr) {
+        s_pcGhostWs = nullptr;
+        s_pcGhostHasPrev = false;
+    }
+
+    ScopedThemeLight darkLight;
+    if (eff.hintGhost == 0u) {
+        BeginDarkCubeLight(darkLight, eff, false);
+    }
+    bool usePcDistort = (eff.hintGhost == 0u);
+    ScopedGhostCubeDistort ghostDistort(ws, usePcDistort);
+    ScopedCustomHintGhost  customGhost(ws, eff.hintGhost);
+    reinterpret_cast<OrigFn>(0x48c670)(cube);
+}
+
 static int32_t g_curMatCubeType = 0;
+
+static uint8_t GetEffectiveCubeMatStyle() {
+    const CustomThemeSettings eff = GetEffectiveTheme();
+    if (g_curMatCubeType == 0) return eff.playerCube;
+    const uint8_t* ws = *reinterpret_cast<const uint8_t* const*>(0x5f9064);
+    if (ws != nullptr && ws[0x48] == 0) {
+        return eff.hintGhost;
+    }
+    return eff.darkCube;
+}
 
 static void* __cdecl Hook_ComputeCubeDiffuse(
     uint8_t* out, const uint8_t* baseColor,
     int multR, int multG, int multB,
     int addR, int addG, int addB
 ) {
-    const CustomThemeSettings eff = GetEffectiveTheme();
-    uint8_t style = (g_curMatCubeType == 0) ? eff.playerCube : eff.darkCube;
+    uint8_t style = GetEffectiveCubeMatStyle();
     if (style == 2u) {
         constexpr float kInvDenom = 1.0f / (2.0f * 0.8819171f);
         for (int c = 0; c < 3; ++c) {
@@ -2953,8 +3046,7 @@ static void* __cdecl Hook_ComputeCubeMatColor(
     int multR, int multG, int multB,
     int addR, int addG, int addB
 ) {
-    const CustomThemeSettings eff = GetEffectiveTheme();
-    uint8_t style = (g_curMatCubeType == 0) ? eff.playerCube : eff.darkCube;
+    uint8_t style = GetEffectiveCubeMatStyle();
     if (style != 0u) {
         int targetScale = (style == 2u) ? 254 : 255;
         auto scaleMult = [targetScale](int m) -> int {
@@ -3003,6 +3095,10 @@ void __cdecl ResetColorThemeLevelCaches() {
     s_mpKept.clear();
     s_mpPlanLevel = nullptr;
     s_mpRenderCursor = 0;
+}
+
+uint32_t __cdecl GetCleanHintGhostBaseRgb() {
+    return g_rawCubePal15;
 }
 
 uint32_t __fastcall RenderPlayerCubeWithColorTheme(void* cube) {
@@ -3113,4 +3209,8 @@ void RegisterColorTheme() {
     // 22. WorldScreen::render DarkCube Cube::render (0x47b3f8, 5B)
     static const uint8_t exDarkCubeRender[5] = {0xe8, 0x33, 0x12, 0x01, 0x00};
     RegRelCall(0x47b3f8, exDarkCubeRender, 5, 5, &Hook_DarkCubeRender);
+
+    // 23. WorldScreen::render HintGhost Cube::renderGhost (0x47b3ff, 5B)
+    static const uint8_t exHintGhostRender[5] = {0xe8, 0x6c, 0x12, 0x01, 0x00};
+    RegRelCall(0x47b3ff, exHintGhostRender, 5, 5, &Hook_HintGhostRender);
 }

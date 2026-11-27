@@ -49,6 +49,7 @@ DLL_SOURCES = [
     "mod_edge_timer.cpp",
     "mod_menu_hover.cpp",
     "mod_cube_distortion.cpp",
+    "mod_hint_ghost.cpp",
     "mod_graphics_preview.cpp",
     "mod_leaderboards.cpp",
     "mod_turbo_mode.cpp",

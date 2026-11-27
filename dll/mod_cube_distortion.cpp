@@ -28,9 +28,10 @@ int32_t        s_prevPosY           = 0;
 int32_t        s_prevPosZ           = 0;
 int32_t        s_prevScaleInv       = 0;
 
-uint32_t       s_rngState           = 0x6d2b79f5u;
-uint32_t       s_ghostLastJavaTick  = UINT32_MAX;
-bool           s_ghostDistortTick   = false;
+uint32_t       s_rngState             = 0x6d2b79f5u;
+uint32_t       s_ghostLastJavaTick    = UINT32_MAX;
+float          s_ghostPrevSignedAmp   = 0.0f;
+float          s_ghostSignedAmp       = 0.0f;
 
 struct DistortVert {
     float x, y, z;
@@ -102,6 +103,10 @@ static bool __cdecl DrawDistortedCubeSubMesh_Impl(
     const uint8_t* subMesh,
     const uint8_t* renderParams
 ) {
+    if (TryDrawCustomHintGhostSubMesh(dev, subMesh, renderParams)) {
+        return true;
+    }
+    if (g_cubeDistortActive == 0) return false;
     if (dev == nullptr || subMesh == nullptr) return false;
     // Skip non-material passes (e.g. shadow/depth pass where [renderParams+0xc] == 3).
     if (renderParams != nullptr && *reinterpret_cast<const uint32_t*>(renderParams + 0x0c) == 3u) {
@@ -312,7 +317,11 @@ static void __declspec(naked) hk_subMeshDrawDistorted() {
     // edi = IDirect3DDevice9*, esi = SubMesh*, [ebp+8] = RenderParams*
     __asm {
         cmp BYTE PTR g_cubeDistortActive, 0
-        je smd_orig
+        jne smd_try
+        call IsCustomHintGhostOverrideActive
+        test al, al
+        jz smd_orig
+    smd_try:
         push DWORD PTR [ebp + 8]
         push esi
         push edi
@@ -435,6 +444,8 @@ void __cdecl BeginGhostCubeDistortion(void* wsPtr) {
 
     uint32_t javaTickInt = static_cast<uint32_t>(std::floor(javaTime));
     if ((state == 0x11u || previewActive) && javaTickInt != s_ghostLastJavaTick) {
+        bool firstInit = (s_ghostLastJavaTick == UINT32_MAX);
+        s_ghostPrevSignedAmp = s_ghostSignedAmp;
         s_ghostLastJavaTick = javaTickInt;
         bool rngHit = ((NextRand() % 10u) == 0u);
         bool periodicHit = (
@@ -443,13 +454,20 @@ void __cdecl BeginGhostCubeDistortion(void* wsPtr) {
             (javaTickInt % 52u == 0u) ||
             (javaTickInt % 53u == 0u)
         );
-        s_ghostDistortTick = (rngHit || periodicHit);
+        s_ghostSignedAmp = (rngHit || periodicHit) ? (((javaTickInt % 3u) == 0u) ? -1.0f : 1.0f) : 0.0f;
+        if (firstInit) {
+            s_ghostPrevSignedAmp = s_ghostSignedAmp;
+        }
     }
 
-    if (s_ghostDistortTick) {
-        g_distortAmpPx    = 8.0f;
-        g_distortPhaseDeg = static_cast<float>(std::fmod(javaTime * 15.0, 360.0));
-        g_distortSign     = ((javaTickInt % 3u) == 0u) ? -1.0f : 1.0f;
+    float javaFrac = static_cast<float>(javaTime - std::floor(javaTime));
+    float sFrac = std::clamp(javaFrac, 0.0f, 1.0f);
+    sFrac = sFrac * sFrac * (3.0f - 2.0f * sFrac);
+    float amp = s_ghostPrevSignedAmp + (s_ghostSignedAmp - s_ghostPrevSignedAmp) * sFrac;
+    if (std::fabs(amp) > 0.02f) {
+        g_distortAmpPx      = 8.0f * std::fabs(amp);
+        g_distortPhaseDeg   = static_cast<float>(std::fmod(javaTime * 15.0, 360.0));
+        g_distortSign       = (amp < 0.0f) ? -1.0f : 1.0f;
         g_cubeDistortActive = 1;
     }
 }
@@ -467,7 +485,8 @@ void __cdecl ResetCubeDistortionState() {
     s_playerIdleJavaTicks = 0.0;
     s_hasPrevCubePos      = false;
     s_ghostLastJavaTick   = UINT32_MAX;
-    s_ghostDistortTick    = false;
+    s_ghostPrevSignedAmp  = 0.0f;
+    s_ghostSignedAmp      = 0.0f;
 }
 
 } // namespace edgemod

@@ -479,9 +479,12 @@ EDGE_STATIC_WSTR(g_wstrThemePrisms,    "prisms");
 EDGE_STATIC_WSTR(g_wstrThemeMovPlat,   "moving platforms");
 EDGE_STATIC_WSTR(g_wstrThemePlatEdge,  "platform borders");
 EDGE_STATIC_WSTR(g_wstrThemeFallPlat,  "falling platforms");
-EDGE_STATIC_WSTR(g_wstrThemeBumpers,   "bumpers");
-EDGE_STATIC_WSTR(g_wstrThemeSwitches,  "switches");
-EDGE_STATIC_WSTR(g_wstrThemeShrinkers, "shrinkers");
+EDGE_STATIC_WSTR(g_wstrThemeBumpers,     "bumpers");
+EDGE_STATIC_WSTR(g_wstrThemeSwitches,    "switches");
+EDGE_STATIC_WSTR(g_wstrThemeHintTile,    "hint tile");
+EDGE_STATIC_WSTR(g_wstrThemeHintGhost,   "hint ghost");
+EDGE_STATIC_WSTR(g_wstrCubeShatter,      "cube shatter");
+EDGE_STATIC_WSTR(g_wstrThemeShrinkers,   "shrinkers");
 EDGE_STATIC_WSTR(g_wstrDef,          "def");
 EDGE_STATIC_WSTR(g_wstrNew,          "new");
 EDGE_STATIC_WSTR(g_wstrDot,          ".");
@@ -592,6 +595,9 @@ enum OptItem : int {
     OPT_THEME_FALLING_PLATFORMS,
     OPT_THEME_BUMPERS,
     OPT_THEME_SWITCHES,
+    OPT_THEME_HINT_TILE,
+    OPT_THEME_HINT_GHOST,
+    OPT_CUBE_SHATTER,
     OPT_THEME_SHRINKERS,
     OPT_SOUNDS,
     OPT_MUSIC,
@@ -1201,6 +1207,9 @@ static void SaveModSettings() {
     writeInt("theme_custom_falling_platforms", std::clamp<int>(g_customTheme.fallingPlatforms, 0, 2));
     writeInt("theme_custom_bumpers", std::clamp<int>(g_customTheme.bumpers, 0, 2));
     writeInt("theme_custom_switches", std::clamp<int>(g_customTheme.switches, 0, 2));
+    writeInt("theme_custom_hint_tile", std::clamp<int>(g_customTheme.hintTile, 0, 2));
+    writeInt("theme_custom_hint_ghost", std::clamp<int>(g_customTheme.hintGhost, 0, 2));
+    writeInt("theme_custom_cube_shatter", std::clamp<int>(g_customTheme.cubeShatter, 0, 2));
     writeInt("theme_custom_shrinkers", std::clamp<int>(g_customTheme.shrinkers, 0, 2));
     writeInt("theme_custom_finish_platform", std::clamp<int>(g_customTheme.finishPlatform, 0, 2));
     writeInt("theme_custom_finish_effect", std::clamp<int>(g_customTheme.finishEffect, 0, 2));
@@ -1355,7 +1364,7 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
     uint64_t seenMask = 0;
     uint64_t seenMask2 = 0;
     constexpr uint64_t kAllModKeysMask = (1ull << 54) - 1ull;
-    constexpr uint64_t kAllModKeysMask2 = (1ull << 20) - 1ull;
+    constexpr uint64_t kAllModKeysMask2 = (1ull << 23) - 1ull;
     uint8_t legacyColorTheme = 0;
     bool hasThemeMode = false;
 
@@ -1542,6 +1551,12 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
             if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.bumpers = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 13); }
         } else if (AsciiEqIc(kP, kE, "theme_custom_switches")) {
             if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.switches = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 14); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_hint_tile")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.hintTile = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 20); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_hint_ghost")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.hintGhost = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 21); }
+        } else if (AsciiEqIc(kP, kE, "theme_custom_cube_shatter")) {
+            if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.cubeShatter = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 22); }
         } else if (AsciiEqIc(kP, kE, "theme_custom_shrinkers")) {
             if (ParseAsciiInt(vP, vE, &iv) && iv >= 0 && iv <= 2) { g_customTheme.shrinkers = static_cast<uint8_t>(iv); seenMask2 |= (1ull << 15); }
         } else if (AsciiEqIc(kP, kE, "theme_custom_finish_platform")) {
@@ -1754,6 +1769,10 @@ static bool LoadModSettingsFromIni(bool* outNeedsResave) {
         } else {
             g_colorTheme = 3u;
             g_customThemeInited = 1u;
+        }
+    } else {
+        if ((seenMask2 & (1ull << 20)) == 0) {
+            g_customTheme.hintTile = g_customTheme.switches;
         }
     }
 
@@ -2587,18 +2606,21 @@ static int GetOptItems(int cat, bool inPause, OptItem* outItems) {
         outItems[3]  = OPT_THEME_STARS;
         outItems[4]  = OPT_THEME_PLAYER_CUBE;
         outItems[5]  = OPT_THEME_DARK_CUBE;
-        outItems[6]  = OPT_CUBE_DISTORTION;
-        outItems[7]  = OPT_THEME_PRISMS;
-        outItems[8]  = OPT_THEME_MOVING_PLATFORMS;
-        outItems[9]  = OPT_THEME_PLATFORM_BORDERS;
-        outItems[10] = OPT_THEME_FALLING_PLATFORMS;
-        outItems[11] = OPT_THEME_BUMPERS;
-        outItems[12] = OPT_THEME_SWITCHES;
-        outItems[13] = OPT_THEME_SHRINKERS;
-        outItems[14] = OPT_FINISH_PLATFORM;
-        outItems[15] = OPT_FINISH_EFFECT;
-        outItems[16] = OPT_BACK;
-        return 17;
+        outItems[6]  = OPT_THEME_HINT_GHOST;
+        outItems[7]  = OPT_CUBE_DISTORTION;
+        outItems[8]  = OPT_CUBE_SHATTER;
+        outItems[9]  = OPT_THEME_PRISMS;
+        outItems[10] = OPT_THEME_MOVING_PLATFORMS;
+        outItems[11] = OPT_THEME_PLATFORM_BORDERS;
+        outItems[12] = OPT_THEME_FALLING_PLATFORMS;
+        outItems[13] = OPT_THEME_BUMPERS;
+        outItems[14] = OPT_THEME_SWITCHES;
+        outItems[15] = OPT_THEME_HINT_TILE;
+        outItems[16] = OPT_THEME_SHRINKERS;
+        outItems[17] = OPT_FINISH_PLATFORM;
+        outItems[18] = OPT_FINISH_EFFECT;
+        outItems[19] = OPT_BACK;
+        return 20;
     case OPT_CAT_AUDIO:
         outItems[0] = OPT_SOUNDS;
         outItems[1] = OPT_MUSIC;
@@ -2709,6 +2731,9 @@ static bool IsOptItemAdjustable(OptItem item) {
     case OPT_THEME_FALLING_PLATFORMS:
     case OPT_THEME_BUMPERS:
     case OPT_THEME_SWITCHES:
+    case OPT_THEME_HINT_TILE:
+    case OPT_THEME_HINT_GHOST:
+    case OPT_CUBE_SHATTER:
     case OPT_THEME_SHRINKERS:
     case OPT_SOUNDS:
     case OPT_MUSIC:
@@ -2805,6 +2830,9 @@ static const EdgeWString* GetOptLabelWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_THEME_FALLING_PLATFORMS: return &g_wstrThemeFallPlat;
     case OPT_THEME_BUMPERS:           return &g_wstrThemeBumpers;
     case OPT_THEME_SWITCHES:          return &g_wstrThemeSwitches;
+    case OPT_THEME_HINT_TILE:         return &g_wstrThemeHintTile;
+    case OPT_THEME_HINT_GHOST:        return &g_wstrThemeHintGhost;
+    case OPT_CUBE_SHATTER:            return &g_wstrCubeShatter;
     case OPT_THEME_SHRINKERS:         return &g_wstrThemeShrinkers;
     case OPT_MUSIC_START:      return &g_wstrMusicStart;
     case OPT_MUSIC_PLAYLIST:   return &g_wstrMusicPlaylist;
@@ -2894,6 +2922,9 @@ static OptCtrlKind GetOptCtrlKind(OptItem item) {
     case OPT_THEME_FALLING_PLATFORMS:
     case OPT_THEME_BUMPERS:
     case OPT_THEME_SWITCHES:
+    case OPT_THEME_HINT_TILE:
+    case OPT_THEME_HINT_GHOST:
+    case OPT_CUBE_SHATTER:
     case OPT_THEME_SHRINKERS:
     case OPT_EDGE_TIMER:
     case OPT_TIMER:
@@ -3010,6 +3041,9 @@ static uint8_t* GetCustomThemeFieldPtr(OptItem item) {
     case OPT_THEME_FALLING_PLATFORMS: return &g_customTheme.fallingPlatforms;
     case OPT_THEME_BUMPERS:           return &g_customTheme.bumpers;
     case OPT_THEME_SWITCHES:          return &g_customTheme.switches;
+    case OPT_THEME_HINT_TILE:         return &g_customTheme.hintTile;
+    case OPT_THEME_HINT_GHOST:        return &g_customTheme.hintGhost;
+    case OPT_CUBE_SHATTER:            return &g_customTheme.cubeShatter;
     case OPT_THEME_SHRINKERS:         return &g_customTheme.shrinkers;
     case OPT_FINISH_PLATFORM:         return &g_customTheme.finishPlatform;
     case OPT_FINISH_EFFECT:           return &g_customTheme.finishEffect;
@@ -3065,6 +3099,9 @@ static int GetPopupChoiceCount(OptItem item) {
     case OPT_THEME_FALLING_PLATFORMS:
     case OPT_THEME_BUMPERS:
     case OPT_THEME_SWITCHES:
+    case OPT_THEME_HINT_TILE:
+    case OPT_THEME_HINT_GHOST:
+    case OPT_CUBE_SHATTER:
     case OPT_THEME_SHRINKERS:         return 3;
     case OPT_EDGE_TIMER:              return 3;
     case OPT_TIMER:                   return 4;
@@ -3212,6 +3249,9 @@ static const EdgeWString* GetPopupChoiceWstr(OptItem item, int idx, EdgeWString*
     case OPT_THEME_FALLING_PLATFORMS:
     case OPT_THEME_BUMPERS:
     case OPT_THEME_SWITCHES:
+    case OPT_THEME_HINT_TILE:
+    case OPT_THEME_HINT_GHOST:
+    case OPT_CUBE_SHATTER:
     case OPT_THEME_SHRINKERS:
         idx = std::clamp(idx, 0, 2);
         if (idx == 1) return &g_wstrMobile;
@@ -3343,6 +3383,9 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
     case OPT_THEME_FALLING_PLATFORMS:
     case OPT_THEME_BUMPERS:
     case OPT_THEME_SWITCHES:
+    case OPT_THEME_HINT_TILE:
+    case OPT_THEME_HINT_GHOST:
+    case OPT_CUBE_SHATTER:
     case OPT_THEME_SHRINKERS:
         if (uint8_t* field = GetCustomThemeFieldPtr(item)) {
             *field = static_cast<uint8_t>(std::clamp(idx, 0, 2));
@@ -3350,6 +3393,8 @@ static void ApplyPopupChoice(OptItem item, int idx, int sfxId) {
             SyncEffectiveThemeGlobals();
             if (item == OPT_FINISH_EFFECT && IsGraphicsPreviewActive()) {
                 TriggerGraphicsPreviewFinishEffect();
+            } else if (item == OPT_CUBE_SHATTER && IsGraphicsPreviewActive()) {
+                TriggerGraphicsPreviewCubeShatter();
             }
             if (sm != nullptr && sfxId > 0) Game_PlaySfx(sm, sfxId);
             SaveModSettings();
@@ -3934,6 +3979,9 @@ static const EdgeWString* GetOptValueWstr(OptItem item, EdgeWString* tmp, bool* 
     case OPT_THEME_FALLING_PLATFORMS:
     case OPT_THEME_BUMPERS:
     case OPT_THEME_SWITCHES:
+    case OPT_THEME_HINT_TILE:
+    case OPT_THEME_HINT_GHOST:
+    case OPT_CUBE_SHATTER:
     case OPT_THEME_SHRINKERS:
         if (const uint8_t* field = GetCustomThemeFieldPtr(item)) {
             if (*field == 1) return &g_wstrMobile;
@@ -4811,13 +4859,16 @@ static PreviewHoverKind OptItemToPreviewHoverKind(OptItem item) {
     case OPT_THEME_STARS:             return PREVIEW_HOVER_STARS;
     case OPT_THEME_PLAYER_CUBE:       return PREVIEW_HOVER_PLAYER_CUBE;
     case OPT_THEME_DARK_CUBE:         return PREVIEW_HOVER_DARK_CUBE;
+    case OPT_THEME_HINT_GHOST:        return PREVIEW_HOVER_HINT_GHOST;
     case OPT_CUBE_DISTORTION:         return PREVIEW_HOVER_CUBE_DISTORTION;
+    case OPT_CUBE_SHATTER:            return PREVIEW_HOVER_CUBE_SHATTER;
     case OPT_THEME_PRISMS:            return PREVIEW_HOVER_PRISMS;
     case OPT_THEME_MOVING_PLATFORMS:  return PREVIEW_HOVER_MOVING_PLATFORMS;
     case OPT_THEME_PLATFORM_BORDERS:  return PREVIEW_HOVER_PLATFORM_BORDERS;
     case OPT_THEME_FALLING_PLATFORMS: return PREVIEW_HOVER_FALLING_PLATFORMS;
     case OPT_THEME_BUMPERS:           return PREVIEW_HOVER_BUMPERS;
     case OPT_THEME_SWITCHES:          return PREVIEW_HOVER_SWITCHES;
+    case OPT_THEME_HINT_TILE:         return PREVIEW_HOVER_HINT_TILE;
     case OPT_THEME_SHRINKERS:         return PREVIEW_HOVER_SHRINKERS;
     case OPT_FINISH_PLATFORM:         return PREVIEW_HOVER_FINISH_PLATFORM;
     case OPT_FINISH_EFFECT:           return PREVIEW_HOVER_FINISH_EFFECT;

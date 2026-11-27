@@ -27,6 +27,53 @@ struct WinEffectState {
 
 WinEffectState g_winFx{};
 
+// Android CCubeCrashParticle shatter state (libcgame.so 0x1d6a10 / 0x1d6d64 / 0x1d6dcc)
+constexpr int kShatterShardCount = 80; // 0x50
+
+struct ShatterShard {
+    float   x0, y0, z0;
+    float   vx0, vy0, vz0;
+    float   velDamp;
+    float   scaleMul;
+    float   rotVel;
+    float   alpha0;
+    float   alphaMul;
+    float   v[3][3];
+    uint8_t colorIdx;
+};
+
+struct ShatterEffectState {
+    bool     active     = false;
+    bool     isPreview  = false;
+    uint32_t startFrame = 0;
+    uint32_t rngSeed    = 0x12345678u;
+    ShatterShard shards[kShatterShardCount]{};
+};
+
+ShatterEffectState g_shatterFx{};
+
+inline uint32_t NextShatterRand(uint32_t* st) {
+    uint32_t x = *st;
+    if (x == 0u) x = 0x6d2b79f5u;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *st = x;
+    return x;
+}
+
+inline float ShatterRandFloat(uint32_t* st, float lo, float hi) {
+    uint32_t r = NextShatterRand(st);
+    float u = static_cast<float>(r & 0x00ffffffu) / 16777215.0f;
+    return lo + (hi - lo) * u;
+}
+
+inline int ShatterRandInt(uint32_t* st, int lo, int hi) {
+    if (hi <= lo) return lo;
+    uint32_t span = static_cast<uint32_t>(hi - lo + 1);
+    return lo + static_cast<int>(NextShatterRand(st) % span);
+}
+
 // Mobile finish platform color tables from Android EDGE-v4.0.1-full.apk (libcgame.so)
 // Outer 3x3 border (0x670770) & Inner 1x1 center (0x6707cc), 23-frame cycle at 30 Hz
 static const uint32_t kMobileFinishOuter[23] = {
@@ -623,6 +670,8 @@ static void __declspec(naked) hk_unloadLevelClear() {
         push eax
         push ecx
         push edx
+        call ResetCustomShatterEffectState
+        call ResetHintGhostState
         call ResetCubeDistortionState
         call ResetMinimapCache
         call ResetSpeedometerState
@@ -636,12 +685,69 @@ static void __declspec(naked) hk_unloadLevelClear() {
     }
 }
 
+static void __cdecl TriggerMobileShatterFromPos_Impl(const float* pos) {
+    if (pos != nullptr) {
+        TriggerMobileCubeShatter(pos[0], pos[1], pos[2], false);
+    }
+}
+
 static void* __cdecl SkipParticleSpawn_Impl(void** outSharedPtr) {
     if (outSharedPtr != nullptr) {
         outSharedPtr[0] = nullptr;
         outSharedPtr[1] = nullptr;
     }
     return outSharedPtr;
+}
+
+static uint8_t __cdecl GetEffectiveCubeShatterStyle() {
+    return GetEffectiveTheme().cubeShatter;
+}
+
+static void __declspec(naked) hk_spawnCubeCrushedParticle() {
+    // At 0x48dfb5: replaces `call 0x4eb750` (__thiscall SPARK::spawn with 4 args -> ret 0x10)
+    // Stack at entry: [esp+4]=outSp, [esp+8]=&name, [esp+0xc]=const float* pos, [esp+0x10]=0
+    __asm {
+        push ecx
+        call GetEffectiveCubeShatterStyle
+        pop ecx
+        cmp al, 0
+        jne ccp_custom
+        mov eax, 0x4eb750
+        jmp eax
+    ccp_custom:
+        cmp al, 1
+        jne ccp_clear_ret
+        push DWORD PTR [esp + 0x0c]
+        call TriggerMobileShatterFromPos_Impl
+        add esp, 4
+    ccp_clear_ret:
+        push DWORD PTR [esp + 4]
+        call SkipParticleSpawn_Impl
+        add esp, 4
+        ret 0x10
+    }
+}
+
+static void __declspec(naked) hk_hideCrushedCube() {
+    // At 0x48dfe6 (8B):
+    //   8B D3        mov edx, ebx
+    //   33 DB        xor ebx, ebx
+    //   88 5C 90 0D  mov BYTE PTR [eax+edx*4+0xd], bl
+    __asm {
+        push eax
+        push edx
+        call GetEffectiveCubeShatterStyle
+        mov cl, al
+        pop edx
+        pop eax
+        xor ebx, ebx
+        cmp cl, 2
+        je hcc_skip_hide
+        mov BYTE PTR [eax + edx * 4 + 0x0d], bl
+    hcc_skip_hide:
+        mov eax, 0x48dfee
+        jmp eax
+    }
 }
 
 static void __declspec(naked) hk_spawnFinishParticle() {
@@ -1036,7 +1142,9 @@ static void __declspec(naked) hk_renderBeforeSpark() {
     // At 0x47b418: replaces `call 0x4d0fa0` (before PostProcessor::apply at 0x47b434)
     __asm {
         pushad
+        call RenderPreviewHintGhostIfActive
         call RenderCustomFinishEffect_Impl
+        call RenderCustomShatterEffect_Impl
         call RenderEdgeTimer3D
         popad
         mov eax, 0x4d0fa0
@@ -1050,6 +1158,183 @@ namespace edgemod {
 
 void __cdecl ResetCustomFinishEffectState() {
     g_winFx.active = false;
+}
+
+void __cdecl ResetCustomShatterEffectState() {
+    g_shatterFx.active = false;
+    g_shatterFx.isPreview = false;
+}
+
+void __cdecl TriggerMobileCubeShatter(float cx, float cy, float cz, bool isPreview) {
+    uint8_t* game = GetWorldScreen();
+    uint32_t curFrame = (game != nullptr) ? *reinterpret_cast<const uint32_t*>(game + 0x4) : 0u;
+
+    g_shatterFx.active     = true;
+    g_shatterFx.isPreview  = isPreview;
+    g_shatterFx.startFrame = curFrame;
+
+    uint32_t st = g_shatterFx.rngSeed ^ (curFrame * 0x9e3779b1u) ^ 0xa5a55a5au;
+    if (st == 0u) st = 0x13579bdfu;
+    g_shatterFx.rngSeed = NextShatterRand(&st);
+
+    constexpr float kPi = 3.14159265358979323846f;
+    for (int i = 0; i < kShatterShardCount; ++i) {
+        ShatterShard& sh = g_shatterFx.shards[i];
+        sh.x0 = cx;
+        sh.y0 = cy;
+        sh.z0 = cz;
+
+        int r1 = ShatterRandInt(&st, 1, 50);
+        float vMin = 6.0f, vMax = 7.5f, rMin = 8.0f, rMax = 28.0f;
+        if (r1 < 2) {
+            vMin = 7.8f;
+            vMax = 9.75f;
+            rMin = 40.0f;
+            rMax = 50.4f;
+            sh.scaleMul = 1.02f;
+            sh.alpha0   = 600.0f;
+            sh.alphaMul = 0.85f;
+            sh.velDamp  = ShatterRandFloat(&st, 0.96f, 0.97f);
+        } else {
+            int r2 = ShatterRandInt(&st, 1, 50);
+            vMin = 6.0f;
+            vMax = (r2 < 10) ? 15.0f : 7.5f;
+            rMin = 8.0f;
+            rMax = 28.0f;
+            sh.scaleMul = 0.96f;
+            sh.alpha0   = 1.2f;
+            sh.alphaMul = 0.999f;
+            sh.velDamp  = 0.95f;
+        }
+
+        float dx = 0.0f, dy = 0.0f, dz = 0.0f, dLen = 0.0f;
+        for (int attempt = 0; attempt < 8; ++attempt) {
+            dx = ShatterRandFloat(&st, -1.0f, 1.0f);
+            dy = ShatterRandFloat(&st, -1.0f, 1.0f);
+            dz = ShatterRandFloat(&st, -1.0f, 1.0f);
+            dLen = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (dLen > 1e-4f) break;
+        }
+        if (dLen <= 1e-4f) {
+            dx = 0.0f;
+            dy = 1.0f;
+            dz = 0.0f;
+            dLen = 1.0f;
+        }
+        dx /= dLen;
+        dy /= dLen;
+        dz /= dLen;
+
+        sh.vx0 = dx * ShatterRandFloat(&st, vMin, vMax);
+        sh.vy0 = dy * ShatterRandFloat(&st, vMin, vMax);
+        sh.vz0 = dz * ShatterRandFloat(&st, vMin, vMax);
+        sh.rotVel = ShatterRandFloat(&st, -0.052360f, 0.034907f);
+
+        float ang = ShatterRandFloat(&st, 0.0f, kPi);
+        for (int k = 0; k < 3; ++k) {
+            float rad = ShatterRandFloat(&st, rMin, rMax);
+            sh.v[k][0] = std::cos(ang) * rad;
+            sh.v[k][1] = std::sin(ang) * rad;
+            sh.v[k][2] = ShatterRandFloat(&st, -rMax, rMax);
+            if (k < 2) {
+                ang += ShatterRandFloat(&st, 0.0f, 3.138451f);
+            }
+        }
+        sh.colorIdx = static_cast<uint8_t>(ShatterRandInt(&st, 0, 12));
+    }
+}
+
+void __cdecl RenderCustomShatterEffect_Impl() {
+    if (!g_shatterFx.active) return;
+    if (GetEffectiveTheme().cubeShatter != 1u) return;
+
+    uint8_t* game = GetWorldScreen();
+    if (game == nullptr || game[0x2120] == 0) {
+        g_shatterFx.active = false;
+        return;
+    }
+
+    if (!g_shatterFx.isPreview) {
+        uint8_t* playerCube = *reinterpret_cast<uint8_t**>(game + 0x34);
+        if (playerCube == nullptr || playerCube[0x171] == 0) {
+            g_shatterFx.active = false;
+            return;
+        }
+    }
+
+    IDirect3DDevice9* dev = GetD3DDevice();
+    if (dev == nullptr) return;
+
+    uint32_t curFrame = *reinterpret_cast<const uint32_t*>(game + 0x4);
+    uint32_t elapsed = (curFrame >= g_shatterFx.startFrame) ? (curFrame - g_shatterFx.startFrame) : 0u;
+    float sub = (!g_shatterFx.isPreview && IsGameplayPaused()) ? 0.0f : std::clamp(g_uiAlpha, 0.0f, 1.0f);
+    float t = static_cast<float>(elapsed) + sub;
+
+    if (t > 90.0f) {
+        g_shatterFx.active = false;
+        return;
+    }
+
+    float previewFade = 1.0f;
+    if (g_shatterFx.isPreview && t > 45.0f) {
+        previewFade = std::clamp((55.0f - t) / 10.0f, 0.0f, 1.0f);
+        if (previewFade <= 0.0f) return;
+    }
+
+    int cStep = static_cast<int>(std::floor(t));
+    float cFrac = t - static_cast<float>(cStep);
+
+    std::vector<FinishVert> verts;
+    verts.reserve(kShatterShardCount * 3);
+
+    for (int i = 0; i < kShatterShardCount; ++i) {
+        const ShatterShard& sh = g_shatterFx.shards[i];
+
+        float dampPow = std::pow(sh.velDamp, t);
+        float posMul = (1.0f - dampPow) / (1.0f - sh.velDamp);
+        float px = sh.x0 + sh.vx0 * posMul;
+        float py = sh.y0 + sh.vy0 * posMul;
+        float pz = sh.z0 + sh.vz0 * posMul;
+
+        float sc = std::pow(sh.scaleMul, t);
+        float rot = sh.rotVel * t;
+        float cr = std::cos(rot);
+        float sr = std::sin(rot);
+
+        float aNorm = (std::min)(sh.alpha0 * std::pow(sh.alphaMul, t), 1.0f) * previewFade;
+        int alphaByte = std::clamp(static_cast<int>(std::lround(aNorm * 255.0f)), 0, 255);
+        if (alphaByte <= 0) continue;
+
+        int i0 = (static_cast<int>(sh.colorIdx) + cStep) % 13;
+        int i1 = (i0 + 1) % 13;
+        uint32_t rgb = LerpRgbU32(kCubePaletteNormal[i0], kCubePaletteNormal[i1], cFrac);
+        D3DCOLOR col = (static_cast<D3DCOLOR>(alphaByte) << 24) | (rgb & 0x00ffffffu);
+
+        for (int k = 0; k < 3; ++k) {
+            float vx = sh.v[k][0];
+            float vy = sh.v[k][1];
+            float vz = sh.v[k][2];
+            float rx = vx * cr - vy * sr;
+            float ry = vx * sr + vy * cr;
+            verts.push_back({px + rx * sc, py + ry * sc, pz + vz * sc, col});
+        }
+    }
+
+    if (verts.empty()) return;
+
+    ScopedD3DState guard(dev);
+    dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+    dev->SetRenderState(D3DRS_ZENABLE, TRUE);
+    dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+    dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+    dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    dev->DrawPrimitiveUP(
+        D3DPT_TRIANGLELIST,
+        static_cast<UINT>(verts.size() / 3u),
+        verts.data(),
+        sizeof(FinishVert)
+    );
 }
 
 } // namespace edgemod
@@ -1078,4 +1363,12 @@ void RegisterFinishEffects() {
     // 6. WorldScreen::render before SPARK particles & PostProcessor::apply (0x47b418, 5B)
     static const uint8_t exSpark[5] = {0xe8, 0x83, 0x5b, 0x05, 0x00};
     RegRelCall(0x47b418, exSpark, 5, 5, &hk_renderBeforeSpark);
+
+    // 7. Cube::checkCrushed "cube_crushed" particle spawn call (0x48dfb5, 5B)
+    static const uint8_t exCubeCrushedSpark[5] = {0xe8, 0x96, 0xd7, 0x05, 0x00};
+    RegRelCall(0x48dfb5, exCubeCrushedSpark, 5, 5, &hk_spawnCubeCrushedParticle);
+
+    // 8. Cube::checkCrushed hide crushed cube model (0x48dfe6..0x48dfed, 8B)
+    static const uint8_t exHideCrushed[8] = {0x8b, 0xd3, 0x33, 0xdb, 0x88, 0x5c, 0x90, 0x0d};
+    RegRelJmp(0x48dfe6, exHideCrushed, 8, 8, &hk_hideCrushedCube, 0x90);
 }

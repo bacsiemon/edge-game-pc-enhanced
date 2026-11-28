@@ -279,6 +279,19 @@ void __cdecl GetSmoothSubmenuCounters(const uint8_t* sub, float* outSm4, float* 
     if (outSm8) *outSm8 = SmoothCounterPair(cur8, prev8, true);
 }
 
+int32_t __cdecl CalcLevelLoadNameFadePct(const uint8_t* menu) {
+    if (menu == nullptr) return 100;
+    int32_t cur8 = *reinterpret_cast<const int32_t*>(menu + 0x8);
+    if (cur8 >= 0) {
+        int32_t prev8 = (g_subPtr == menu) ? g_subPrev8 : cur8;
+        return DivPct8(SmoothCounterPair(cur8, prev8, true));
+    }
+    int32_t cur4 = *reinterpret_cast<const int32_t*>(menu + 0x4);
+    int32_t prev4 = (g_subPtr == menu) ? g_subPrev4 : cur4;
+    float sm4 = SmoothCounterPair(cur4, prev4, false);
+    return ClampPct0_100((sm4 - 6.0f) * (100.0f / 8.0f));
+}
+
 } // namespace edgemod
 
 namespace {

@@ -27,6 +27,7 @@ float    __cdecl GetSmoothWsFrame(const uint8_t* ws);
 uint32_t __cdecl CalcSmoothRainbow(float frame, float ticksPerColor);
 uint32_t __cdecl GetSmoothMenuRainbow(int32_t frame);
 uint32_t __cdecl GetSmoothSlotRainbow(int32_t frame);
+int32_t  __cdecl CalcLevelLoadNameFadePct(const uint8_t* menu);
 // Push/pop 2D MatrixStack translation (in mode 1, +tx moves right, +ty moves UP / -ty moves DOWN).
 void     __cdecl PushUiMatrixTranslate(uint8_t* mstack, float tx, float ty, uint32_t* outSavedMode);
 void     __cdecl PopUiMatrixTranslate(uint8_t* mstack, uint32_t savedMode);

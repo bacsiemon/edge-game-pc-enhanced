@@ -1,4 +1,5 @@
 #include "mod_state.h"
+#include "mod_smooth_shared.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -443,6 +444,61 @@ static void __declspec(naked) hk_recordCompletionSave() {
     }
 }
 
+// ------------------------------------------------------------------
+// Loading Screen "turbo" Indicator (Android RenderInitLevel parity)
+// ------------------------------------------------------------------
+
+static inline void SetFontColorRgbAlpha(uint32_t rgb, uint8_t alpha) {
+    uint8_t rgba[4] = {
+        static_cast<uint8_t>((rgb >> 16) & 0xffu),
+        static_cast<uint8_t>((rgb >> 8) & 0xffu),
+        static_cast<uint8_t>(rgb & 0xffu),
+        alpha
+    };
+    std::memcpy(reinterpret_cast<void*>(0x5f4268), rgba, 4);
+}
+
+static int __cdecl LevelLoadDrawNameAndTurbo_Impl(
+    const uint8_t* menu, int32_t frame,
+    const EdgeWString* nameWs, int32_t x, int32_t y,
+    int32_t scaleX, int32_t scaleY, int32_t extraX, int32_t extraY, int32_t alignFlags
+) {
+    int32_t fadePct = CalcLevelLoadNameFadePct(menu);
+    uint32_t nameCol = Game_ColorLerp(0x000000u, 0xffffffu, fadePct);
+    SetFontColorRgbAlpha(nameCol, 0xffu);
+    int ret = Game_DrawText(nameWs, x, y, scaleX, scaleY, extraX, extraY, alignFlags);
+
+    if (g_turboMode != 0 && fadePct > 0) {
+        uint32_t rb = GetSmoothMenuRainbow(frame);
+        uint32_t turboCol = Game_ColorLerp(0x000000u, rb, fadePct);
+        SetFontColorRgbAlpha(turboCol, 0xffu);
+        EDGE_STATIC_WSTR(kTurboWs, "turbo");
+        Game_DrawText(&kTurboWs, x, y + 30, scaleX, scaleY, extraX, extraY, alignFlags);
+    }
+    return ret;
+}
+
+static void __declspec(naked) hk_levelLoadDrawNameAndTurbo() {
+    // At 0x4ae998: replaces __cdecl `call 0x4a6c80`; caller cleans `add esp, 0x2c` at 0x4ae9a0.
+    // Must preserve ebx (slideY), esi (menu this), edi (0), ebp.
+    __asm {
+        lea eax, [esp + 4]
+        push DWORD PTR [eax + 0x1c] // alignFlags
+        push DWORD PTR [eax + 0x18] // extraY
+        push DWORD PTR [eax + 0x14] // extraX
+        push DWORD PTR [eax + 0x10] // scaleY
+        push DWORD PTR [eax + 0x0c] // scaleX
+        push DWORD PTR [eax + 0x08] // y
+        push DWORD PTR [eax + 0x04] // x
+        push DWORD PTR [eax + 0x00] // nameWs
+        push DWORD PTR [ebp - 0x44] // frame
+        push esi                    // LevelLoadMenu* this
+        call LevelLoadDrawNameAndTurbo_Impl
+        add esp, 40
+        ret
+    }
+}
+
 } // namespace
 
 void __cdecl EnsureTurboScoresLoaded() {
@@ -697,4 +753,8 @@ void RegisterTurboMode() {
     // 10. ProgressMgr::recordLevelCompletion save (0x49522d): Save Turbo scores instead of ttsav
     static const uint8_t exRecSave[5] = {0xe8, 0x9e, 0xd5, 0xff, 0xff};
     RegRelCall(0x49522d, exRecSave, sizeof(exRecSave), sizeof(exRecSave), &hk_recordCompletionSave);
+
+    // 11. LevelLoadMenu::render level name draw (0x4ae998): Smooth fade + Android rainbow "turbo" below level name
+    static const uint8_t exLevelLoadName[5] = {0xe8, 0xe3, 0x82, 0xff, 0xff};
+    RegRelCall(0x4ae998, exLevelLoadName, sizeof(exLevelLoadName), sizeof(exLevelLoadName), &hk_levelLoadDrawNameAndTurbo);
 }
